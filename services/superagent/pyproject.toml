@@ -5,7 +5,7 @@ description = "Orcha SuperAgent — LangGraph ReAct orchestration runtime"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
-  "uvicorn[standard]>=0.29",
+  "uvicorn[standard]>=0.52.1",
   "pydantic>=2",
   "pydantic-settings>=2",
   "langchain-core>=1.2.22",

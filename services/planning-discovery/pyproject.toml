@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     # Web framework
     "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
+    "uvicorn[standard]>=0.52.1",
 
     # Config & validation
     "pydantic>=2.5.0",
