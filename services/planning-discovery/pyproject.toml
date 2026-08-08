@@ -22,7 +22,7 @@ dependencies = [
     "httpx>=0.26.0",
 
     # NLP — keyword extraction for hybrid search
-    "nltk>=3.8.1",
+    "nltk>=3.10.2",
 
     # ML — cross-encoder reranking (local sentence-transformers model)
     # CPU-only torch — avoids pulling ~600 MB of NVIDIA CUDA libraries

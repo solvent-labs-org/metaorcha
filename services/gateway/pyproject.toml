@@ -15,7 +15,7 @@ dependencies = [
   "apscheduler>=3.10.0",
   "svix>=1.0",
   "privy-client",
-  "boto3>=1.34",
+  "boto3>=1.43.65",
   "common-database",
   "common-utils",
   "internal-commons",
