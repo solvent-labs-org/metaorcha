@@ -1,5 +1,10 @@
 # Dependabot — keeps GitHub Actions, Python (uv) and npm dependencies current.
 # Grouped minor/patch updates to keep PR volume low.
+#
+# PAUSED 2026-08-15: open-pull-requests-limit: 0 on all ecosystems stops new
+# version-update PRs while the open dependency PRs (#18–#24) are reconciled
+# manually. See tracking issue #25. To resume: revert this file (restore the
+# per-ecosystem limits of 3/5/5).
 
 version: 2
 updates:
@@ -10,7 +15,7 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0  # paused — was 3
 
   - package-ecosystem: uv
     directory: /
@@ -19,7 +24,7 @@ updates:
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0  # paused — was 5
 
   - package-ecosystem: npm
     directory: /frontend
@@ -28,4 +33,4 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0  # paused — was 5
