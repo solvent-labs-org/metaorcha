@@ -28,7 +28,7 @@ Repository = "https://github.com/solvent-labs-org/orcha"
 Issues = "https://github.com/solvent-labs-org/orcha/issues"
 
 [project.scripts]
-emerge = "emerge.cli:main"
+orcha-sdk = "emerge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
