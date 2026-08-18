@@ -71,6 +71,9 @@ async def test_text_result_synthesises_canvas_envelope():
     assert card["type"] == "markdown_card"
     assert card["title"] == "Search Agent"
     assert card["body"] == body
+    # Every component carries an id per the CanvasKit spec; the synthesised
+    # card was omitting it, so it did not satisfy MarkdownCardSpec.
+    assert card["id"] == "agent-output"
     assert result["content"] == body[:280]
     assert result["artifact"] is None
 
