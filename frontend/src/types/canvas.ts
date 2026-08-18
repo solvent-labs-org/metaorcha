@@ -102,6 +102,8 @@ export type CanvasComponent =
 
 export interface UIManifest {
   version: '1.0'
+  /** Stable manifest identity; when set the runtime uses it as manifest_id. */
+  id?: string
   title?: string
   layout: CanvasLayout
   components: CanvasComponent[]
