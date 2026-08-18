@@ -222,7 +222,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Orcha agent developer CLI")
+    p = argparse.ArgumentParser(prog="emerge", description="Orcha agent developer CLI")
     p.add_argument("--version", action="version", version=f"emerge {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
