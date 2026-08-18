@@ -1,6 +1,6 @@
 <div align="center">
 
-# Orcha
+# MetaOrcha
 
 **The open harness for multi-protocol agent systems.**
 
