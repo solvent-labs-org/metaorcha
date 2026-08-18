@@ -28,7 +28,10 @@ Repository = "https://github.com/solvent-labs-org/orcha"
 Issues = "https://github.com/solvent-labs-org/orcha/issues"
 
 [project.scripts]
+# `uvx <name>` resolves the *distribution* name, so the primary console script
+# must match it for `uvx orcha-sdk init` to work. `emerge` stays as an alias.
 orcha-sdk = "emerge.cli:main"
+emerge = "emerge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
