@@ -1,4 +1,5 @@
 import type { MarkdownCardSpec } from '../../types/canvas'
+import { ChatMarkdown } from '../chat/ChatMarkdown'
 
 export function MarkdownCard({ spec }: { spec: MarkdownCardSpec }) {
   return (
@@ -8,9 +9,16 @@ export function MarkdownCard({ spec }: { spec: MarkdownCardSpec }) {
           {spec.title}
         </span>
       )}
-      <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-text-secondary">
-        {spec.body}
-      </p>
+      {/*
+        Rendered as markdown, not as pre-wrapped text. The body is declared as
+        a markdown string, so headings, lists, links and code have to resolve;
+        rendering it verbatim showed agents' `#` and `*` characters on screen.
+        Reuses the renderer the chat transcript already uses so a heading looks
+        the same wherever it appears.
+      */}
+      <div className="text-[13px] text-text-secondary">
+        <ChatMarkdown tone="agent">{spec.body}</ChatMarkdown>
+      </div>
     </div>
   )
 }

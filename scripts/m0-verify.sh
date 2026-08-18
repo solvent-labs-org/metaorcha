@@ -65,7 +65,7 @@ while IFS= read -r f; do
         agents/google-workspace-orchestrator/*)    ;;  # expected — A2A agent, real canvas emission (canvas.py)
         services/superagent/*)                     ;;  # expected (OutputNormalizer + execute_agent_calls)
         docs/*)                                    ;;  # expected (arch doc, SRS)
-        .cursor/rules/*)                           ;;  # expected (contract documentation)
+        AGENTS.md)                                 ;;  # expected (repo-level envelope contract)
         scripts/*)                                 ;;  # this file itself
         "") ;;
         *) UNEXPECTED="$UNEXPECTED\n    $f" ;;
