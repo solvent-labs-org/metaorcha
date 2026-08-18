@@ -206,6 +206,21 @@ def _result_status(content: str) -> str:
     return "success"
 
 
+def _canvas_manifest_id(ui_manifest: Any, call_id: str) -> str:
+    """Resolve the manifest_id for a canvas_manifest event.
+
+    An agent may supply a stable ``manifest.id`` so a dashboard it re-renders
+    addresses the same canvas across runs, letting the client update in place
+    rather than append a duplicate. Absent, blank, or non-string falls back to
+    the per-call id, which is the previous behaviour.
+    """
+    if isinstance(ui_manifest, dict):
+        supplied = ui_manifest.get("id")
+        if isinstance(supplied, str) and supplied.strip():
+            return supplied.strip()
+    return f"canvas-{call_id}"
+
+
 async def _reject_disallowed_tool_call(
     config: RunnableConfig,
     pending_events: list[dict[str, Any]],
@@ -695,7 +710,7 @@ async def execute_agent_calls_node(
                     config,
                     {
                         "type": "canvas_manifest",
-                        "manifest_id": f"canvas-{call_id}",
+                        "manifest_id": _canvas_manifest_id(ui_manifest, call_id),
                         "manifest": ui_manifest,
                         "call_id": call_id,
                     },

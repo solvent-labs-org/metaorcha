@@ -31,11 +31,22 @@ An agent that returns a portfolio summary no longer returns markdown text. It re
 ```typescript
 interface UIManifest {
   version: "1.0"
+  id?: string
   title?: string
   layout: "dashboard" | "single" | "table" | "timeline"
   components: CanvasComponent[]
 }
 ```
+
+**`id` (optional)** — a stable identifier for the manifest itself, distinct from
+the per-component `id`. When present the runtime uses it verbatim as the
+`manifest_id` of the emitted `canvas_manifest` event instead of generating one
+from the call. That lets an agent re-rendering the same dashboard address it
+across runs, so the client can update in place rather than append a duplicate.
+
+Choose something stable and descriptive of the surface, not of the run —
+`"finance-dashboard"`, not `"run-4718"`. Omit it and each emission gets a freshly
+generated id, which is the default and stays correct for one-off output.
 
 **`layout` values:**
 - `"dashboard"` — 2-column grid; wide components span full width
