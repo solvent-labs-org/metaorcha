@@ -73,7 +73,14 @@ class OutputNormalizer:
             "version": "1.0",
             "title": title,
             "layout": "single",
-            "components": [{"type": "markdown_card", "title": title, "body": content}],
+            "components": [
+                {
+                    "type": "markdown_card",
+                    "id": "agent-output",
+                    "title": title,
+                    "body": content,
+                }
+            ],
         }
         return result
 

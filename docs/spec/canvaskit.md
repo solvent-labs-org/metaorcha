@@ -195,6 +195,25 @@ Chronological event list with step status: `complete`, `active`, `pending`.
 }
 ```
 
+### `markdown_card`
+Rich formatted text — headings, lists, links, inline and fenced code, blockquotes
+and GFM tables. Use it for research summaries and narrative output, rather than
+faking structure inside another component.
+
+```json
+{
+  "type": "markdown_card",
+  "id": "research_summary",
+  "title": "Q3 Findings",
+  "body": "## Summary\n\nRevenue grew **12%** QoQ.\n\n- Retention up 4pts\n- Churn flat\n\nSee the [full report](https://example.com/q3)."
+}
+```
+
+The markdown string is carried in `body`. It renders through the same markdown
+renderer as the chat transcript, so a heading looks the same wherever it appears.
+Note the flat-field rule: the markdown goes directly in `body`, not nested under
+`props`.
+
 ---
 
 ## SSE Event
