@@ -15,7 +15,7 @@ the LLM boundary).
 ## 2. Deploy
 
 ```bash
-git clone https://github.com/solvent-labs-org/orcha && cd orcha
+git clone https://github.com/solvent-labs-org/metaorcha && cd metaorcha
 cp deploy/sandbox/.env.sandbox.example deploy/sandbox/.env.sandbox   # fill: POSTGRES_PASSWORD, OPENROUTER_API_KEY, JWT_SECRET_KEY, VAULT_KEY
 make -f deploy/sandbox/Makefile up     # ~10-15 min first build
 make -f deploy/sandbox/Makefile seed   # DB schema + 9 agents
@@ -52,7 +52,7 @@ SSL mode Full (strict). Landing page: Cloudflare Pages direct-upload of
 ## 5. Update & rollback
 
 ```bash
-cd orcha && git pull
+cd metaorcha && git pull
 make -f deploy/sandbox/Makefile up      # rebuilds changed images
 ```
 

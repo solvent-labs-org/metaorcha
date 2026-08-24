@@ -35,13 +35,13 @@ _GUEST_BYOK_MAX = int(os.getenv("SANDBOX_GUEST_BYOK_MAX_MESSAGES", "10"))
 
 _CAP_BODY = {
     "detail": "Sandbox daily limit reached. The demo resets at midnight UTC. "
-    "Run locally for unlimited access: https://github.com/solvent-labs-org/orcha",
+    "Run locally for unlimited access: https://github.com/solvent-labs-org/metaorcha",
     "code": "SANDBOX_DAILY_LIMIT",
 }
 
 _GUEST_CAP_BODY = {
     "detail": "Guest limit reached. Bring your own model key for a higher limit, "
-    "sign up, or run locally for unlimited access: https://github.com/solvent-labs-org/orcha",
+    "sign up, or run locally for unlimited access: https://github.com/solvent-labs-org/metaorcha",
     "code": "SANDBOX_GUEST_LIMIT",
 }
 

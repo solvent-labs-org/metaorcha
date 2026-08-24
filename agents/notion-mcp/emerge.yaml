@@ -11,7 +11,10 @@ protocol:
   transport:
     type: "stdio"
     command: "node"
-    args: ["/home/xen/Desktop/code/fyp/orcha-emerge/agents/notion-mcp/dist/index.js"]
+    # Repo-relative: non-absolute args resolve against EMERGE_TOOLS_DIR
+    # (see _resolve_stdio_cmd_args in the MCP handler). Run `npm run build`
+    # in this directory first — dist/ is a build artifact, not checked in.
+    args: ["agents/notion-mcp/dist/index.js"]
     env:
       NOTION_API_KEY: "${NOTION_API_KEY}"
 
