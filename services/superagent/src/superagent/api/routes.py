@@ -313,7 +313,7 @@ async def health() -> HealthResponse:
 
 # ── Agent credential management ───────────────────────────────────────────────
 # These endpoints let the frontend store and check env-var credentials for
-# STDIO MCP agents (e.g. NOTION_API_KEY for notion-mcp).
+# STDIO MCP agents (e.g. an API key for a stdio-spawned MCP server).
 # Values are AES-256-GCM encrypted in the UserSecret table; they are never
 # returned via GET — only existence is reported.
 
@@ -327,7 +327,7 @@ async def store_agent_env(body: StoreAgentEnvRequest) -> None:
 
         {
           "user_id": "user-123",
-          "agent_id": "did:orcha:agent:notion-mcp",
+          "agent_id": "did:orcha:agent:finance-dashboard-agent",
           "credentials": { "NOTION_API_KEY": "secret_abc123" }
         }
     """

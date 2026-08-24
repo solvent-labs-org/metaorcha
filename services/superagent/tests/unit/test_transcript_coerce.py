@@ -74,10 +74,10 @@ def test_tool_row_persists_display_name_and_transcript_meta():
         name="Notion MCP",
         additional_kwargs={
             TRANSCRIPT_TOOL_META_KEY: {
-                "agent_id": "did:orcha:agent:notion-mcp",
+                "agent_id": "did:orcha:agent:finance-dashboard-agent",
                 "capability_id": "write_page",
                 "protocol": "MCP",
-                "internal_tool_name": "notion_mcp__write_page",
+                "internal_tool_name": "finance_dashboard_agent__get_portfolio",
                 "invocation_args": {"title": "x"},
             }
         },
@@ -86,5 +86,7 @@ def test_tool_row_persists_display_name_and_transcript_meta():
     assert len(rows) == 1
     assert rows[0]["role"] == enums.TranscriptRole.TOOL
     assert rows[0]["tool_name"] == "Notion MCP"
-    assert rows[0]["tool_inputs"]["agent_id"] == "did:orcha:agent:notion-mcp"
+    assert (
+        rows[0]["tool_inputs"]["agent_id"] == "did:orcha:agent:finance-dashboard-agent"
+    )
     assert rows[0]["tool_inputs"]["invocation_args"] == {"title": "x"}

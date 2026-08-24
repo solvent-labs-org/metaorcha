@@ -1,4 +1,4 @@
-.PHONY: help install clean test test-all lint format docker-up docker-down docker-dev-up docker-dev-down migrate migrate-dev migrate-reset db-indices prisma-generate grpc-generate dev dev-watch seed check setup ci test-manifest-server test-manifest-server-stop pnd-dev pnd-dev-watch pnd-test pnd-test-unit pnd-test-cov pnd-db-init kafka-up kafka-down kafka-topics sa-dev sa-dev-watch sa-test sa-test-unit sa-test-cov redis-up redis-down agents-dev chat gw-dev gw-dev-watch gw-test run-all run-all-quick stop-all
+.PHONY: help install clean test test-all lint format docker-up docker-down docker-dev-up docker-dev-down migrate migrate-dev migrate-reset db-indices prisma-generate grpc-generate dev dev-watch seed check setup ci test-manifest-server test-manifest-server-stop pnd-dev pnd-dev-watch pnd-test pnd-test-unit pnd-test-cov pnd-db-init kafka-up kafka-down kafka-topics sa-dev sa-dev-watch sa-test sa-test-unit sa-test-cov redis-up redis-down chat gw-dev gw-dev-watch gw-test run-all run-all-quick stop-all
 
 # Colors for output
 BLUE := \033[0;34m
@@ -275,9 +275,9 @@ seed: ## Seed registry with test fixture agents (registry must be running)
 	@printf '$(YELLOW)Requires: registry running (make dev s=registry) + KAFKA_ENABLED=true in registry .env for PnD indexing$(RESET)\n'
 	uv run python services/registry/scripts/seed_agents.py
 
-seed-live: ## Register fleet agents from agents/*/emerge.yaml (registry + agents-dev must be running)
+seed-live: ## Register fleet agents from agents/*/emerge.yaml (registry + agents must be running)
 	@printf '$(BLUE)Registering fleet agents from agents/*/emerge.yaml...$(RESET)\n'
-	@printf '$(YELLOW)Requires: registry running + HTTP agents up (make agents-dev)$(RESET)\n'
+	@printf '$(YELLOW)Requires: registry running + HTTP agents up (make run-all)$(RESET)\n'
 	@./scripts/seed-live-agents.sh --embeddings
 
 check: lint format-check test-all ## Run all checks (lint, format, test)
@@ -348,11 +348,6 @@ redis-down: ## Stop Redis
 
 # ── Test Agents (SuperAgent integration testing) ──────────────────────────────
 
-agents-dev: ## Start all agents with multiplexed logs (A2A: 3004/3005/3006/3011/4567; MCP stdio endpoints printed)
-	@printf '$(BLUE)Starting Orcha example agents...$(RESET)\n'
-	@printf '$(YELLOW)A2A HTTP:$(RESET)  web-scraper:3004  notion-research:3006  search-agent:3007  ecommerce-automation:3009  google-workspace-orchestrator:3011  lead-gen-agent:4567\n'
-	@printf '$(YELLOW)MCP stdio:$(RESET) notion-mcp  (spawned on-demand by client)\n\n'
-	@bash scripts/agents-dev.sh
 
 chat: ## Open SuperAgent CLI chat (requires sa-dev to be running)
 	@printf '$(BLUE)Starting SuperAgent CLI chat (port 8002)...$(RESET)\n'

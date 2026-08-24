@@ -11,7 +11,7 @@ The multi-protocol orchestration runtime, fully usable locally in mock payment m
 - Core services: Registry, Planning & Discovery, SuperAgent, Gateway
 - Protocols orchestrated in one run: **MCP**, **A2A**, **COMPUTER_USE** (ACP as an A2A-routed compatibility alias)
 - Execution pipeline: input validation, credential vault + auth cascade (OAuth), output normalization, human-in-the-loop interrupts, per-call payments (mock mode by default)
-- 7 example agents + agent/bridge templates
+- 4 example agents (CanvasKit dashboard, Google Workspace, computer-use, e2e probe) + agent/bridge templates
 - `orcha-sdk` CLI (`init` / `run` / `publish`, with `emerge` kept as an alias) and the `@emerge.agent` SDK decorator
 - Versioned `emerge.yaml` spec with JSON Schema + RFC governance
 - `ExecutionObserver` seam — a no-op hook today; the extension point for post-execution observers

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # M2 demo gates — live API verification (no browser required).
 # Extends M0 gates 3–5 with an A2A + computer-use leg for the canonical M2 goal
-# (MCP finance-dashboard + A2A web-scraper + COMPUTER_USE, genuinely 3 protocols).
+# (MCP finance-dashboard + A2A google-workspace-orchestrator + COMPUTER_USE,
+# genuinely 3 protocols).
 #
 # Usage:
 #   GATEWAY_URL=http://localhost/api ./scripts/m2-gates-live.sh
@@ -28,9 +29,9 @@ path, elapsed = sys.argv[1], int(sys.argv[2])
 text = open(path, errors="replace").read()
 
 # Parse invocation_result / canvas_manifest events properly instead of loose
-# substring matching — the misconfigured system Firecrawl/Tavily tools also
-# contain "web-scraper"/"search" as substrings, so string checks alone would
-# pass on a failed call to the wrong tool.
+# substring matching — a misconfigured system tool can share a substring with
+# an agent name, so string checks alone would pass on a failed call to the
+# wrong tool.
 successful_tools = set()
 for line in text.splitlines():
     if not line.startswith("data:"):
@@ -50,10 +51,10 @@ checks = {
     "finance_dashboard_mcp": any(
         "finance-dashboard" in t for t in successful_tools
     ),
-    # A2A leg — must be the real delegate call to our agent, not the
-    # unconfigured system Firecrawl tool (which shares the "web-scraper"
-    # substring but is a different, MCP-protocol tool_name).
-    "a2a_web_scraper": "delegate__did_orcha_agent_web-scraper" in successful_tools,
+    # A2A leg — must be the real delegate call to our agent, not a system
+    # tool that happens to share a substring.
+    "a2a_gws_orchestrator": "delegate__did_orcha_agent_google-workspace-orchestrator"
+    in successful_tools,
     "computer_use": any(
         "computer-use" in t for t in successful_tools
     ),
