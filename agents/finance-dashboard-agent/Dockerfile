@@ -6,13 +6,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY agents/finance-dashboard-agent/pyproject.toml ./
+# Exact versions, taken from this agent's uv.lock. Floors (>=) let the image
+# drift to whatever resolved on build day, so two builds of the same commit
+# could ship different dependency trees.
+COPY agents/finance-dashboard-agent/pyproject.toml agents/finance-dashboard-agent/uv.lock ./
 RUN pip install --no-cache-dir \
-    "mcp[cli]>=1.3.0" \
-    "fastmcp>=2.0.0" \
-    "starlette>=0.41.0" \
-    "uvicorn[standard]>=0.30.0" \
-    "python-dotenv>=1.0.0"
+    "mcp[cli]==1.29.0" \
+    "fastmcp==3.4.5" \
+    "starlette==1.3.1" \
+    "uvicorn[standard]==0.52.1" \
+    "python-dotenv==1.2.2"
 
 COPY agents/finance-dashboard-agent/server.py ./
 

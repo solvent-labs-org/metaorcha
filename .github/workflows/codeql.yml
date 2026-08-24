@@ -22,7 +22,11 @@ jobs:
     # fails at the upload with "Advanced Security must be enabled", which made
     # this a permanently-red check on every PR. Skip where it cannot report;
     # the public export is where the results are actually visible.
-    if: github.event.repository.private == false
+    #
+    # Guard on the repository name, not `repository.private`: the `schedule`
+    # payload does not carry a repository object, so `null == false` coerces
+    # true and the weekly cron would run — and fail — on the internal repo.
+    if: github.repository == 'solvent-labs-org/metaorcha'
     runs-on: ubuntu-latest
     permissions:
       actions: read # required for private repos; harmless on public

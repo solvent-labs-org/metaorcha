@@ -1,0 +1,47 @@
+# Dependabot — security posture, not a version-bump treadmill.
+#
+# `open-pull-requests-limit: 0` on every ecosystem means Dependabot opens NO
+# routine version-update PRs. Dependency bumps stay deliberate: batched chore
+# branches with a visual pass, per the reasoning in 64ba2df.
+#
+# Security updates are NOT governed by this limit — they are enabled in
+# Settings → Code security and fire only on a real advisory affecting a pinned
+# dependency. That is the half worth having automated.
+#
+# This file must exist even with the limits at 0: it is what declares the
+# ecosystems Dependabot watches for advisories, and it is what supply-chain
+# audits look for. Deleting it (as happened accidentally in be2bbad) silently
+# turns the watch off.
+#
+# History: paused 2026-08-15 by community PR #26 while PRs #18–#24 were
+# reconciled (issue #25); deleted by accident 2026-08-25; restored as standing
+# policy the same day.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 0 # security advisories only
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 0 # security advisories only
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 0 # security advisories only

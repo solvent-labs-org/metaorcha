@@ -19,6 +19,7 @@ jobs:
     if: ${{ github.repository == 'solvent-labs-org/metaorcha' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read # job-level permissions REPLACE the top-level read-all
       security-events: write # upload SARIF to code scanning
       id-token: write # publish results (badge + API)
     steps:
@@ -33,6 +34,11 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
+          # The default GITHUB_TOKEN cannot read branch-protection settings, so
+          # that check reports "-1 / unknown" rather than a score. A classic PAT
+          # with public_repo scope, stored as SCORECARD_TOKEN, lets it evaluate.
+          # Optional: without the secret the run still succeeds, minus that check.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
