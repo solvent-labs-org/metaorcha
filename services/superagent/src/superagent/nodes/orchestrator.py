@@ -246,7 +246,7 @@ request. Do NOT invent, guess, or infer tool names from context or prior knowled
 - If a capability you need is not in the current tool list, tell the user it is \
 unavailable rather than calling a non-existent tool.
 - External agent tools follow the naming pattern \
-`<agent_id>__<capability_id>` (e.g. `did_orcha_agent_notion-mcp__search_notion`). \
+`<agent_id>__<capability_id>` (e.g. `did_orcha_agent_finance-dashboard-agent__get_portfolio`). \
 Only call names that exactly match what appears in the tools list — never construct \
 a tool name yourself.
 - Built-in system tools use simple names with letters, digits, underscores, and hyphens \

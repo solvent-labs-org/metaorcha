@@ -7,7 +7,7 @@
 #
 # Requires:
 #   - Registry listening at REGISTRY_URL (default http://localhost:8000)
-#   - Agent HTTP servers running for live capability harvest (make agents-dev)
+#   - Agent HTTP servers running for live capability harvest (make run-all)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

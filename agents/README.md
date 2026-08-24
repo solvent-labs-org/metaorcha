@@ -6,13 +6,10 @@ Standalone AI agents that can be registered with Metaorcha. Each agent declares 
 
 | Agent | Protocol | Description |
 |-------|----------|-------------|
-| [web-scraper](./web-scraper/) | A2A (HTTP) | URL fetching, data extraction, OAuth-authenticated scraping |
-| [search-agent](./search-agent/) | MCP (SSE) | Documentation search via Serper |
-| [notion-mcp](./notion-mcp/) | MCP (stdio) | Notion workspace CRUD — search, create, update pages and databases |
-| [notion-research](./notion-research/) | A2A (HTTP) | Web research and structured note creation in Notion |
-| [lead-gen-agent](./lead-gen-agent/) | A2A (HTTP) | Lead discovery, enrichment, and CRM export |
+| [finance-dashboard-agent](./finance-dashboard-agent/) | MCP (HTTP) | Portfolio dashboard — the CanvasKit worked example |
 | [google-workspace-orchestrator](./google-workspace-orchestrator/) | A2A (HTTP) | Gmail, Calendar, Drive, and Sheets automation |
-| [ecommerce-automation](./ecommerce-automation/) | A2A (HTTP) | Shopify management and social publishing |
+| [computer-use-agent](./computer-use-agent/) | COMPUTER_USE | Browser and desktop control |
+| [poc-probe-agent](./poc-probe-agent/) | A2A (HTTP) | Minimal probe agent used by `scripts/poc-e2e.sh` |
 
 ## How Agents Work
 

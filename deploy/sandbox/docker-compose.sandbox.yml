@@ -206,60 +206,6 @@ services:
     container_name: sandbox-finance-dashboard
     networks: [sandbox-net]
 
-  search-agent:
-    build:
-      context: ../..
-      dockerfile: agents/search-agent/Dockerfile
-    container_name: sandbox-search-agent
-    env_file: .env.sandbox
-    environment:
-      SERPER_API_KEY: ${SERPER_API_KEY:-}
-    networks: [sandbox-net]
-
-  web-scraper:
-    build:
-      context: ../..
-      dockerfile: agents/web-scraper/Dockerfile
-    container_name: sandbox-web-scraper
-    networks: [sandbox-net]
-
-  lead-gen:
-    build:
-      context: ../../agents/lead-gen-agent
-      dockerfile: Dockerfile
-    container_name: sandbox-lead-gen
-    env_file: .env.sandbox
-    networks: [sandbox-net]
-
-  notion-research:
-    build:
-      context: ../..
-      dockerfile: agents/notion-research/Dockerfile
-    container_name: sandbox-notion-research
-    env_file: .env.sandbox
-    networks: [sandbox-net]
-
-  ecommerce:
-    build:
-      context: ../../agents/ecommerce-automation
-      dockerfile: Dockerfile
-    container_name: sandbox-ecommerce
-    env_file: .env.sandbox
-    # Browser-facing Shopify OAuth: Shopify redirects the user's browser to
-    # localhost:3009/auth/callback — the container serves on 8080 (Dockerfile
-    # CMD --port 8080), so publish 3009 -> 8080, mirroring gws-orchestrator.
-    ports:
-      - "3009:8080"
-    environment:
-      # Must byte-match the authorize step's redirect_uri (emerge.yaml) AND the
-      # Authorized redirect URI registered with the Shopify Partner app.
-      SHOPIFY_OAUTH_REDIRECT_URI: http://localhost:3009/auth/callback
-      # config.py defaults gateway_base_url to localhost:8080 — inside this
-      # container that's the agent itself; point at the docker-internal gateway
-      # so the post-consent resume POST reaches it (see oauth_routes.py).
-      GATEWAY_BASE_URL: http://gateway:8080
-    networks: [sandbox-net]
-
   gws-orchestrator:
     build:
       context: ../../agents/google-workspace-orchestrator

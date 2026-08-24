@@ -39,8 +39,6 @@ copy_env services/superagent
 copy_env services/planning-discovery
 copy_env services/gateway
 copy_env services/agent
-copy_env agents/web-scraper
-copy_env agents/notion-research
 copy_env frontend
 
 # ── 3. Check OPENROUTER_API_KEY ───────────────────────────────────────────────
