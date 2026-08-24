@@ -34,3 +34,16 @@ description = "Registry technical-spec docs — placeholder PAT tokens and env-v
 paths = [
   '''docs/services/registry/techical-spec\.md''',
 ]
+
+[[allowlists]]
+description = "Type annotations, not credentials. The generic-api-key rule fires on the `private_key: Ed25519PrivateKey` parameter type in signing function signatures, and on docs that quote those signatures. The matched text is a Python type name; no key material is committed. Scoped to the annotation itself rather than to a path, so a genuine secret in the same file is still caught."
+regexTarget = "line"
+regexes = [
+  '''private_key: Ed25519PrivateKey''',
+]
+
+[[allowlists]]
+description = "BMAD tooling file manifest — the flagged column is a SHA-256 content digest of an installed skill file (integrity checksum), not a credential."
+paths = [
+  '''_bmad/_config/files-manifest\.csv''',
+]

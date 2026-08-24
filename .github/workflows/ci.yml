@@ -456,11 +456,32 @@ jobs:
       - name: Run SDK tests
         run: uv run pytest sdk/tests/ --verbose
 
-      - name: Smoke test the emerge CLI
+      - name: Smoke test the CLI
         run: |
+          # Exercise the documented command name, not just the alias.
+          uv run orcha-sdk --version
           uv run emerge --version
-          uv run emerge init "CI Agent" --dir /tmp/ci-agent
+          uv run orcha-sdk init "CI Agent" --dir /tmp/ci-agent
           test -f /tmp/ci-agent/agent.py
+
+      # `run` was never covered, which is how a double-bind crash on every
+      # invocation reached four releases. Serve, probe, then stop.
+      - name: Smoke test `orcha-sdk run`
+        run: |
+          cd /tmp/ci-agent
+          uv run --project "$GITHUB_WORKSPACE" orcha-sdk run --no-register &
+          RUN_PID=$!
+          for _ in $(seq 1 20); do
+            curl -sf http://localhost:8900/health && break || sleep 1
+          done
+          curl -sf http://localhost:8900/health
+          curl -sf http://localhost:8900/.well-known/agent.json
+          kill -0 "$RUN_PID"   # must still be alive, not crashed on EADDRINUSE
+          kill "$RUN_PID"
+          # Back to the workspace: this check needs the repo's own environment
+          # (pyyaml, jsonschema) and the docs/ path. Left in /tmp/ci-agent it
+          # resolves the scaffolded agent's project instead and dies on import.
+          cd "$GITHUB_WORKSPACE"
           uv run python -c "import json,yaml; from jsonschema import Draft202012Validator as V; \
             import emerge; from emerge.manifest import build_manifest; from emerge.sdk import registered_agents, clear_registry; \
             clear_registry(); \
