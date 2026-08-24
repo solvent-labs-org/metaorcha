@@ -119,7 +119,12 @@ node/tests/test_gossip_spike.py
 .cdv-runs/
 .wrangler/
 kimi files/
+kimi-export-*.md
 .superpowers/
+
+# Editor/harness rule files and local font cache — machine-local, never the repo's
+.cursor/
+.fonts/
 
 # Landing site lives in solvent-labs-org/orcha-landing; local checkout kept here for convenience.
 deploy/landing-site/

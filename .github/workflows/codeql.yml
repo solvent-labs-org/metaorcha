@@ -17,6 +17,12 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # Code scanning is free on public repos but needs Advanced Security (paid)
+    # on private ones. On metaorcha-internal the analysis runs fine and then
+    # fails at the upload with "Advanced Security must be enabled", which made
+    # this a permanently-red check on every PR. Skip where it cannot report;
+    # the public export is where the results are actually visible.
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
       actions: read # required for private repos; harmless on public

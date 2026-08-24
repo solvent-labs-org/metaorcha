@@ -4,5 +4,5 @@ contact_links:
     url: https://discord.gg/orcha
     about: Questions, getting started, show-and-tell. Fastest way to get help.
   - name: 🔒 Report a security vulnerability
-    url: https://github.com/solvent-labs-org/orcha/security/policy
+    url: https://github.com/solvent-labs-org/metaorcha/security/policy
     about: Do NOT open a public issue for security reports. See SECURITY.md.

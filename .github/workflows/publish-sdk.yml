@@ -1,14 +1,24 @@
 name: Publish orcha-sdk
 
-# Release the `emerge` SDK to PyPI. Two ways to run:
-#   • Tag push (real publish):   git tag sdk-v0.1.1 && git push origin sdk-v0.1.1
+# Release the `orcha-sdk` package to PyPI. Two ways to run:
+#   • Tag push (real publish):   git tag sdk-v0.1.1 && git push <remote> sdk-v0.1.1
 #   • Manual dry-run (no upload): Actions → this workflow → "Run workflow"
 #
 # Uses PyPI Trusted Publishing (OIDC) — no API token stored in this repo.
-# One-time setup (repo owner, on pypi.org):
-#   1. Create the "orcha-sdk" project on PyPI (or publish v0.1.0 manually once).
-#   2. PyPI project → Settings → Publishing → add a trusted publisher:
-#      owner=solvent-labs-org, repo=orcha, workflow=publish-sdk.yml, environment=pypi
+#
+# ⚠ REQUIRED one-time setup, on pypi.org, by the repo owner. Until this is done
+# the publish job fails with `invalid-publisher: valid token, but no
+# corresponding publisher` — which is exactly what happened to run 30928599557
+# (tag sdk-v0.1.0, 2026-08-04, orcha-internal): nothing was ever uploaded.
+#   1. Add a PyPI *pending publisher* for project name "orcha-sdk" (works
+#      before the project exists), or create the project first.
+#   2. Trusted publisher claims must match the repo the TAG IS PUSHED TO.
+#      Post-rename (2026-08-17) that is:
+#      owner=solvent-labs-org, repo=metaorcha (public)  — or —
+#      owner=solvent-labs-org, repo=metaorcha-internal (internal),
+#      workflow=publish-sdk.yml, environment=pypi
+#      The previous attempt failed on precisely this mismatch — the tag went to
+#      the internal repo while the publisher was documented for the public one.
 on:
   push:
     tags:
@@ -52,8 +62,17 @@ jobs:
         run: |
           WHEEL="$(ls sdk/dist/*.whl)"
           mkdir -p /tmp/sdk-smoke && cd /tmp/sdk-smoke
-          uvx --from "$GITHUB_WORKSPACE/$WHEEL" emerge init smoke-agent
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" orcha-sdk init smoke-agent
           test -f smoke-agent/agent.py
+          cd smoke-agent
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" orcha-sdk run --no-register &
+          RUN_PID=$!
+          for _ in $(seq 1 20); do
+            curl -sf http://localhost:8900/health && break || sleep 1
+          done
+          curl -sf http://localhost:8900/health
+          kill -0 "$RUN_PID"
+          kill "$RUN_PID"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -79,3 +98,33 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist/
+
+  # The check that matters: run the command the README tells users to type,
+  # resolved from the real index. Every other smoke test here uses `--from`
+  # against a local wheel, which is why a README line pointing at an unrelated
+  # PyPI package survived four releases.
+  verify-published:
+    name: Verify the documented command from PyPI
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Wait for the index to serve the new version
+        run: |
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          for _ in $(seq 1 30); do
+            if curl -sf "https://pypi.org/pypi/orcha-sdk/$VERSION/json" >/dev/null; then
+              echo "orcha-sdk $VERSION is live"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::orcha-sdk $VERSION never appeared on PyPI"; exit 1
+
+      - name: uvx orcha-sdk init — exactly as documented
+        run: |
+          mkdir -p /tmp/pypi-smoke && cd /tmp/pypi-smoke
+          uvx orcha-sdk init my-agent
+          test -f my-agent/agent.py
