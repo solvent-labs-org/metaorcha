@@ -26,6 +26,51 @@ An agent that returns a portfolio summary no longer returns markdown text. It re
 
 ---
 
+## The `__canvas__` envelope — what your agent returns
+
+This is the contract an agent implements. Return a JSON string (or dict) with
+`__canvas__` set to `true`:
+
+```json
+{
+  "__canvas__": true,
+  "summary": "…one-line text fallback…",
+  "manifest": {
+    "version": "1.0",
+    "title": "…",
+    "layout": "dashboard",
+    "components": []
+  }
+}
+```
+
+Rules:
+
+- `manifest.version` **must** be exactly `"1.0"`. Anything else is silently
+  treated as *not* a canvas envelope and falls through to plain text.
+- Any output **without** `__canvas__: true` passes through as plain text. That
+  is the safe default — you never have to opt in.
+- `summary` is the text shown wherever a dashboard cannot be rendered. Always
+  provide one.
+- Component `type` values are snake_case, and fields are flat (no nesting under
+  a `props` key).
+- `manifest.id` is optional. Set it when a dashboard should replace its own
+  previous render instead of stacking a new one — the runtime then uses it
+  verbatim as `manifest_id` rather than generating a per-call value. See
+  [UIManifest Schema](#uimanifest-schema) below.
+
+The runtime detects the envelope in `OutputNormalizer`
+(`services/superagent/src/superagent/middleware/output_normalizer.py`) and
+`execute_agent_calls` re-emits it as a `canvas_manifest` SSE event of the shape
+`{ "type": "canvas_manifest", "manifest_id": "…", "manifest": { … } }`. Agents
+never emit that SSE shape themselves — they emit the envelope above.
+
+Worked example: `agents/finance-dashboard-agent/server.py`. A helper that builds
+and validates manifests before wrapping them lives at
+`agents/google-workspace-orchestrator/src/canvas.py`.
+
+---
+
 ## UIManifest Schema
 
 ```typescript

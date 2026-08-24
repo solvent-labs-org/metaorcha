@@ -16,8 +16,10 @@ Contributions we **eagerly welcome** without prior discussion:
   [`templates/your-first-bridge/`](templates/your-first-bridge/) and read
   the [bridges guide](https://metaorcha.ai/docs).
 - **Agents** — a new example agent that registers against the local registry.
-  Start from [`templates/your-first-agent/`](templates/your-first-agent/) and
-  the [quickstart](https://metaorcha.ai/docs).
+  Scaffold one with `uvx orcha-sdk init my-agent` (the template ships inside the
+  package, at
+  [`sdk/src/emerge/templates/your-first-agent/`](sdk/src/emerge/templates/your-first-agent/)),
+  then read the [quickstart](https://metaorcha.ai/docs).
 - **Observer / attestation experiments** — the `ExecutionObserver` seam and the
   validator reference code (`services/validator/`). See the [roadmap](https://metaorcha.ai/roadmap).
 
@@ -41,8 +43,8 @@ Contributions we **eagerly welcome** without prior discussion:
 ## Development setup
 
 ```bash
-git clone git@github.com:solvent-labs-org/orcha.git
-cd orcha
+git clone git@github.com:solvent-labs-org/metaorcha.git
+cd metaorcha
 make install            # install Python + JS deps via uv / npm
 make prisma-generate
 make grpc-generate

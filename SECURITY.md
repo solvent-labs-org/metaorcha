@@ -7,7 +7,7 @@ discussions, or pull requests.**
 
 Instead, report them privately so we can fix the issue before it is disclosed:
 
-- Use GitHub's [private vulnerability reporting](https://github.com/solvent-labs-org/orcha/security/advisories/new)
+- Use GitHub's [private vulnerability reporting](https://github.com/solvent-labs-org/metaorcha/security/advisories/new)
   ("Report a vulnerability" via the repository's Security Advisories page).
 
 Please include:

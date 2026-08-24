@@ -8,6 +8,20 @@ Project trajectory: [metaorcha.ai/roadmap](https://metaorcha.ai/roadmap).
   (e.g. `feat/sandbox-deploy`, `fix/registry-health`). Never push to
   `main` directly without review.
 
+## Two-repo topology
+
+- **`solvent-labs-org/metaorcha-internal`** (private, this repo) — the working
+  repo. All branches, full history, `docs-local/`, strategy docs.
+- **`solvent-labs-org/metaorcha`** (public) — the OSS face. Single orphan
+  `main` only: production code, sanitized downstream export of this
+  repo's `main`. Design/planning docs stay private.
+- Export flow: internal `main` → sanitize (brand sweep, exclude internal
+  paths, gitleaks) → force-update public orphan `main` per release. The
+  export remote in the export worktree is named `public`; **never push
+  any ref other than the sanitized orphan `main` to it.** KY-A content
+  must never cross into the public repo — it is hackathon/product work,
+  private by design.
+
 ## Commands
 
 ```bash
@@ -41,7 +55,9 @@ make check                  # lint + format + tests, run before every PR
 
 1. **Mock-first** — full stack runs with `PAYMENT_MODE=mock`; mock fallback
    for anything external.
-2. **Public brand = Orcha only** — never an internal name in any committed file.
+2. **Brand tiers per `docs/brand.md`** — Metaorcha = umbrella, Orcha =
+   harness, KYA = category term. Never an internal name in any committed
+   file; "Orcha" never stands alone in public copy.
 3. **No secrets in files** — `.env.*` is gitignored except `.env.example` /
    `deploy/sandbox/.env.sandbox.example`. CI runs gitleaks on every PR.
 4. **No token announcement** — no tokenomics or launch timelines anywhere.
@@ -58,3 +74,9 @@ make check                  # lint + format + tests, run before every PR
 - `make check` passes (lint + format + tests)
 - New code has tests; bridges/agents include a minimal example + manifest
 - No secrets or client references in the diff
+
+## BMAD-METHOD
+
+Structured planning skills may be installed locally (`_bmad/`, `.agents/skills`,
+`.claude/skills`); these are machine-local and not tracked here. When present,
+start with `bmad-help`.
