@@ -4,15 +4,20 @@ import { Button } from '../components/ui/Button'
 import { Logo } from '../components/ui/Logo'
 import { useAuthStore } from '../store/auth'
 
+const SANDBOX_MODE = import.meta.env.VITE_SANDBOX_MODE === 'true'
+const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
+const AUTO_LOGIN = SANDBOX_MODE || LOCAL_MODE
+
 export function Login() {
   const navigate = useNavigate()
-  const { login, register } = useAuthStore()
+  const { login, register, guestLogin, localLogin } = useAuthStore()
 
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(false)
+  const [guestLoading, setGuestLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async () => {
@@ -30,6 +35,19 @@ export function Login() {
       setError(e instanceof Error ? e.message : 'Authentication failed')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleGuest = async () => {
+    setGuestLoading(true)
+    setError(null)
+    try {
+      await (SANDBOX_MODE ? guestLogin() : localLogin())
+      navigate('/')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start a session')
+    } finally {
+      setGuestLoading(false)
     }
   }
 
@@ -112,6 +130,24 @@ export function Login() {
               </>
             )}
           </p>
+
+          {AUTO_LOGIN && (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-surface-border" />
+                <span className="text-caption text-text-disabled">or</span>
+                <div className="h-px flex-1 bg-surface-border" />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={handleGuest}
+                loading={guestLoading}
+                className="w-full h-11"
+              >
+                {SANDBOX_MODE ? 'Continue as guest' : 'Continue without an account'}
+              </Button>
+            </>
+          )}
         </div>
 
         <p className="mt-4 text-center text-caption text-text-disabled">

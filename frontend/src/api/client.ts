@@ -115,6 +115,10 @@ export const auth = {
   guest: () =>
     apiFetch<AuthResponse>('/auth/guest', { method: 'GET' }),
 
+  /** Self-hosted local: persistent single-user session, no signup (LOCAL_MODE). */
+  local: () =>
+    apiFetch<AuthResponse>('/auth/local', { method: 'GET' }),
+
   logout: () =>
     apiFetch<void>('/auth/logout', { method: 'POST' }),
 }

@@ -193,13 +193,15 @@ wait_for pnd http://localhost:8001/ 45
 start_service superagent "$C_SA" bash -c "set -a && source '$ROOT/services/superagent/.env' && set +a && exec env PYTHONPATH='$ROOT' uv run uvicorn superagent.main:app --app-dir services/superagent/src --host 0.0.0.0 --port 8002 --log-level info 2>&1"
 wait_for superagent http://localhost:8002/ 30
 
-start_service gateway "$C_GW" env PYTHONPATH="$ROOT" \
+# LOCAL_MODE=true → /auth/local issues a persistent single-user session (frictionless
+# local login). VITE_LOCAL_MODE flows to the Vite dev server so the UI auto-logs-in.
+start_service gateway "$C_GW" env PYTHONPATH="$ROOT" LOCAL_MODE=true \
   uv run uvicorn gateway.main:app --app-dir services/gateway/src \
   --host 0.0.0.0 --port 8080 --log-level info
 wait_for gateway http://localhost:8080/ 20
 
 if [[ -d "$ROOT/frontend" ]]; then
-  start_service frontend "$C_FE" bash -c "cd '$ROOT/frontend' && npm run dev 2>&1"
+  start_service frontend "$C_FE" bash -c "cd '$ROOT/frontend' && VITE_LOCAL_MODE=true npm run dev 2>&1"
   wait_for frontend http://localhost:3000/ 20
 fi
 

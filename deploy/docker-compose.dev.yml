@@ -300,6 +300,8 @@ services:
       PORT: 8080
       LOG_LEVEL: INFO
       ENVIRONMENT: development
+      # Frictionless local auth: /auth/local issues a persistent single-user session.
+      LOCAL_MODE: "true"
       # Artifact S3 storage
       ARTIFACT_S3_BUCKET: emerge-artifacts-local
       S3_ENDPOINT_URL: http://localstack:4566

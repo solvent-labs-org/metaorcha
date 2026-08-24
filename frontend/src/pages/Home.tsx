@@ -37,29 +37,35 @@ const SAMPLE_PROMPTS: { label: string; message: string }[] = [
 ]
 
 const SANDBOX_MODE = import.meta.env.VITE_SANDBOX_MODE === 'true'
+const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
+// Both modes offer a no-signup session; sandbox = throwaway guest, local = persistent user.
+const AUTO_LOGIN = SANDBOX_MODE || LOCAL_MODE
 
 export function Home() {
   const [input, setInput] = useState('')
   const [customInstructions, setCustomInstructions] = useState('')
   const [loading, setLoading] = useState(false)
-  const [guestBootstrapping, setGuestBootstrapping] = useState(SANDBOX_MODE)
+  const [guestBootstrapping, setGuestBootstrapping] = useState(AUTO_LOGIN)
   const navigate = useNavigate()
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const guestLogin = useAuthStore((s) => s.guestLogin)
+  const localLogin = useAuthStore((s) => s.localLogin)
   const sessionSidebarOpen = useSessionSidebarStore((s) => s.isOpen)
   const defaultModel = useSettingsStore((s) => s.defaultModel)
   const { setSessionId, addMessage, reset } = useSessionStore()
   const { streamResponse } = useSSE()
 
+  const autoLogin = SANDBOX_MODE ? guestLogin : localLogin
+
   useEffect(() => {
-    if (!SANDBOX_MODE || isAuthenticated) {
+    if (!AUTO_LOGIN || isAuthenticated) {
       setGuestBootstrapping(false)
       return
     }
     let cancelled = false
     ;(async () => {
       try {
-        await guestLogin()
+        await autoLogin()
       } catch {
         /* fall through to sign-in prompt */
       } finally {
@@ -69,13 +75,13 @@ export function Home() {
     return () => {
       cancelled = true
     }
-  }, [guestLogin, isAuthenticated])
+  }, [autoLogin, isAuthenticated])
 
   const handleSubmit = async (message: string, _artifactIds: string[] = []) => {
     if (!isAuthenticated) {
-      if (SANDBOX_MODE) {
+      if (AUTO_LOGIN) {
         try {
-          await guestLogin()
+          await autoLogin()
         } catch {
           navigate('/login')
           return

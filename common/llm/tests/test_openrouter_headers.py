@@ -7,7 +7,7 @@ def test_openrouter_headers_use_orcha_brand():
     provider = OpenRouterProvider(LLMConfig(api_key="test-key"))
     headers = provider._client.headers
     assert headers["X-Title"] == "Orcha"
-    assert headers["HTTP-Referer"] == "https://github.com/solvent-labs-org/orcha"
+    assert headers["HTTP-Referer"] == "https://github.com/solvent-labs-org/metaorcha"
     # No legacy brand beyond the GitHub org name (solvent-labs-org) in the Referer.
     scrubbed = str(dict(headers)).lower().replace("solvent-labs-org", "")
     assert "metaorcha" not in scrubbed

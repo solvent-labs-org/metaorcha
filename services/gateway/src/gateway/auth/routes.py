@@ -88,6 +88,46 @@ async def sandbox_guest(request: Request) -> TokenResponse:
     return TokenResponse(access_token=access_token, refresh_token="")
 
 
+@router.get("/local", response_model=TokenResponse)
+async def local_login(request: Request) -> TokenResponse:
+    """Frictionless login for a self-hosted local instance (LOCAL_MODE=true only).
+
+    Unlike the throwaway, message-capped sandbox guest, this find-or-creates a
+    single fixed local user so a single-operator instance keeps its chat history
+    and wallet balance across restarts. Issues a full (persistent) access +
+    refresh token pair.
+    """
+    if os.getenv("LOCAL_MODE", "").lower() != "true":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    db = request.app.state.db
+    email = "local@orcha.local"
+    user = await db.user.find_unique(where={"email": email})
+    if user is None:
+        user = await db.user.create(
+            data={
+                "email": email,
+                "display_name": "Local User",
+                "password_hash": None,
+            }
+        )
+        logger.info("Local-mode user created: user=%s", user.id)
+        # Seed mock credits on creation ONLY — never reset an existing balance,
+        # so a returning local operator keeps whatever they've spent/earned.
+        if settings.payment_mode == "mock":
+            try:
+                await db.user.update(
+                    where={"id": user.id},
+                    data={"credits_usd": 5000.0},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to seed local-user credits for user=%s", user.id
+                )
+
+    return await _issue_tokens(user.id, user.email, db, request.app.state.redis)
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(body: RegisterRequest, request: Request) -> TokenResponse:
     db = request.app.state.db

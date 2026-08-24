@@ -129,11 +129,12 @@ if [[ "$S2" == PASS ]]; then
   if python3 - "$TMPDIR_POC/agents-health.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-items = d if isinstance(d, list) else d.get("data") or d.get("agents") or []
+data = d if isinstance(d, list) else d.get("data") or d
+items = data if isinstance(data, list) else data.get("agents") or []
 probe = [a for a in items if "poc-probe" in json.dumps(a)]
 assert probe, "poc-probe not in registry list"
 status = probe[0].get("health_status", "")
-assert status == "HEALTHY", f"health_status={status!r}"
+assert status.upper() == "HEALTHY", f"health_status={status!r}"
 print("ok")
 PY
   then

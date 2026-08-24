@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
 
+import httpx
 import yaml
 
 from ..clients.registry_client import RegistryClient
 
 logger = logging.getLogger(__name__)
+
+# Bounded retry for the registry cold-start race: the SuperAgent can boot
+# before the Registry is accepting connections, and per-tool skips are
+# permanent until restart. Retry only transient failures (connection /
+# timeout / 5xx); parse errors, missing platform_env keys and 4xx remain
+# permanent skips that never fail boot.
+_MAX_ATTEMPTS = 5
+_INITIAL_BACKOFF_S = 2.0
+_MAX_BACKOFF_S = 30.0
 
 
 class PlatformToolSeeder:
@@ -46,6 +57,9 @@ class PlatformToolSeeder:
         total = len(yaml_files)
         seeded = 0
 
+        # Permanent skips (parse failure, missing platform_env) are settled
+        # once, up front — they are never retried.
+        eligible: list[tuple[Path, dict]] = []
         for yaml_path in yaml_files:
             try:
                 manifest = yaml.safe_load(yaml_path.read_text())
@@ -64,16 +78,56 @@ class PlatformToolSeeder:
                 )
                 continue
 
-            try:
-                await self._client.upsert_agent(manifest)
-                seeded += 1
-                logger.debug("Seeded platform tool: %s", yaml_path.name)
-            except Exception:
-                logger.exception(
-                    "Failed to register platform tool %s — skipping", yaml_path.name
-                )
+            eligible.append((yaml_path, manifest))
+
+        pending = eligible
+        backoff = _INITIAL_BACKOFF_S
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            last_attempt = attempt == _MAX_ATTEMPTS
+            retry_later: list[tuple[Path, dict]] = []
+
+            for yaml_path, manifest in pending:
+                try:
+                    await self._client.upsert_agent(manifest)
+                    seeded += 1
+                    logger.debug("Seeded platform tool: %s", yaml_path.name)
+                except Exception as exc:
+                    if self._is_transient(exc) and not last_attempt:
+                        retry_later.append((yaml_path, manifest))
+                    else:
+                        logger.exception(
+                            "Failed to register platform tool %s — skipping",
+                            yaml_path.name,
+                        )
+
+            if not retry_later:
+                break
+
+            logger.warning(
+                "Registry not ready — retrying %d platform tool(s) in %.0fs "
+                "(attempt %d/%d)",
+                len(retry_later),
+                backoff,
+                attempt,
+                _MAX_ATTEMPTS,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF_S)
+            pending = retry_later
 
         logger.info("Seeded %d/%d platform tools successfully", seeded, total)
+
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        """True for failures worth retrying: registry cold-start or overload.
+
+        Connection/timeout errors (registry not up yet) and 5xx responses are
+        transient; 4xx means the manifest itself was rejected and will fail
+        identically on every retry.
+        """
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code >= 500
+        return isinstance(exc, httpx.TransportError)
 
     @staticmethod
     def _missing_platform_env_keys(manifest: dict) -> list[str]:
