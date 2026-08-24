@@ -1,11 +1,12 @@
-"""``emerge`` CLI — the launch-scope developer surface.
+"""Orcha agent CLI — the launch-scope developer surface.
 
-Three commands only (resist scope creep — test/deploy/login are post-launch):
+Installed as ``orcha-sdk`` (and ``emerge``, kept as an alias). Four commands
+only (resist scope creep — test/deploy/login are post-launch):
 
-- ``emerge init [name]``   scaffold a new agent from the bundled template
-- ``emerge run [module]``  serve decorated agents locally + register them
-- ``emerge publish [module]``  register decorated agents against a remote registry
-- ``emerge validate``  validator demo (``--once`` synthetic attestation)
+- ``orcha-sdk init [name]``   scaffold a new agent from the bundled template
+- ``orcha-sdk run [module]``  serve decorated agents locally + register them
+- ``orcha-sdk publish [module]``  register decorated agents against a remote registry
+- ``orcha-sdk validate``  validator demo (``--once`` synthetic attestation)
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -100,7 +102,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"✓ Scaffolded '{name}' in {dest}/")
     print("  Next:")
     print(f"    cd {dest}")
-    print("    emerge run          # serve locally + register against local registry")
+    print("    orcha-sdk run       # serve locally; registers if a registry is up")
     return 0
 
 
@@ -112,9 +114,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     token = os.getenv("ORCHA_PAT")
 
-    # Serve every agent but the last in background threads; block on the last.
+    # Every agent serves in a background thread first: the registry harvests
+    # capabilities from the live endpoint, so it has to be reachable before
+    # register() is called. The main thread parks afterwards — serving a port
+    # that is already bound raises OSError(EADDRINUSE).
     for spec in agents:
-        block = spec is agents[-1]
         serve_agent(spec, block=False)
         print(f"✓ Serving {spec.name} on http://localhost:{spec.port}  ({spec.did})")
         if args.register:
@@ -132,12 +136,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
             except RegistryError as exc:
                 print(f"  ⚠ Registration skipped: {exc}", file=sys.stderr)
-        if block:
-            print("\nPress Ctrl+C to stop.")
-            try:
-                serve_agent(spec, block=True)
-            except KeyboardInterrupt:
-                print("\nStopped.")
+                print(
+                    "    The agent is serving locally regardless. To register it, "
+                    "start the runtime (./scripts/run-all.sh) or pass --no-register "
+                    "to silence this.",
+                    file=sys.stderr,
+                )
+
+    print("\nPress Ctrl+C to stop.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        print("\nStopped.")
     return 0
 
 
@@ -222,10 +232,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="orcha-sdk", description="Orcha agent developer CLI"
-    )
-    p.add_argument("--version", action="version", version=f"orcha-sdk {__version__}")
+    p = argparse.ArgumentParser(description="Orcha agent developer CLI")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
     pi = sub.add_parser("init", help="scaffold a new agent from a template")
