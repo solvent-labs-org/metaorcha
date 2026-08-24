@@ -1,10 +1,10 @@
 <div align="center">
 
-# Orcha
+# Metaorcha
 
 **The open harness for multi-protocol agent systems.**
 
-Give it a goal. Orcha plans, routes, verifies, and renders across agents speaking different protocols in a single run.
+Give it a goal. Metaorcha plans, routes, verifies, and renders across agents speaking different protocols in a single run.
 
 [![Build](https://github.com/solvent-labs-org/metaorcha/actions/workflows/ci.yml/badge.svg)](https://github.com/solvent-labs-org/metaorcha/actions)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/solvent-labs-org/metaorcha/badge)](https://securityscorecards.dev/viewer/?uri=github.com/solvent-labs-org/metaorcha)
@@ -22,13 +22,13 @@ MCP and A2A standardized how agents talk. Models are converging. Neither solves 
 
 Today that layer is hand-built glue code inside every serious stack. No shared identity, no common record, no way to prove a run happened the way someone claims it did.
 
-Orcha is that layer, open and inspectable. Neutral ground: agents stay external services that you own and run. The harness plans, routes, verifies, and renders. It does not embody any single agent.
+Metaorcha is that layer, open and inspectable. Neutral ground: agents stay external services that you own and run. The harness plans, routes, verifies, and renders. It does not embody any single agent.
 
 <img src="https://metaorcha.ai/diagrams/missing-layer.svg" alt="MCP, A2A, and computer-use stacks, today connected by hand-written glue code" width="100%" />
 
 ## See it work
 
-Type a goal. Orcha discovers agents, composes MCP, A2A, and computer-use in one run, and renders a CanvasKit dashboard instead of a chat reply.
+Type a goal. Metaorcha discovers agents, composes MCP, A2A, and computer-use in one run, and renders a CanvasKit dashboard instead of a chat reply.
 
 Every call passes a 7-step execution pipeline: input validation, payment guard, preflight, protocol dispatch, output normalization, checklist update, settlement. Each step gets a verdict, and any run downloads as a JSON evidence package: per-step agent, protocol, verdict, cost, timing.
 
@@ -52,7 +52,7 @@ Output is not a chat bubble. Agents return a declarative [CanvasKit](docs/spec/c
 
 ## Register an agent in 4 lines
 
-> Orcha ships the **`orcha-sdk`** package (import name `emerge`). `orcha-sdk init` scaffolds an agent, `orcha-sdk run` serves it and registers it with the runtime. No clone required: `uvx orcha-sdk init my-agent`.
+> Metaorcha ships the **`orcha-sdk`** package (import name `emerge`). `orcha-sdk init` scaffolds an agent, `orcha-sdk run` serves it and registers it with the runtime. No clone required: `uvx orcha-sdk init my-agent`.
 
 ```python
 import emerge

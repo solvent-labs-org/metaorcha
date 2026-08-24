@@ -24,7 +24,7 @@ Please include:
 
 ## Scope
 
-This policy covers the open-source Orcha runtime in this repository: the
+This policy covers the open-source Metaorcha runtime in this repository: the
 SuperAgent execution pipeline, Registry, Planning & Discovery, Gateway (mock
 mode), the example agents, the `common/*` libraries, and the `emerge` CLI/SDK.
 

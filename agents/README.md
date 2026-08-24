@@ -1,6 +1,6 @@
 # Agents
 
-Standalone AI agents that can be registered with Orcha. Each agent declares its identity, protocol, and capabilities in an `emerge.yaml` manifest.
+Standalone AI agents that can be registered with Metaorcha. Each agent declares its identity, protocol, and capabilities in an `emerge.yaml` manifest.
 
 ## Fleet
 

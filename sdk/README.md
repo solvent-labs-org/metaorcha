@@ -1,6 +1,6 @@
 # orcha-sdk
 
-The developer SDK + `emerge` CLI for [Orcha](https://github.com/solvent-labs-org/metaorcha) —
+The developer SDK + `emerge` CLI for [Metaorcha](https://github.com/solvent-labs-org/metaorcha) —
 an orchestration runtime that plans, routes, and executes one goal across agents
 speaking MCP, A2A, and COMPUTER_USE (ACP is accepted as an A2A-routed alias).
 
