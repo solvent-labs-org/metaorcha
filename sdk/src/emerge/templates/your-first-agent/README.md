@@ -1,18 +1,18 @@
 # {{AGENT_NAME}}
 
-Your first Orcha agent, scaffolded with `emerge init`.
+Your first Orcha agent, scaffolded with `orcha-sdk init`.
 
 ## Run it
 
 ```bash
 pip install orcha-sdk        # if you haven't already
-emerge run                   # serve + register against http://localhost:8000
+orcha-sdk run                   # serve + register against http://localhost:8000
 ```
 
 Or serve without registering:
 
 ```bash
-emerge run --no-register
+orcha-sdk run --no-register
 ```
 
 ## What's here
@@ -24,7 +24,7 @@ emerge run --no-register
 
 1. Edit `handle()` in `agent.py` with your real logic.
 2. Update the `description` and `skills` — the planner uses them to route to you.
-3. `emerge publish --registry <url>` to register against a remote registry.
+3. `orcha-sdk publish --registry <url>` to register against a remote registry.
 
 DID: `did:orcha:agent:{{AGENT_SLUG}}` · Manifest: generated from the decorator.
 See the [bridges guide](https://metaorcha.ai/docs)

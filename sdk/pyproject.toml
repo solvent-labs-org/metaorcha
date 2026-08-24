@@ -1,7 +1,7 @@
 [project]
 name = "orcha-sdk"
-version = "0.1.0"
-description = "Orcha agent SDK + emerge CLI — register an agent in three lines."
+version = "0.1.1"
+description = "Orcha agent SDK + CLI — register an agent in three lines."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -23,9 +23,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/solvent-labs-org/orcha"
-Repository = "https://github.com/solvent-labs-org/orcha"
-Issues = "https://github.com/solvent-labs-org/orcha/issues"
+Homepage = "https://github.com/solvent-labs-org/metaorcha"
+Repository = "https://github.com/solvent-labs-org/metaorcha"
+Issues = "https://github.com/solvent-labs-org/metaorcha/issues"
 
 [project.scripts]
 # `uvx <name>` resolves the *distribution* name, so the primary console script

@@ -9,8 +9,8 @@ returns a result string. The `@emerge.agent` decorator does the rest:
 
 Try it:
 
-    emerge run            # serve + register against the local registry
-    emerge run --no-register   # serve only
+    orcha-sdk run            # serve + register against the local registry
+    orcha-sdk run --no-register   # serve only
 
 Then ask the orchestrator to do something this agent can handle, or call it
 directly:
