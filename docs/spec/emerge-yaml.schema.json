@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/azank1/orcha/docs/spec/emerge-yaml.schema.json",
+  "$id": "https://github.com/solvent-labs-org/metaorcha/docs/spec/emerge-yaml.schema.json",
   "title": "emerge.yaml",
   "description": "Agent manifest for the Orcha orchestration runtime. Versioned, frozen-by-default. Changes go through the RFC process in docs/spec/governance.md.",
   "type": "object",

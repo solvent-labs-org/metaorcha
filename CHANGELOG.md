@@ -30,7 +30,7 @@ Repo hygiene release. No functional changes.
   [metaorcha.ai/roadmap](https://metaorcha.ai/roadmap). The repo ships the
   engine plus the versioned `docs/spec/` contract.
 - `AGENTS.md` slimmed to the operational rules.
-- Remaining `azank1/orcha` URLs repointed to `solvent-labs-org/orcha`
+- Remaining `azank1/orcha` URLs repointed to `solvent-labs-org/metaorcha`
   (SDK metadata, gateway/mailer strings, docs, issue templates).
 
 ### Fixed

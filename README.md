@@ -1,13 +1,13 @@
 <div align="center">
 
-# MetaOrcha
+# Orcha
 
 **The open harness for multi-protocol agent systems.**
 
 Give it a goal. Orcha plans, routes, verifies, and renders across agents speaking different protocols in a single run.
 
-[![Build](https://github.com/solvent-labs-org/orcha/actions/workflows/ci.yml/badge.svg)](https://github.com/solvent-labs-org/orcha/actions)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/solvent-labs-org/orcha/badge)](https://securityscorecards.dev/viewer/?uri=github.com/solvent-labs-org/orcha)
+[![Build](https://github.com/solvent-labs-org/metaorcha/actions/workflows/ci.yml/badge.svg)](https://github.com/solvent-labs-org/metaorcha/actions)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/solvent-labs-org/metaorcha/badge)](https://securityscorecards.dev/viewer/?uri=github.com/solvent-labs-org/metaorcha)
 [![Version](https://img.shields.io/badge/version-0.1.3-blue)](CHANGELOG.md)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://python.org)
@@ -36,7 +36,7 @@ Output is not a chat bubble. Agents return a declarative [CanvasKit](docs/spec/c
 
 **Hero goal (3 protocols, one run):** *"Show me my portfolio performance, use your web scraper agent to summarize https://en.wikipedia.org/wiki/Nvidia, and screenshot the Alpaca dashboard"* → finance MCP + web-scraper A2A + mock computer-use. Verified live, 5/5 runs, best wall clock 13s.
 
-**Try it:** run the [hosted sandbox](deploy/sandbox/README.md) locally (`make -f deploy/sandbox/Makefile up`) or clone and `./scripts/run-all.sh`. Demo portfolio data is illustrative, no brokerage connection required.
+**Try it:** clone and run `./scripts/run-all.sh`, or bring up the [sandbox stack](deploy/sandbox/README.md) locally with `make -f deploy/sandbox/Makefile up`. Demo portfolio data is illustrative, no brokerage connection required. (A hosted public sandbox is not currently up — see the [roadmap](docs/ROADMAP.md).)
 
 **Prove it yourself:** `./scripts/poc-e2e.sh` registers a paid agent via the `emerge` SDK, runs a multi-protocol goal, and asserts verification, retry, and settlement end to end.
 
@@ -52,7 +52,7 @@ Output is not a chat bubble. Agents return a declarative [CanvasKit](docs/spec/c
 
 ## Register an agent in 4 lines
 
-> Orcha ships the **`emerge` SDK** for agent registration. `emerge init` scaffolds your agent manifest, `emerge register` publishes it to the runtime. No clone required: `uvx emerge init my-agent`.
+> Orcha ships the **`orcha-sdk`** package (import name `emerge`). `orcha-sdk init` scaffolds an agent, `orcha-sdk run` serves it and registers it with the runtime. No clone required: `uvx orcha-sdk init my-agent`.
 
 ```python
 import emerge
@@ -63,21 +63,26 @@ def handle(task: str) -> str:
 ```
 
 ```bash
-emerge run     # serve locally and register with the runtime
+orcha-sdk run     # serve locally and register with the runtime
 ```
 
 ## Quickstart
 
-Just building an agent? Zero clone:
+Just building an agent? Zero clone, no infrastructure:
 
 ```bash
-uvx emerge init my-agent && cd my-agent && uvx emerge run
+uvx orcha-sdk init my-agent && cd my-agent && uvx orcha-sdk run
 ```
+
+That serves a live A2A agent on `:8900` — `/health`, `/.well-known/agent.json`,
+and JSON-RPC `message/send` all answer immediately. Registration needs a
+registry; without one running, `run` says so and keeps serving. Start the
+runtime below to register, or use `orcha-sdk run --no-register`.
 
 Running the full runtime (registry, planner, orchestrator, dashboard):
 
 ```bash
-git clone https://github.com/solvent-labs-org/orcha && cd orcha
+git clone https://github.com/solvent-labs-org/metaorcha && cd metaorcha
 ./scripts/run-all.sh        # infra + all services + seed agents
 ```
 
@@ -124,11 +129,11 @@ protocol. The `emerge.yaml` schema and its governance rules live in
 | **New agent** | `agents/` | Grows the fleet, stress-tests the runtime |
 | **CanvasKit component** | `frontend/src/components/canvas/` | New dashboard primitives for agent output |
 
-→ [CONTRIBUTING.md](CONTRIBUTING.md) · [Write a bridge](templates/your-first-bridge/) · [Open a RFC](https://github.com/solvent-labs-org/orcha/issues/new?labels=rfc)
+→ [CONTRIBUTING.md](CONTRIBUTING.md) · [Write a bridge](templates/your-first-bridge/) · [Open a RFC](https://github.com/solvent-labs-org/metaorcha/issues/new?labels=rfc)
 
 ## What's next
 
-**Sandbox hardening + UIUX (v0.2.0)**, full trajectory in the [roadmap](https://metaorcha.ai/roadmap).
+**Sandbox hardening + UIUX (v0.2.0)**, full trajectory in the [roadmap](docs/ROADMAP.md).
 
 ---
 
