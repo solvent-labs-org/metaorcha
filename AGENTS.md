@@ -55,9 +55,11 @@ make check                  # lint + format + tests, run before every PR
 
 1. **Mock-first** — full stack runs with `PAYMENT_MODE=mock`; mock fallback
    for anything external.
-2. **Brand tiers per `docs/brand.md`** — Metaorcha = umbrella, Orcha =
-   harness, KYA = category term. Never an internal name in any committed
-   file; "Orcha" never stands alone in public copy.
+2. **The name is Metaorcha** (`docs/brand.md`). Public copy says "Metaorcha".
+   "Orcha" is not a standalone name — it appears only inside component
+   identifiers (`orcha-sdk`, `orcha-attest`, `did:orcha:*`, `ORCHA_*`), never
+   as an H1, a page title, or the subject of a sentence. KYA = category term.
+   Never an internal name in any committed file.
 3. **No secrets in files** — `.env.*` is gitignored except `.env.example` /
    `deploy/sandbox/.env.sandbox.example`. CI runs gitleaks on every PR.
 4. **No token announcement** — no tokenomics or launch timelines anywhere.

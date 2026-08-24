@@ -1,6 +1,6 @@
-# Orcha Roadmap
+# Metaorcha Roadmap
 
-This is the public trajectory for Orcha. It describes direction, not dated commitments. Each phase is gated on the phase before it being validated by real adoption — we build the next layer only when the current one is earned.
+This is the public trajectory for Metaorcha. It describes direction, not dated commitments. Each phase is gated on the phase before it being validated by real adoption — we build the next layer only when the current one is earned.
 
 ---
 

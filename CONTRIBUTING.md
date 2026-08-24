@@ -1,6 +1,6 @@
-# Contributing to Orcha
+# Contributing to Metaorcha
 
-Thanks for your interest in Orcha — open **agent orchestration and observability**
+Thanks for your interest in Metaorcha — open **agent orchestration and observability**
 infrastructure.
 
 This is not a model benchmark
@@ -89,7 +89,7 @@ No `Co-authored-by` trailers unless you actually pair-programmed.
 - `make check` passes (lint + format + tests).
 - New code has tests. Bridges and agents include a minimal example + manifest.
 - No secrets, credentials, or client references in the diff.
-- Public-facing text says **Orcha**, not any internal brand.
+- Public-facing text says **Metaorcha**, not any internal brand.
 
 ## Writing a bridge
 
