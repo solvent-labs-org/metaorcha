@@ -26,7 +26,8 @@ Please include:
 
 This policy covers the open-source Metaorcha runtime in this repository: the
 SuperAgent execution pipeline, Registry, Planning & Discovery, Gateway (mock
-mode), the example agents, the `common/*` libraries, and the `emerge` CLI/SDK.
+mode), the example agents, the `common/*` libraries, and the `orcha-sdk` CLI/SDK
+(`emerge` is kept as a compatibility alias).
 
 Hosted/production payment rails are not part of this repository and are out of
 scope here.
