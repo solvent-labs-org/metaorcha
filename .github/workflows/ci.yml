@@ -886,7 +886,13 @@ jobs:
   # it fails if any job it waits on failed or was cancelled.
   # ============================================================================
   ci-complete:
-    name: CI complete
+    # NOTE: branch protection matches the check run's REPORTED NAME, not the job
+    # id, and it matches exact-case. This `name:` must therefore stay identical
+    # to the required status check configured on `main` (`ci-complete`).
+    # Renaming it to anything prettier makes the required context unreachable and
+    # `main` unmergeable by everyone, admins included. That is not hypothetical:
+    # it happened on 2026-08-24 and went unnoticed for two days.
+    name: ci-complete
     if: always()
     runs-on: ubuntu-latest
     permissions:
