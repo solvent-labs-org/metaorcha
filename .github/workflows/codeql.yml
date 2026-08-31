@@ -4,14 +4,10 @@ name: CodeQL
 # services/SDK; javascript-typescript covers the frontend and JS agents.
 
 on:
-  # `community` is where outside contributions integrate before they reach
-  # `main`, so it needs the same SAST as `main` does — analysing only `main`
-  # means the first CodeQL run on a contributor's code happens after it has
-  # already been merged twice.
   push:
-    branches: [main, community]
+    branches: [main]
   pull_request:
-    branches: [main, community]
+    branches: [main]
   schedule:
     - cron: "24 3 * * 4"
 

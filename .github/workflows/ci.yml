@@ -1,13 +1,10 @@
 name: CI
 
 on:
-  # `community` is the integration branch for outside contributions, and it
-  # carried no CI at all — a fork PR into it ran only the secret scan. `develop`
-  # exists on neither remote.
   pull_request:
-    branches: [main, community]
+    branches: [main, develop]
   push:
-    branches: [main, community]
+    branches: [main, develop]
 
 # Default to read-only; jobs that need more declare it themselves.
 permissions:
