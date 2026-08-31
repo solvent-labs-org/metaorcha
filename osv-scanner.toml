@@ -1,11 +1,36 @@
 # OSV-Scanner ignore list — root uv.lock.
-# ecdsa is pulled in transitively by python-jose (JWT). The Minerva timing
+#
+# `ecdsa` is pulled in transitively by python-jose (JWT). The Minerva timing
 # attack (GHSA-wj6h-64fc-37mp / PYSEC-2026-1325) is unfixed upstream as of
-# 0.19.2 (latest); the project has stated it will not patch. JWT verification
-# here happens server-side over short-lived tokens; the timing side channel is
-# not remotely exploitable in this deployment. Tracked for replacement of
-# python-jose with a maintained JWT library.
+# 0.19.2 (latest); the project has stated it will not patch. `ecdsa` is a base
+# dependency of python-jose rather than part of the `[cryptography]` extra, so
+# it cannot be dropped by trimming extras — only by replacing the library.
+#
+# The exposure is not "low", it is structurally absent. The vulnerability is in
+# ECDSA signing and verification; this system performs neither. Every JWT it
+# issues or checks is HS256 — symmetric HMAC-SHA256, which never enters `ecdsa`.
+# Verified 2026-08-30 by reading every place the algorithm is set, not assumed
+# from the default alone:
+#
+#   services/gateway/src/gateway/config.py:28   jwt_algorithm: str = "HS256"
+#   services/gateway/.env.example:17            JWT_ALGORITHM=HS256
+#   deploy/sandbox/.env.sandbox.example:64      JWT_ALGORITHM=HS256
+#   deploy/docker-compose.dev.yml:294           JWT_ALGORITHM: HS256
+#   five gateway test bootstraps                setdefault("JWT_ALGORITHM", "HS256")
+#
+# and no ES256/ES384/ES512/RS256/PS256 appears anywhere under services/ or
+# deploy/. That premise is a default, not an invariant: the moment any
+# deployment sets JWT_ALGORITHM to an ES* value this entry stops being true and
+# must be removed rather than renewed.
+#
+# The date is a forcing function, not an estimate. The intended exit is to
+# replace python-jose with a maintained JWT library (pyjwt, joserfc, authlib);
+# the usage is three call sites and an exception type. It is scheduled after the
+# registry gains its own token verification so the swap is one change across
+# both services instead of two conflicting ones.
+#
+# Add entries only with a reason and an ignoreUntil date.
 [[IgnoredVulns]]
 id = "GHSA-wj6h-64fc-37mp"
-reason = "Transitive via python-jose; no upstream fix (won't-patch). Server-side JWT verify only; replacement tracked."
-ignoreUntil = 2026-11-01
+reason = "Transitive via python-jose; no upstream fix (won't-patch), and ecdsa is a base dependency rather than an extra. HS256 everywhere — verified across the code default, four env/compose files and five test bootstraps — so the ECDSA code path is never entered. Replacement with a maintained JWT library is tracked and scheduled."
+ignoreUntil = 2027-02-01
