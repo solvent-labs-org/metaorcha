@@ -1,4 +1,4 @@
-"""Orcha agent SDK — register an agent in three lines.
+"""Metaorcha agent SDK — register an agent in three lines.
 
     import emerge
 
@@ -19,7 +19,7 @@ import sys
 from .manifest import build_manifest, manifest_yaml
 from .sdk import AgentSpec, Skill, agent, registered_agents
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "agent",

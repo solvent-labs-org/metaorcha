@@ -1,11 +1,11 @@
 [project]
 name = "orcha-sdk"
-version = "0.1.1"
-description = "Orcha agent SDK + CLI — register an agent in three lines."
+version = "0.1.2"
+description = "Metaorcha agent SDK + CLI — register an agent in three lines."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Orcha" }]
+authors = [{ name = "Metaorcha" }]
 keywords = ["ai-agents", "mcp", "a2a", "orchestration", "orcha", "emerge"]
 dependencies = [
     "pyyaml>=6.0",
