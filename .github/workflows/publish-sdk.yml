@@ -83,7 +83,18 @@ jobs:
     name: Publish to PyPI
     needs: build
     # Only a tag push publishes; workflow_dispatch stops after build (dry-run).
-    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    #
+    # The repository guard is not decoration. This workflow exists on both the
+    # internal and the public repo, and fires on whichever one receives the tag.
+    # Creating the release (below) is new behaviour — previously an internal tag
+    # emitted a `::warning::` and stopped — so without this, a `sdk-v*` tag
+    # pushed here would mint a real GitHub release on the internal repo, which
+    # `docs/releasing.md` §2 forbids outright: the public repo owns every
+    # release number. Same `github.repository ==` guard used by codeql.yml and
+    # scorecard.yml.
+    if: >-
+      startsWith(github.ref, 'refs/tags/sdk-v') &&
+      github.repository == 'solvent-labs-org/metaorcha'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -100,6 +111,7 @@ jobs:
       # built them, verifiable with `gh attestation verify`. Worth more than the
       # supply-chain checkbox it satisfies for something people uvx-install.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: "dist/*"
@@ -111,6 +123,25 @@ jobs:
           # Declared rather than left to the action's default: the SHA pin
           # freezes that default at this revision.
           attestations: true
+
+      # The attest step above uploads to GitHub's attestation store, which is
+      # what `gh attestation verify` reads -- but a store is not a release.
+      # Anything auditing the tag itself reads the release's own assets, and a
+      # wheel carries no signature of its own, so the artifacts and the proof of
+      # how they were built have to travel together.
+      #
+      # This runs *after* the PyPI publish deliberately: that step is pointed at
+      # `packages-dir: dist/` and twine rejects a stray non-package file, so the
+      # bundle must not exist in dist/ until the upload is done.
+      #
+      # `.sigstore.json` is what the file is -- a JSON-serialized Sigstore
+      # bundle. Deliberately not named `.intoto.jsonl`, which means SLSA
+      # provenance in JSON Lines: a different format that happens to score
+      # higher with supply-chain scanners. The name should describe the bytes.
+      - name: Stage the attestation bundle as a release asset
+        run: |
+          cp "${{ steps.attest.outputs.bundle-path }}" \
+             "dist/orcha-sdk-${GITHUB_REF_NAME#sdk-v}.sigstore.json"
 
       # Releases carried no assets at all, so there was nothing for a consumer
       # (or a supply-chain audit) to verify against the tag.
