@@ -83,7 +83,18 @@ jobs:
     name: Publish to PyPI
     needs: build
     # Only a tag push publishes; workflow_dispatch stops after build (dry-run).
-    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    #
+    # The repository guard is not decoration. This workflow exists on both the
+    # internal and the public repo, and fires on whichever one receives the tag.
+    # Creating the release (below) is new behaviour — previously an internal tag
+    # emitted a `::warning::` and stopped — so without this, a `sdk-v*` tag
+    # pushed here would mint a real GitHub release on the internal repo, which
+    # `docs/releasing.md` §2 forbids outright: the public repo owns every
+    # release number. Same `github.repository ==` guard used by codeql.yml and
+    # scorecard.yml.
+    if: >-
+      startsWith(github.ref, 'refs/tags/sdk-v') &&
+      github.repository == 'solvent-labs-org/metaorcha'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -100,6 +111,7 @@ jobs:
       # built them, verifiable with `gh attestation verify`. Worth more than the
       # supply-chain checkbox it satisfies for something people uvx-install.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: "dist/*"
@@ -112,19 +124,51 @@ jobs:
           # freezes that default at this revision.
           attestations: true
 
+      # The attest step above uploads to GitHub's attestation store, which is
+      # what `gh attestation verify` reads -- but a store is not a release.
+      # Anything auditing the tag itself reads the release's own assets, and a
+      # wheel carries no signature of its own, so the artifacts and the proof of
+      # how they were built have to travel together.
+      #
+      # This runs *after* the PyPI publish deliberately: that step is pointed at
+      # `packages-dir: dist/` and twine rejects a stray non-package file, so the
+      # bundle must not exist in dist/ until the upload is done.
+      #
+      # `.sigstore.json` is what the file is -- a JSON-serialized Sigstore
+      # bundle. Deliberately not named `.intoto.jsonl`, which means SLSA
+      # provenance in JSON Lines: a different format that happens to score
+      # higher with supply-chain scanners. The name should describe the bytes.
+      - name: Stage the attestation bundle as a release asset
+        run: |
+          cp "${{ steps.attest.outputs.bundle-path }}" \
+             "dist/orcha-sdk-${GITHUB_REF_NAME#sdk-v}.sigstore.json"
+
       # Releases carried no assets at all, so there was nothing for a consumer
       # (or a supply-chain audit) to verify against the tag.
       - name: Attach artifacts to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # sdk-v0.1.1 -> v0.1.1, which is the release tag.
-          RELEASE="${GITHUB_REF_NAME#sdk-}"
-          if gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE" dist/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            echo "::warning::no GitHub release $RELEASE yet — artifacts not attached"
+          # The SDK's artifacts belong to the SDK's own tag. Stripping `sdk-`
+          # named a release on the *platform* train instead: `sdk-v0.1.2`
+          # resolves to `v0.1.2`, a release cut months earlier for something
+          # entirely different, and `gh release upload --clobber` would have
+          # attached the wheels to it and exited 0. Nothing was ever misfiled
+          # — no release on this repo carries an asset — so this is the shape the
+          # next `sdk-v*` push would have taken, not damage to undo.
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A tag push creates no release. Warning and stopping here would
+            # leave this step a permanent no-op, which is why the tags have no
+            # artifacts to verify against in the first place. `--verify-tag`
+            # refuses to invent a release for a tag that does not exist.
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "orcha-sdk $VERSION" \
+              --notes "\`orcha-sdk\` $VERSION on PyPI: https://pypi.org/project/orcha-sdk/$VERSION/"
           fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
   # The check that matters: run the command the README tells users to type,
   # resolved from the real index. Every other smoke test here uses `--from`
