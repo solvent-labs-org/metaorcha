@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
 
     logger.info("Starting SuperAgent service")
 
+    # KYA gate config guard (2.1 review): the gate flag without envelope
+    # production is a silent free tier — refuse to boot rather than degrade.
+    from .pricing.settle_gate import validate_gate_config
+
+    validate_gate_config(settings)
+
     # 1. Seed platform system MCP tools into Registry, then build boot-time baseline cache
     from .clients.registry_client import RegistryClient
     from .startup.platform_mcp_baseline import load_baseline_from_manifests
@@ -137,20 +143,93 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     _scheduler = WorkflowScheduler()
     await _scheduler.start()
 
-    # 5. Audit ledger observer (KY-A, WS7) — opt-in via AUDIT_LEDGER_ENABLED.
+    # 5. Execution observers (KYA) — each opt-in via its own feature flag.
+    # set_observer holds exactly ONE observer, so installing each enabled
+    # observer directly would be last-wins (e.g. RUN_ATTESTATION_ENABLED
+    # overwriting CDVObserver would silently disable CDV scoring and leave
+    # steps[].cdv_bp permanently empty — only CDVObserver writes
+    # record.metadata["cdv"]). Collect them and install a single
+    # CompositeObserver instead. Order matters: CDVObserver must precede
+    # RunAttestationObserver so metadata["cdv"] is populated before the
+    # attestation observer accumulates the step.
+    from .middleware.observers import (
+        CompositeObserver,
+        ExecutionObserver,
+        set_observer,
+    )
+
+    observers: list[ExecutionObserver] = []
+
+    # Audit ledger observer (KY-A, WS7) — opt-in via AUDIT_LEDGER_ENABLED.
     # Stock OSS keeps the NoOpObserver; the ledger observer fails closed and
     # never affects the user-facing execution path.
     if settings.audit_ledger_enabled:
         from .middleware.audit_ledger import LedgerObserver
-        from .middleware.observers import set_observer
 
-        set_observer(LedgerObserver())
-        logger.info("Audit ledger observer installed (AUDIT_LEDGER_ENABLED=true)")
+        observers.append(LedgerObserver())
+        logger.info("Audit ledger observer enabled (AUDIT_LEDGER_ENABLED=true)")
 
     if settings.cdv_verification_enabled:
-        from .verification.cdv_integration import install_cdv_observer
+        from .verification.cdv_integration import build_cdv_observer
 
-        install_cdv_observer()
+        observers.append(build_cdv_observer())
+
+    # Run attestation observer (KYA, RFC 0003) — opt-in via
+    # RUN_ATTESTATION_ENABLED. Default off keeps stock OSS behaviour. The
+    # validator package is an optional workspace member; degrade gracefully
+    # (warning, stock observer) when it is not installed — same contract as
+    # sign_case_attestation.
+    if settings.run_attestation_enabled:
+        try:
+            from validator.run_observer import RunAttestationObserver
+        except ImportError:
+            if settings.settlement_require_attestation:
+                # Graceful degrade is fine for attestation alone, but with the
+                # gate flag on it becomes the silent free tier the boot guard
+                # exists to prevent — same failure, different cause (2.1 review).
+                raise RuntimeError(
+                    "SETTLEMENT_REQUIRE_ATTESTATION=true but the validator "
+                    "package is unavailable — no envelopes can be produced, so "
+                    "every charged call would defer forever and never be "
+                    "billed. Install the validator package or disable the gate."
+                ) from None
+            logger.warning(
+                "RUN_ATTESTATION_ENABLED=true but the validator package is "
+                "unavailable — run attestation disabled"
+            )
+        else:
+            attestation_observer = RunAttestationObserver(
+                charter_hash=settings.run_attestation_charter_hash
+            )
+            observers.append(attestation_observer)
+            logger.info(
+                "Run attestation observer enabled (RUN_ATTESTATION_ENABLED=true, "
+                "charter binding=%s)",
+                "active" if settings.run_attestation_charter_hash else "inactive",
+            )
+            # Attestation-gated settle (AD-1/AD-2) — the gate observer must fire
+            # AFTER the attestation observer seals the run (composite dispatch
+            # is in registration order), so it resolves the just-sealed run_id.
+            if settings.settlement_require_attestation:
+                from .pricing.settle_gate import SettlementGateObserver
+
+                observers.append(SettlementGateObserver(attestation_observer))
+                logger.info(
+                    "Settlement gate observer enabled "
+                    "(SETTLEMENT_REQUIRE_ATTESTATION=true)"
+                )
+
+    # (The SETTLEMENT_REQUIRE_ATTESTATION-without-RUN_ATTESTATION_ENABLED combo
+    # hard-fails at lifespan start via validate_gate_config — no warning here.)
+
+    if len(observers) == 1:
+        set_observer(observers[0])
+    elif observers:
+        set_observer(CompositeObserver(observers))
+        logger.info(
+            "Composite observer installed: %s",
+            ", ".join(type(o).__name__ for o in observers),
+        )
 
     logger.info("SuperAgent ready on port %d", settings.port)
 

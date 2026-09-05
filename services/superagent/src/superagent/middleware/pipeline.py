@@ -221,6 +221,7 @@ class ExecutionMiddleware:
                 base_fee=str(base_fee),
                 verdict={"verified": verified, "reason": verdict_reason},
                 metadata={"goal": self._session_goal()},
+                args=dict(args),
             )
         )
 

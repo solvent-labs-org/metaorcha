@@ -1,0 +1,6 @@
+{
+  "format": "orcha.demo-charter/v1",
+  "agent_did": "did:orcha:agent:kya-demo",
+  "scope": ["settlement-slice"],
+  "note": "MVP demo charter — hash binding only, no CA chain (AD-9)"
+}
