@@ -2732,11 +2732,15 @@ name = "orcha-sdk"
 version = "0.1.2"
 source = { editable = "sdk" }
 dependencies = [
+    { name = "cryptography" },
     { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
+requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
 
 [[package]]
 name = "orjson"
