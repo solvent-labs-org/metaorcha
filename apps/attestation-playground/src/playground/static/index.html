@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orcha Attestation Playground</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Attestation Playground</h1>
+    <span id="mode-badge" class="badge">mode: …</span>
+  </header>
+  <main>
+    <section class="panel" id="panel-run">
+      <h2>1 · Run</h2>
+      <div class="row">
+        <input id="prompt" type="text" value="Summarize RFC 0003 run attestation" />
+        <select id="mode-select">
+          <option value="">auto</option>
+          <option value="sim">sim</option>
+          <option value="real">real</option>
+        </select>
+        <button id="run-btn">Run agent</button>
+      </div>
+      <ol id="step-feed" class="feed"></ol>
+    </section>
+    <section class="panel" id="panel-envelope">
+      <h2>2 · Envelope</h2>
+      <div id="signer-line">signer: —</div>
+      <pre id="envelope-view">run an agent to produce a signed envelope</pre>
+      <div class="row">
+        <button id="download-btn" disabled>Download</button>
+        <button id="copy-btn" disabled>Copy → verifier</button>
+      </div>
+    </section>
+    <section class="panel" id="panel-verify">
+      <h2>3 · Verify (offline)</h2>
+      <textarea id="verify-input" spellcheck="false"
+        placeholder="paste any orcha.run-attestation/v1 envelope — then flip one byte and verify"></textarea>
+      <div class="row">
+        <button id="verify-btn">Verify</button>
+        <button id="golden-valid-btn">Golden: valid</button>
+        <button id="golden-tampered-btn">Golden: tampered</button>
+      </div>
+      <div id="verify-result" class="verdict none">no verdict yet</div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

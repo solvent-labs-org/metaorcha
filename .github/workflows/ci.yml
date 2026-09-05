@@ -33,6 +33,7 @@ jobs:
       node: ${{ steps.filter.outputs.node }}
       validator: ${{ steps.filter.outputs.validator }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      apps: ${{ steps.filter.outputs.apps }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -66,6 +67,8 @@ jobs:
               - 'services/superagent/src/superagent/middleware/**'
             frontend:
               - 'frontend/**'
+            apps:
+              - 'apps/**'
 
   # ============================================================================
   # Registry Service Tests
@@ -495,6 +498,43 @@ jobs:
             V(json.load(open('docs/spec/emerge-yaml.schema.json'))).validate(build_manifest(registered_agents()[0]))"
 
   # ============================================================================
+  # Attestation playground (apps/) — lint, format, tests
+  # ============================================================================
+  attestation-playground:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.apps == 'true' }}
+    runs-on: ubuntu-latest
+    name: Attestation playground (Lint, Format, Test)
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Lint with ruff
+        run: uv run ruff check apps/attestation-playground/src/ apps/attestation-playground/tests/
+
+      - name: Format check with ruff
+        run: uv run ruff format --check apps/attestation-playground/src/ apps/attestation-playground/tests/
+
+      - name: Run playground tests
+        run: uv run pytest apps/attestation-playground/tests/ --verbose
+
+  # ============================================================================
   # SuperAgent — lint + execution-pipeline seam tests
   # ============================================================================
   superagent-service:
@@ -906,6 +946,7 @@ jobs:
       - common-packages
       - planning-discovery-service
       - sdk
+      - attestation-playground
       - superagent-service
       - emerge-node
       - validator
