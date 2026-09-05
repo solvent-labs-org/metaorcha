@@ -506,6 +506,10 @@ jobs:
     runs-on: ubuntu-latest
     name: Attestation playground (Lint, Format, Test)
     timeout-minutes: 10
+    # The playground imports validator and emerge_node, workspace members the
+    # root sync does not put on the path (same shape as the validator job).
+    env:
+      PYTHONPATH: ${{ github.workspace }}/services/validator/src:${{ github.workspace }}/node/src
 
     steps:
       - name: Checkout code
