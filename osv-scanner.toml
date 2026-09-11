@@ -34,3 +34,11 @@
 id = "GHSA-wj6h-64fc-37mp"
 reason = "Transitive via python-jose; no upstream fix (won't-patch), and ecdsa is a base dependency rather than an extra. HS256 everywhere — verified across the code default, four env/compose files and five test bootstraps — so the ECDSA code path is never entered. Replacement with a maintained JWT library is tracked and scheduled."
 ignoreUntil = 2027-02-01
+
+# NLTK <=3.10.3 has no fixed release for GHSA-8mgp-746c-j5xp. Metaorcha uses
+# only fixed-language tokenization and English stopwords; re-review immediately
+# if NLTK usage expands.
+[[IgnoredVulns]]
+id = "GHSA-8mgp-746c-j5xp"
+reason = "NLTK is used only for fixed-language tokenization and English stopwords; Metaorcha does not call the affected model-artifact APIs, pass caller-controlled filenames into NLTK, or rely on NLTK pathsec as a containment boundary. No patched release exists; remove this exception when NLTK 3.10.4 is published or when NLTK is replaced. Re-review immediately if NLTK usage expands."
+ignoreUntil = 2026-10-01
