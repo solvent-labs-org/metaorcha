@@ -54,9 +54,7 @@ class MessageRequest(BaseModel):
             if key not in _SUPPORTED_CRITERIA:
                 raise ValueError(f"unsupported criterion: {key}")
             if type(item) is not bool:
-                raise ValueError(
-                    f"acceptance_criteria[{key!r}] must be a boolean"
-                )
+                raise ValueError(f"acceptance_criteria[{key!r}] must be a boolean")
         return value
 
 
