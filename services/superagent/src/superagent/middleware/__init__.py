@@ -2,6 +2,7 @@
 
 from .audit_ledger import LedgerObserver
 from .observers import (
+    CompositeObserver,
     ExecutionObserver,
     NoOpObserver,
     StepResult,
@@ -11,6 +12,7 @@ from .observers import (
 )
 
 __all__ = [
+    "CompositeObserver",
     "ExecutionMiddleware",
     "ExecutionObserver",
     "LedgerObserver",

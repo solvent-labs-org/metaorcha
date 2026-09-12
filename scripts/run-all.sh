@@ -15,6 +15,20 @@ cd "$ROOT"
 LOGS="$ROOT/.logs"
 mkdir -p "$LOGS"
 
+# ---------------------------------------------------------------- database ---
+# The one definition of this stack's database. The migrator, the vector-index
+# builder, the seed/verify psql calls and every service started below all take
+# their value from here, so the stack cannot end up half-pointed at two
+# databases at once — which is exactly what happened while the services read
+# `metaorcha` from their env files and everything in this script targeted
+# `orcha`. Passing it explicitly to each service is what makes that structural
+# rather than a convention: for superagent it must land AFTER the `source` of
+# its .env, or the file silently wins again.
+#   Throwaway DB:  ORCHA_DB_BASE=postgresql://postgres:postgres@localhost:5432/scratch ./scripts/run-all.sh
+ORCHA_DB_BASE="${ORCHA_DB_BASE:-postgresql://postgres:postgres@localhost:5432/orcha}"
+ORCHA_DB_URL="${ORCHA_DB_BASE}?schema=public"   # Prisma wants the schema param
+ORCHA_DB_NAME="${ORCHA_DB_BASE##*/}"; ORCHA_DB_NAME="${ORCHA_DB_NAME%%\?*}"
+
 SKIP_INFRA=false
 SKIP_SEED=false
 for arg in "$@"; do
@@ -116,19 +130,19 @@ if [[ "$SKIP_INFRA" == "false" ]]; then
     sleep 1
   done
 
-  docker exec orcha-postgres psql -U postgres -d orcha \
+  docker exec orcha-postgres psql -U postgres -d "$ORCHA_DB_NAME" \
     -c "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null 2>&1
   success "pgvector extension enabled"
 
   step "Phase 1b: Database Setup"
   info "Running Prisma migrations..."
-  DATABASE_URL="postgresql://postgres:postgres@localhost:5432/orcha?schema=public" \
+  DATABASE_URL="$ORCHA_DB_URL" \
     uv run prisma migrate deploy --schema common/database/schema.prisma \
     >"$LOGS/migrate.log" 2>&1
   success "Prisma migrations applied"
 
   info "Creating vector indices..."
-  DATABASE_URL="postgresql://postgres:postgres@localhost:5432/orcha" \
+  DATABASE_URL="$ORCHA_DB_BASE" \
     uv run python services/planning-discovery/scripts/db/initialize_database.py \
     >"$LOGS/pnd-db-init.log" 2>&1
   success "Vector indices ready"
@@ -181,21 +195,27 @@ success "gRPC stubs generated"
 # ═══════════ PHASE 3: Start Services ═══════════
 step "Phase 3: Starting Services"
 
-start_service registry "$C_REG" env PYTHONPATH="$ROOT" \
+start_service registry "$C_REG" env PYTHONPATH="$ROOT" DATABASE_URL="$ORCHA_DB_BASE" \
   uv run uvicorn services.registry.src.main:app --host 0.0.0.0 --port 8000 --log-level info
 wait_for registry http://localhost:8000/ 30
 
-start_service pnd "$C_PND" env PYTHONPATH="$ROOT" \
+start_service pnd "$C_PND" env PYTHONPATH="$ROOT" DATABASE_URL="$ORCHA_DB_BASE" \
   uv run uvicorn planning_discovery.main:app --app-dir services/planning-discovery/src \
   --host 0.0.0.0 --port 8001 --log-level info
 wait_for pnd http://localhost:8001/ 45
 
-start_service superagent "$C_SA" bash -c "set -a && source '$ROOT/services/superagent/.env' && set +a && exec env PYTHONPATH='$ROOT' uv run uvicorn superagent.main:app --app-dir services/superagent/src --host 0.0.0.0 --port 8002 --log-level info 2>&1"
+# `validator` and `emerge_node` are workspace members that nothing depends on, so
+# uv never installs them into .venv — `import validator` fails in every worktree.
+# The run-attestation observer and the settlement gate both live there, and
+# SETTLEMENT_REQUIRE_ATTESTATION=true hard-fails at boot without them
+# (superagent/main.py). Put their src on the path rather than making superagent
+# depend on them, which is the same separation CI keeps.
+start_service superagent "$C_SA" bash -c "set -a && source '$ROOT/services/superagent/.env' && set +a && exec env PYTHONPATH='$ROOT:$ROOT/services/validator/src:$ROOT/node/src' DATABASE_URL='$ORCHA_DB_BASE' uv run uvicorn superagent.main:app --app-dir services/superagent/src --host 0.0.0.0 --port 8002 --log-level info 2>&1"
 wait_for superagent http://localhost:8002/ 30
 
 # LOCAL_MODE=true → /auth/local issues a persistent single-user session (frictionless
 # local login). VITE_LOCAL_MODE flows to the Vite dev server so the UI auto-logs-in.
-start_service gateway "$C_GW" env PYTHONPATH="$ROOT" LOCAL_MODE=true \
+start_service gateway "$C_GW" env PYTHONPATH="$ROOT" LOCAL_MODE=true DATABASE_URL="$ORCHA_DB_BASE" \
   uv run uvicorn gateway.main:app --app-dir services/gateway/src \
   --host 0.0.0.0 --port 8080 --log-level info
 wait_for gateway http://localhost:8080/ 20
@@ -228,16 +248,16 @@ if [[ "$SKIP_SEED" == "false" ]]; then
 
   # Hard-delete any existing agents so re-registration works cleanly
   info "Clearing previous agent data..."
-  docker exec orcha-postgres psql -U postgres -d orcha -c \
+  docker exec orcha-postgres psql -U postgres -d "$ORCHA_DB_NAME" -c \
     "DELETE FROM agent_embeddings; DELETE FROM capabilities; DELETE FROM agent_versions; DELETE FROM agents;" \
     >/dev/null 2>&1 || true
   success "Agent tables cleared"
 
   ./scripts/seed-live-agents.sh --embeddings || warn "Some agents failed to register (non-fatal)"
 
-  counts=$(docker exec orcha-postgres psql -U postgres -d orcha -tAc \
+  counts=$(docker exec orcha-postgres psql -U postgres -d "$ORCHA_DB_NAME" -tAc \
     "SELECT count(*) FROM agents;" 2>/dev/null || echo "?")
-  embs=$(docker exec orcha-postgres psql -U postgres -d orcha -tAc \
+  embs=$(docker exec orcha-postgres psql -U postgres -d "$ORCHA_DB_NAME" -tAc \
     "SELECT count(*) FROM agent_embeddings WHERE embedding IS NOT NULL;" 2>/dev/null || echo "?")
   success "DB: ${counts} agents, ${embs} with embeddings"
 else

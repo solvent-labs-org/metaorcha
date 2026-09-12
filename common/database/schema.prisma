@@ -655,6 +655,10 @@ model AuditLedgerEntry {
 model Attestation {
   id          String    @id @default(cuid())
   session_id  String
+  // RFC 0003 run_id for run-attestation envelopes; null for case attestations
+  // (KY-A/WS9 path) and pre-slice rows. Unique where present (Postgres treats
+  // NULLs as distinct under a unique constraint).
+  run_id      String?   @unique
   // sha256 hex digest of the canonical case payload that was signed.
   case_hash   String
   payload     Json
@@ -672,4 +676,49 @@ model Attestation {
 
   @@index([session_id])
   @@map("attestations")
+}
+
+// ============================================================================
+// ATTESTED SETTLEMENTS — settle/refuse audit for attestation-gated settlement
+// (KYA settlement slice, AD-3). run_id indexed, NOT unique: refuse and settled
+// rows for one run_id must coexist (idempotency is enforced at the app layer).
+// ============================================================================
+
+model AttestedSettlement {
+  id              String   @id @default(cuid())
+  run_id          String
+  session_id      String?
+  // settled | refused
+  outcome         String
+  // Settle idempotency key (Story 2.3, AR-11). Mirrors run_id on a settled
+  // row and is NULL on every refused row. Postgres treats NULLs as distinct
+  // in a unique index, so this enforces AT MOST ONE settled row per run
+  // while leaving refusals unconstrained — Story 2.2 requires a row per
+  // refused attempt, so a plain @@unique([run_id]) would destroy the refuse
+  // audit trail. A partial index (WHERE outcome = 'settled') is the textbook
+  // form but is not expressible in Prisma's schema DSL and would register as
+  // permanent drift; this mirror column is the same semantics inside the DSL.
+  // THIS INDEX IS THE IDEMPOTENCY AUTHORITY — the pre-check in settle_gate.py
+  // is a courtesy fast path and is TOCTOU-racy by construction. Do not remove
+  // this believing the pre-check covers it.
+  settled_run_id  String?  @unique
+  // The charged call this outcome settles or refuses (Story 2.4). Nullable:
+  // rows written before the column existed, and gate calls that carry no
+  // call, leave it NULL. Ties an audit row to its `transactions` row
+  // exactly (Transaction.call_id is unique) instead of by session.
+  call_id         String?
+  // sha256 hex digest of the envelope that was verified (or attempted).
+  envelope_digest String
+  // List of failed check ids when refused ("schema" | "steps_root" |
+  // "steps_merkle_root" | "signature" | "charter_hash" | "run_id_mismatch"
+  // | "missing_attestation" | "verify_error" | "signer_did" | "agent_did" |
+  // "audit_write_error" | "already_settled" | "credit_write_error");
+  // empty on settle.
+  failed_checks   Json
+  charter_hash    String?
+  created_at      DateTime @default(now())
+
+  @@index([run_id])
+  @@index([call_id])
+  @@map("attested_settlements")
 }

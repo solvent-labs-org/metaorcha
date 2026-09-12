@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV_FILE = Path(__file__).parent.parent.parent / ".env"
+
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class Settings(BaseSettings):
@@ -94,6 +98,51 @@ class Settings(BaseSettings):
     # AdaptiveStopper loop backstop. Default off keeps stock OSS behaviour.
     cdv_verification_enabled: bool = False
     cdv_store_dir: str = ".cdv-runs"  # per-run SQLite: {dir}/{session_id}.db
+
+    # Run attestation (KYA, RFC 0003) — when enabled, a RunAttestationObserver
+    # is installed at boot and every completed run is sealed into a signed
+    # orcha.run-attestation/v1 envelope (persisted via the Attestation model).
+    # Requires the optional validator package; degrades to a warning without it.
+    # Default off keeps stock OSS behaviour (NoOpObserver).
+    run_attestation_enabled: bool = False
+
+    # RUN_ATTESTATION_CHARTER_HASH — when set, produced envelopes carry this
+    # charter_hash: the run is on the settling path (AD-9 static fixture
+    # expectation — for the slice demo this is the sha256 of the canonical
+    # demo-charter fixture, docs/spec/fixtures/demo-charter.json). When unset,
+    # envelopes carry charter_hash: null (non-settling path). Presence of this
+    # setting IS the settling-path toggle for the MVP; Epic 3's dual-run
+    # script drives the two legs via it. Note: settings validation runs at
+    # every boot regardless of run_attestation_enabled — a genuinely malformed
+    # value fails loud at startup (by design); empty/blank is treated as unset.
+    run_attestation_charter_hash: str | None = None
+
+    @field_validator("run_attestation_charter_hash")
+    @classmethod
+    def _charter_hash_hex64(cls, value: str | None) -> str | None:
+        # Re-declared locally — never import from the optional validator
+        # package at settings load (graceful-degrade contract). A mirrored copy
+        # of this rule lives in validator/run_envelope.py (_HEX64_RE) — keep
+        # the two in sync.
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            # VAR= (empty/blank) is the standard "unset" idiom — behave as unset.
+            return None
+        if not _HEX64_RE.fullmatch(stripped):
+            raise ValueError(
+                "run_attestation_charter_hash must be None or 64 lowercase hex chars"
+            )
+        return stripped
+
+    # SETTLEMENT_REQUIRE_ATTESTATION (AD-2) — when true, mock settlement
+    # requires a valid run attestation for the run_id: per-call step-6.5
+    # settle defers, and a gate observer settles post-seal only after the
+    # vendored verifier passes (fail-closed on any missing/invalid proof).
+    # Default off keeps stock OSS settle behaviour. PAYMENT_MODE enum is
+    # unchanged by this flag.
+    settlement_require_attestation: bool = False
 
     # Bound a single agent step's text output before it re-enters the
     # orchestrator context. Protects rate-limited tiers (per-minute token

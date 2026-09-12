@@ -128,3 +128,6 @@ kimi-export-*.md
 
 # Landing site lives in solvent-labs-org/orcha-landing; local checkout kept here for convenience.
 deploy/landing-site/
+
+# Story 3.1 dual-run slice output — run artifacts, never committed
+.kya-evidence/
