@@ -182,6 +182,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     if settings.run_attestation_enabled:
         try:
             from validator.run_observer import RunAttestationObserver
+            from validator.signer import require_signing_key_for_receipts
         except ImportError:
             if settings.settlement_require_attestation:
                 # Graceful degrade is fine for attestation alone, but with the
@@ -198,6 +199,9 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
                 "unavailable — run attestation disabled"
             )
         else:
+            # Fail at startup, not first seal: an ephemeral key is lost on
+            # restart and PLATFORM_SIGNER_DID will never match again.
+            require_signing_key_for_receipts()
             attestation_observer = RunAttestationObserver(
                 charter_hash=settings.run_attestation_charter_hash
             )
