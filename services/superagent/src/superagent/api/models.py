@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CreateSessionRequest(BaseModel):
@@ -124,8 +124,23 @@ class MessageRequest(BaseModel):
     acceptance_criteria: dict[str, Any] | None = Field(
         default=None,
         description="Optional machine-checkable acceptance criteria for this turn. "
-        "Hashed into policy_version as +criteria:<64-hex>.",
+        "Hashed into policy_version as +criteria:<64-hex>. Unknown keys are 422.",
     )
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def _known_acceptance_criteria(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        # Local import: models must not pull middleware at module import.
+        from superagent.middleware.criteria import SUPPORTED_CRITERIA
+
+        if value is None:
+            return value
+        for key in value:
+            if key not in SUPPORTED_CRITERIA:
+                raise ValueError(f"unsupported criterion: {key}")
+        return value
 
 
 class ResumeRequest(BaseModel):

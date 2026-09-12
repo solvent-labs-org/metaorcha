@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Keep in sync with superagent.middleware.criteria.SUPPORTED_CRITERIA.
+_SUPPORTED_CRITERIA = frozenset({"citations_required"})
+_MAX_CRITERIA_KEYS = 8
 
 
 class CreateSessionBody(BaseModel):
@@ -31,8 +35,29 @@ class MessageRequest(BaseModel):
     )
     acceptance_criteria: dict[str, Any] | None = Field(
         default=None,
-        description="Optional machine-checkable acceptance criteria for this turn.",
+        description="Optional machine-checkable acceptance criteria for this turn. "
+        "Unknown keys are 422. At most 8 keys; values must be booleans.",
     )
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def _bound_acceptance_criteria(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return value
+        if len(value) > _MAX_CRITERIA_KEYS:
+            raise ValueError(
+                f"acceptance_criteria has at most {_MAX_CRITERIA_KEYS} keys"
+            )
+        for key, item in value.items():
+            if key not in _SUPPORTED_CRITERIA:
+                raise ValueError(f"unsupported criterion: {key}")
+            if type(item) is not bool:
+                raise ValueError(
+                    f"acceptance_criteria[{key!r}] must be a boolean"
+                )
+        return value
 
 
 class ResumeRequest(BaseModel):

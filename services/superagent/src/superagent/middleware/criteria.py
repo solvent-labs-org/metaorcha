@@ -3,6 +3,10 @@
 v1 understands ``citations_required``. The digest of the criteria document
 is composed into ``policy_version`` by the run observer — this module only
 evaluates and hashes.
+
+Criteria are evaluated **per step** against that step's content. A multi-tool
+turn that declares ``citations_required`` therefore fails on the first
+non-citing step. Single-agent turns are unaffected.
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+
+SUPPORTED_CRITERIA = frozenset({"citations_required"})
 
 _CITATION_REQUIRED_FIELDS = ("chunk_id", "source_title", "excerpt")
 
@@ -41,7 +47,15 @@ def criteria_digest(criteria: dict[str, Any]) -> str:
 def evaluate_declared_criteria(
     criteria: dict[str, Any], content: str
 ) -> tuple[bool, str]:
-    """Return (accepted, reason) for the declared document against *content*."""
+    """Return (accepted, reason) for the declared document against *content*.
+
+    Unknown keys fail closed so they cannot be signed as
+    ``declared_acceptance: pass``. Evaluation is per step: a multi-tool turn
+    with ``citations_required`` fails on the first non-citing step.
+    """
+    for key in criteria:
+        if key not in SUPPORTED_CRITERIA:
+            return False, f"unsupported criterion: {key}"
     if criteria.get("citations_required") and not has_valid_citations(content):
         return False, "missing citations"
     return True, "ok"

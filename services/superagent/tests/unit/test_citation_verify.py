@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from superagent.middleware.criteria import evaluate_declared_criteria
 from superagent.middleware.pipeline import _structural_verify
 
@@ -90,3 +91,61 @@ def test_no_declared_criteria_does_not_require_citations():
     ok, reason = evaluate_declared_criteria({}, "plain text answer")
     assert ok is True
     assert reason == "ok"
+
+
+def test_unknown_criterion_exit_zero_fails_closed():
+    ok, reason = evaluate_declared_criteria({"exit_zero": True}, "no tests ran")
+    assert ok is False
+    assert reason == "unsupported criterion: exit_zero"
+
+
+def test_typo_citation_required_fails_closed():
+    ok, reason = evaluate_declared_criteria(
+        {"citation_required": True}, "no citations"
+    )
+    assert ok is False
+    assert reason == "unsupported criterion: citation_required"
+
+
+def test_mixed_known_and_unknown_criterion_fails_closed():
+    ok, reason = evaluate_declared_criteria(
+        {"citations_required": True, "exit_zero": True},
+        _cited_output(),
+    )
+    assert ok is False
+    assert reason == "unsupported criterion: exit_zero"
+
+
+def test_superagent_message_request_rejects_unknown_criterion():
+    from pydantic import ValidationError
+    from superagent.api.models import MessageRequest
+
+    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
+        MessageRequest(
+            user_id="u",
+            message="run the suite",
+            acceptance_criteria={"exit_zero": True},
+        )
+
+
+def test_superagent_message_request_rejects_mixed_unknown_key():
+    from pydantic import ValidationError
+    from superagent.api.models import MessageRequest
+
+    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
+        MessageRequest(
+            user_id="u",
+            message="run the suite",
+            acceptance_criteria={"citations_required": True, "exit_zero": True},
+        )
+
+
+def test_superagent_message_request_accepts_known_criterion():
+    from superagent.api.models import MessageRequest
+
+    body = MessageRequest(
+        user_id="u",
+        message="cite your sources",
+        acceptance_criteria={"citations_required": True},
+    )
+    assert body.acceptance_criteria == {"citations_required": True}
