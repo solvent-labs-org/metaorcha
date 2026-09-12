@@ -29,6 +29,18 @@ from .state import default_state
 logger = logging.getLogger(__name__)
 
 
+def _done_event(session_id: str) -> dict[str, Any]:
+    """Turn-finished SSE payload. Adds a fetch path when a receipt was sealed."""
+    from ..middleware.observers import peek_published_run_id
+
+    event: dict[str, Any] = {"type": "done", "session_id": session_id}
+    run_id = peek_published_run_id(session_id)
+    if run_id:
+        event["run_id"] = run_id
+        event["attestation_path"] = f"/runs/{run_id}/attestation"
+    return event
+
+
 def _artifact_attachments_metadata(
     initial_artifacts: dict[str, Any] | None,
 ) -> list[dict[str, Any]] | None:
@@ -626,7 +638,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield {"type": "done", "session_id": session_id}
+        yield _done_event(session_id)
 
     async def resume_from_interrupt(
         self,
@@ -721,7 +733,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield {"type": "done", "session_id": session_id}
+        yield _done_event(session_id)
 
     async def get_status(
         self, session_id: str, thread_config: dict[str, Any] | None = None

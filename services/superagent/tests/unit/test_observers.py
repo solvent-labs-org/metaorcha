@@ -12,6 +12,7 @@ from superagent.middleware.observers import (
     StepResult,
     emit_step_complete,
     get_observer,
+    peek_published_run_id,
     set_observer,
 )
 
@@ -171,3 +172,24 @@ async def test_composite_observer_run_complete_skips_children_without_hook():
 def test_composite_observer_requires_at_least_one_child():
     with pytest.raises(ValueError):
         CompositeObserver([])
+
+
+def test_peek_published_run_id_none_on_stock_observer():
+    assert peek_published_run_id("sess-1") is None
+    assert peek_published_run_id("") is None
+
+
+def test_peek_published_run_id_walks_composite_without_popping():
+    class _Publisher:
+        def __init__(self) -> None:
+            self.published = {"sess-1": "sess-1-abc"}
+            self.last_sealed = {"sess-1": "sess-1-abc"}
+
+        async def on_step_complete(self, record: StepResult) -> None:
+            return None
+
+    set_observer(CompositeObserver([_Publisher()]))  # type: ignore[list-item]
+
+    assert peek_published_run_id("sess-1") == "sess-1-abc"
+    publisher = get_observer().observers[0]
+    assert publisher.last_sealed["sess-1"] == "sess-1-abc"

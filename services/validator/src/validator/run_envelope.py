@@ -530,6 +530,57 @@ async def persist_run_attestation(
     }
 
 
+def _envelope_payload(row: Any, *, lookup: str) -> dict[str, Any] | None:
+    """Unwrap a stored payload. Corrupt / non-dict collapses to None (AD-5)."""
+    payload = getattr(row.payload, "data", row.payload)
+    if not isinstance(payload, dict):
+        logger.warning(
+            "%s: corrupt payload — treating as missing",
+            lookup,
+        )
+        return None
+    return payload
+
+
+async def get_run_attestation_record(
+    run_id: str, db: Any = None
+) -> dict[str, Any] | None:
+    """Load ``{session_id, run_id, envelope}`` by RFC 0003 ``run_id``.
+
+    Same miss/unavailable/corrupt contract as
+    :func:`get_run_attestation_by_run_id` — never raises, never verifies.
+    The HTTP fetch route uses ``session_id`` for the ownership check; the
+    settle gate still wants the bare envelope.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    try:
+        client, owns_db = await _ensure_db(db)
+        try:
+            row = await client.attestation.find_unique(where={"run_id": run_id})
+        finally:
+            if owns_db:
+                await client.disconnect()
+    except Exception:
+        logger.warning(
+            "get_run_attestation_record: DB unavailable looking up run %s",
+            run_id,
+            exc_info=True,
+        )
+        return None
+    if row is None:
+        logger.info("get_run_attestation_record: no attestation for run %s", run_id)
+        return None
+    envelope = _envelope_payload(row, lookup=f"get_run_attestation_record run {run_id}")
+    if envelope is None:
+        return None
+    return {
+        "session_id": row.session_id,
+        "run_id": row.run_id,
+        "envelope": envelope,
+    }
+
+
 async def get_run_attestation_by_run_id(
     run_id: str, db: Any = None
 ) -> dict[str, Any] | None:
@@ -543,33 +594,54 @@ async def get_run_attestation_by_run_id(
     distinguishable only in the logs. The payload is returned stored-as-is —
     verification is the caller's job (AD-5).
     """
-    if not isinstance(run_id, str) or not run_id:
+    record = await get_run_attestation_record(run_id, db=db)
+    return None if record is None else record["envelope"]
+
+
+async def get_latest_run_attestation_for_session(
+    session_id: str, db: Any = None
+) -> dict[str, Any] | None:
+    """Latest persisted envelope for ``session_id`` (``created_at`` desc).
+
+    Same miss/unavailable/corrupt contract as
+    :func:`get_run_attestation_record` — never raises, never verifies. A
+    session may accumulate more than one sealed turn; the fetch route serves
+    the newest.
+    """
+    if not isinstance(session_id, str) or not session_id:
         return None
     try:
         client, owns_db = await _ensure_db(db)
         try:
-            row = await client.attestation.find_unique(where={"run_id": run_id})
+            rows = await client.attestation.find_many(
+                where={"session_id": session_id},
+                order={"created_at": "desc"},
+            )
         finally:
             if owns_db:
                 await client.disconnect()
     except Exception:
         logger.warning(
-            "get_run_attestation_by_run_id: DB unavailable looking up run %s",
-            run_id,
+            "get_latest_run_attestation_for_session: DB unavailable "
+            "looking up session %s",
+            session_id,
             exc_info=True,
         )
         return None
-    if row is None:
-        logger.info("get_run_attestation_by_run_id: no attestation for run %s", run_id)
-        return None
-    # Real client: the generated model's Json field auto-deserializes to a
-    # dict; fakes may surface the raw ``Json`` wrapper stored at write time.
-    payload = getattr(row.payload, "data", row.payload)
-    if not isinstance(payload, dict):
-        logger.warning(
-            "get_run_attestation_by_run_id: corrupt payload for run %s — treating "
-            "as missing",
-            run_id,
+    if not rows:
+        logger.info(
+            "get_latest_run_attestation_for_session: no attestation for session %s",
+            session_id,
         )
         return None
-    return payload
+    row = rows[0]
+    envelope = _envelope_payload(
+        row, lookup=f"get_latest_run_attestation_for_session {session_id}"
+    )
+    if envelope is None:
+        return None
+    return {
+        "session_id": row.session_id,
+        "run_id": row.run_id,
+        "envelope": envelope,
+    }
