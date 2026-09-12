@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest_asyncio
-from emerge.run_attestation import verify_run_attestation
 from httpx import ASGITransport, AsyncClient
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32-bytes-1234567")
@@ -23,6 +22,7 @@ _REPO = Path(__file__).resolve().parents[4]
 _SDK_SRC = _REPO / "sdk" / "src"
 if str(_SDK_SRC) not in sys.path:
     sys.path.insert(0, str(_SDK_SRC))
+from emerge.run_attestation import verify_run_attestation
 _GOLDEN = _REPO / "docs" / "spec" / "test-vectors" / "run-attestation-golden.json"
 _ENVELOPE_BYTES = (
     b'{"format":"orcha.run-attestation/v1","run_id":"run-bytes","signature":"x"}'
