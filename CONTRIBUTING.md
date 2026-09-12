@@ -21,7 +21,9 @@ Contributions we **eagerly welcome** without prior discussion:
   [`sdk/src/emerge/templates/your-first-agent/`](sdk/src/emerge/templates/your-first-agent/)),
   then read the [quickstart](https://metaorcha.ai/docs).
 - **Observer / attestation experiments** — the `ExecutionObserver` seam and the
-  validator reference code (`services/validator/`). See the [roadmap](https://metaorcha.ai/roadmap).
+  validator reference code (`services/validator/`). A sealed envelope verifies
+  offline with `uvx --from orcha-sdk orcha verify envelope.json`. See the
+  [roadmap](https://metaorcha.ai/roadmap).
 
 > **Core engine changes** (the SuperAgent execution pipeline, the registry
 > contract, the planner) need an issue **first**. Open one describing the
