@@ -1,6 +1,6 @@
 [project]
 name = "orcha-sdk"
-version = "0.1.2"
+version = "0.1.3"
 description = "Metaorcha agent SDK + CLI — register an agent in three lines."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,10 @@ Issues = "https://github.com/solvent-labs-org/metaorcha/issues"
 # `uvx <name>` resolves the *distribution* name, so the primary console script
 # must match it for `uvx orcha-sdk init` to work. `emerge` stays as an alias.
 orcha-sdk = "emerge.cli:main"
+# `orcha` is the short command a developer types day to day (`orcha init`,
+# `orcha verify`). The PyPI name `orcha` belongs to an unrelated project, so
+# `uvx orcha` cannot resolve here; use `uvx --from orcha-sdk orcha ...`.
+orcha = "emerge.cli:main"
 emerge = "emerge.cli:main"
 
 [build-system]

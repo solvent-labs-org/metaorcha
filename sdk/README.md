@@ -41,6 +41,7 @@ pip install orcha-sdk
 | Command | What it does |
 |---|---|
 | `orcha-sdk init "My Agent"` | scaffold a new agent from a template |
+| `orcha …` | the same CLI under its short name once installed (`uvx --from orcha-sdk orcha init …`) |
 | `orcha-sdk run [module]` | serve decorated agents locally + register them against `http://localhost:8000` |
 | `orcha-sdk publish [module] --registry <url>` | register against a remote registry |
 | `orcha-sdk verify <envelope.json>` | verify a signed run attestation envelope offline (RFC 0003) |
@@ -55,9 +56,10 @@ sealed into a signed `orcha.run-attestation/v1` envelope (RFC 0003). Anyone
 holding the envelope JSON can verify it for free, fully offline:
 
 ```bash
-emerge verify envelope.json          # human-readable report
-emerge verify envelope.json --json   # machine-readable verdict
-cat envelope.json | emerge verify -  # read from stdin
+uvx --from orcha-sdk orcha verify envelope.json          # no clone
+uvx --from orcha-sdk orcha verify envelope.json --json
+orcha-sdk verify envelope.json                           # after pip/uv install
+cat envelope.json | orcha-sdk verify -
 ```
 
 Verification recomputes the schema check, the step hash chain (`steps_root`),
