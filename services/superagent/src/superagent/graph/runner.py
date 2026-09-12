@@ -190,6 +190,13 @@ def _merge_messages_for_transcript(
     return list(a)
 
 
+# Sentinel for "the checkpoint read itself failed" — distinct from "no pending
+# interrupt" (None). Callers must NOT treat a read error as a run boundary:
+# the graph may actually be suspended, and sealing it as complete would attest
+# a run that never finished (fail-open checkpoint read).
+_CHECKPOINT_READ_FAILED: Any = object()
+
+
 async def _pending_interrupt_event(
     graph: Any, config: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -199,12 +206,15 @@ async def _pending_interrupt_event(
     and records the payload in ``snapshot.tasks[*].interrupts``; it is not
     raised out of ``astream``. Emitting it here keeps SSE consumers (frontend,
     gate scripts) in sync with the checkpoint-driven ``get_status`` path.
+
+    Returns ``_CHECKPOINT_READ_FAILED`` when the ``aget_state`` call raises, so
+    callers can skip run-boundary dispatch instead of failing open.
     """
     try:
         snapshot = await graph.aget_state(config)
     except Exception:
         logger.exception("pending_interrupt: aget_state failed")
-        return None
+        return _CHECKPOINT_READ_FAILED
     if not snapshot or not getattr(snapshot, "tasks", None):
         return None
     for task in snapshot.tasks:
@@ -560,10 +570,16 @@ class SessionRunner:
                 yield event
         except asyncio.CancelledError:
             logger.info("run_turn: cancelled by kill-switch for session %s", session_id)
+            from ..middleware.observers import emit_run_discarded
+
+            await emit_run_discarded(session_id)
             yield {"type": "stopped", "session_id": session_id}
             return
         except Exception as exc:
             logger.exception("run_turn: graph stream error for session %s", session_id)
+            from ..middleware.observers import emit_run_discarded
+
+            await emit_run_discarded(session_id)
             yield _classify_stream_error(exc)
             return
         finally:
@@ -591,8 +607,24 @@ class SessionRunner:
         pending = await _pending_interrupt_event(
             self._graph, {"configurable": {"thread_id": session_id}}
         )
-        if pending is not None:
+        if pending is _CHECKPOINT_READ_FAILED:
+            # Fail closed: we cannot tell whether the graph suspended, so do
+            # NOT dispatch run-complete — sealing a possibly-suspended run
+            # would attest steps for a run that never finished.
+            logger.warning(
+                "run_turn: checkpoint read failed for session %s; "
+                "skipping run-complete dispatch",
+                session_id,
+            )
+        elif pending is not None:
             yield pending
+        else:
+            # Run boundary: the turn finished without suspending. Dispatch
+            # through the ExecutionObserver seam (run attestation, RFC 0003);
+            # never raises, and is a no-op for the stock NoOpObserver.
+            from ..middleware.observers import emit_run_complete
+
+            await emit_run_complete(session_id)
 
         yield {"type": "done", "session_id": session_id}
 
@@ -638,12 +670,18 @@ class SessionRunner:
                 "resume_from_interrupt: cancelled by kill-switch for session %s",
                 session_id,
             )
+            from ..middleware.observers import emit_run_discarded
+
+            await emit_run_discarded(session_id)
             yield {"type": "stopped", "session_id": session_id}
             return
         except Exception as exc:
             logger.exception(
                 "resume_from_interrupt: graph stream error for session %s", session_id
             )
+            from ..middleware.observers import emit_run_discarded
+
+            await emit_run_discarded(session_id)
             yield _classify_stream_error(exc)
             return
         finally:
@@ -664,6 +702,25 @@ class SessionRunner:
                 )
 
         _cleanup_session_tmp(session_id)
+
+        # Run boundary after an HITL resume: only attest when the graph did not
+        # suspend again on a further interrupt. Dispatch through the
+        # ExecutionObserver seam; never raises, no-op for the stock observer.
+        pending = await _pending_interrupt_event(
+            self._graph, {"configurable": {"thread_id": session_id}}
+        )
+        if pending is _CHECKPOINT_READ_FAILED:
+            # Fail closed: unknown suspend state — do not seal the run.
+            logger.warning(
+                "resume_from_interrupt: checkpoint read failed for session %s; "
+                "skipping run-complete dispatch",
+                session_id,
+            )
+        elif pending is None:
+            from ..middleware.observers import emit_run_complete
+
+            await emit_run_complete(session_id)
+
         yield {"type": "done", "session_id": session_id}
 
     async def get_status(

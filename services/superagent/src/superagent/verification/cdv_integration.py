@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
-from ..middleware.observers import StepResult, set_observer
+from ..middleware.observers import StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,12 @@ def stopper_should_stop(state: dict[str, Any]) -> bool:
         return False
 
 
-def install_cdv_observer() -> None:
-    """Boot-time install (mirrors the audit_ledger_enabled pattern in main.py)."""
-    set_observer(CDVObserver())
-    logger.info("CDV verification enabled — CDVObserver installed")
+def build_cdv_observer() -> CDVObserver:
+    """Build the CDVObserver for boot-time composition.
+
+    Does NOT call ``set_observer`` — main.py collects every enabled observer
+    and installs them (single or via CompositeObserver) so several
+    observer-backed features never silently overwrite each other.
+    """
+    logger.info("CDV verification enabled — CDVObserver created")
+    return CDVObserver()

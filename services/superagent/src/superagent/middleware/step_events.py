@@ -19,7 +19,13 @@ def step_result_payload(record: StepResult) -> dict:
 
     if not isinstance(record, StepResult):
         raise TypeError("expected StepResult")
-    return asdict(record)
+    payload = asdict(record)
+    # `args` carries raw post-InputGuard call arguments (user queries,
+    # potential PII). It stays on StepResult for in-process observers (the
+    # run-attestation observer needs it for the RFC 0003 args_hash) but must
+    # never leave the process over Kafka.
+    payload.pop("args", None)
+    return payload
 
 
 async def fan_out_step_complete(record: StepResult) -> None:
