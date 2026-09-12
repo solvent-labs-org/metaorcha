@@ -27,7 +27,7 @@ function VerifiedBadge({ verified, reason }: { verified?: boolean; reason?: stri
         className="shrink-0 rounded-sm border border-semantic-success/40 bg-semantic-successDim px-2 py-0.5 text-caption font-semibold text-semantic-success"
         title={reason || 'Structural check passed'}
       >
-        ✓ Verified
+        Structurally checked
       </span>
     )
   }
@@ -36,7 +36,7 @@ function VerifiedBadge({ verified, reason }: { verified?: boolean; reason?: stri
       className="shrink-0 rounded-sm border border-semantic-error/40 bg-semantic-errorDim px-2 py-0.5 text-caption font-semibold text-semantic-error"
       title={reason || 'Structural check failed'}
     >
-      ✗ Unverified
+      Structurally failed
     </span>
   )
 }
