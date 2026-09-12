@@ -41,6 +41,30 @@ _chat_llm: ChatOpenAI | None = None
 _INVALID_FUNC_CHAR_RE = _re.compile(r"[^a-zA-Z0-9_-]")
 
 
+def tokens_from_usage(
+    usage: dict[str, Any] | None, response_text: str
+) -> tuple[int, int]:
+    """Return ``(input_tokens, output_tokens)`` from LangChain usage_metadata.
+
+    Output still falls back to ``len(text) // 4`` when the provider omits it.
+    Input is recorded only — it does not enter the billing formula.
+    """
+    output = 0
+    inp = 0
+    if usage:
+        if usage.get("output_tokens"):
+            output = int(usage["output_tokens"])
+        if usage.get("input_tokens"):
+            inp = int(usage["input_tokens"])
+    if not output:
+        output = max(1, len(response_text) // 4)
+        logger.debug(
+            "orchestrator: no usage metadata from OpenRouter — estimated completion_tokens=%d",
+            output,
+        )
+    return inp, output
+
+
 def _make_chat_llm(
     *,
     stream_usage: bool = False,
@@ -515,6 +539,7 @@ async def orchestrator_llm_node(
             ],
             "estimated_token_count": state.get("estimated_token_count", 0),
             "_last_turn_tokens": 0,
+            "_last_turn_input_tokens": 0,
             "_pending_events": [],
             "pnd_candidates": state.get("pnd_candidates") or [],
         }
@@ -647,6 +672,7 @@ async def orchestrator_llm_node(
                         "pnd_candidates": pnd_candidates,
                         "estimated_token_count": 0,
                         "_last_turn_tokens": 0,
+                        "_last_turn_input_tokens": 0,
                         "_pending_events": [],
                     }
 
@@ -714,24 +740,16 @@ async def orchestrator_llm_node(
         tool_calls = _tool_calls_from_stream_chunk(accumulated)
         ai_message = AIMessage(content=text, tool_calls=tool_calls)
 
-    # Extract real completion_tokens from OpenRouter usage metadata.
-    # LangChain surfaces this as usage_metadata.output_tokens when stream_usage=True.
-    # Falls back to a rough estimate only if the API didn't return usage.
+    # Extract tokens from OpenRouter usage metadata.
+    # LangChain surfaces input_tokens and output_tokens when stream_usage=True.
+    # Billing still uses output only; input is recorded beside it.
     usage = (
         getattr(accumulated, "usage_metadata", None)
         if accumulated is not None
         else None
     )
-    if usage and usage.get("output_tokens"):
-        completion_tokens: int = int(usage["output_tokens"])
-    else:
-        # Fallback: estimate from response content length (4 chars ≈ 1 token)
-        response_text = _lc_content_to_str(getattr(ai_message, "content", ""))
-        completion_tokens = max(1, len(response_text) // 4)
-        logger.debug(
-            "orchestrator: no usage metadata from OpenRouter — estimated completion_tokens=%d",
-            completion_tokens,
-        )
+    response_text = _lc_content_to_str(getattr(ai_message, "content", ""))
+    input_tokens, completion_tokens = tokens_from_usage(usage, response_text)
 
     estimated_tokens = _estimate_tokens_lc(lc_messages)
 
@@ -741,6 +759,7 @@ async def orchestrator_llm_node(
         # Actual output tokens for this turn — used by pipeline.py PaymentSettlement
         # to compute PLATFORM_TOKEN_RATE × completion_tokens cost.
         "_last_turn_tokens": completion_tokens,
+        "_last_turn_input_tokens": input_tokens,
         "_pending_events": [],
     }
     updates["pnd_candidates"] = pnd_candidates

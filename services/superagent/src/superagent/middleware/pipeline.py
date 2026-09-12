@@ -220,7 +220,13 @@ class ExecutionMiddleware:
                 latency_ms=_latency_ms,
                 base_fee=str(base_fee),
                 verdict={"verified": verified, "reason": verdict_reason},
-                metadata={"goal": self._session_goal()},
+                metadata={
+                    "goal": self._session_goal(),
+                    "input_tokens": int(
+                        self._state.get("_last_turn_input_tokens") or 0
+                    ),
+                    "output_tokens": int(self._state.get("_last_turn_tokens") or 0),
+                },
                 args=dict(args),
             )
         )
@@ -241,6 +247,7 @@ class ExecutionMiddleware:
                     latency_ms=elapsed_ms,
                     execution_success=success,
                     platform_tokens=self._state.get("_last_turn_tokens", 0),
+                    input_tokens=int(self._state.get("_last_turn_input_tokens") or 0),
                 )
             )
 
