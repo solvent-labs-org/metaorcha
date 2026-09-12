@@ -29,6 +29,10 @@ class MessageRequest(BaseModel):
         max_length=2000,
         description="Per-session operator instructions appended to the orchestrator system prompt.",
     )
+    acceptance_criteria: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional machine-checkable acceptance criteria for this turn.",
+    )
 
 
 class ResumeRequest(BaseModel):

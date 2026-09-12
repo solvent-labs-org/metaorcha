@@ -121,6 +121,11 @@ class MessageRequest(BaseModel):
         description="Per-session operator instructions appended as a delimited section "
         "to the orchestrator system prompt.",
     )
+    acceptance_criteria: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional machine-checkable acceptance criteria for this turn. "
+        "Hashed into policy_version as +criteria:<64-hex>.",
+    )
 
 
 class ResumeRequest(BaseModel):

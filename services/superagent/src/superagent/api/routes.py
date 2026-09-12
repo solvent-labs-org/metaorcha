@@ -267,6 +267,7 @@ async def send_message(
                 email_campaign_context=body.email_campaign_context or None,
                 model=body.model,
                 custom_instructions=body.custom_instructions,
+                acceptance_criteria=body.acceptance_criteria,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:
