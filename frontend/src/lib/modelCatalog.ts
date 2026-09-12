@@ -19,7 +19,7 @@ export const CATALOG_MODELS: CatalogModel[] = [
     tier: 'low',
   },
   {
-    id: 'google/gemini-1.5-flash',
+    id: 'google/gemini-2.5-flash',
     label: 'Gemini Flash',
     tier: 'low',
   },
@@ -34,7 +34,7 @@ export const CATALOG_MODELS: CatalogModel[] = [
     tier: 'high',
   },
   {
-    id: 'anthropic/claude-3.5-sonnet',
+    id: 'anthropic/claude-sonnet-4.6',
     label: 'Claude Sonnet',
     tier: 'high',
   },

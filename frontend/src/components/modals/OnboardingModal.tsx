@@ -144,9 +144,12 @@ function OnboardingForm() {
                 autoComplete="off"
                 className="w-full h-10 px-3 rounded-md bg-surface-base border border-surface-borderLight text-label text-text-body placeholder:text-text-disabled focus:outline-none focus:border-brand-primary"
               />
+              <p className="text-[12px] font-medium text-text-secondary">
+                OpenRouter model ids
+              </p>
               <div
                 role="radiogroup"
-                aria-label="Model"
+                aria-label="OpenRouter model ids"
                 className="flex flex-col gap-1.5"
               >
                 {CATALOG_MODELS.map((opt) => (
