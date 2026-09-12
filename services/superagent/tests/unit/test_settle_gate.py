@@ -1,9 +1,9 @@
 """Attestation-gated settle (Story 2.1, AD-1/AD-5/AD-6/AD-9).
 
 Tests use the REAL vendored verifier (`emerge.run_attestation`) against real
-built+signed envelopes — verify semantics are load-bearing (AD-5), so the
-verifier is never mocked. Only the DB lookup/write and the Prisma client are
-faked.
+built+signed envelopes — verify semantics are load-bearing (AD-5). The
+verifier is mocked only when a test must reach gate policy after integrity
+is assumed. Only the DB lookup/write and the Prisma client are faked.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ def make_envelope():
         signer_did: str = "did:orcha:system:validator",
         agent_dids: list[str] | None = None,
         break_signature: bool = False,
+        verdicts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         unsigned = build_run_envelope(
             run_id=run_id,
@@ -54,7 +55,7 @@ def make_envelope():
                     "latency_ms": 10,
                 }
             ],
-            verdicts=[],
+            verdicts=list(verdicts) if verdicts is not None else [],
             started_at="2026-08-06T01:00:00Z",
             finished_at="2026-08-06T01:00:01Z",
             signer_did=signer_did,
@@ -188,6 +189,146 @@ async def test_valid_envelope_settles(make_envelope, gate_db, mock_lookup) -> No
     assert row.charter_hash == CHARTER
     assert _failed_checks(row) == []
     assert len(row.envelope_digest) == 64
+
+
+async def test_fail_verdict_refuses_and_sdk_still_valid(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from emerge.run_attestation import verify_run_attestation
+    from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL, gate_attested_settle
+
+    envelope = make_envelope(
+        "run-fail",
+        verdicts=[{"check": "exit_zero", "result": "fail", "detail": "tests"}],
+    )
+    mock_lookup["envelope"] = envelope
+
+    sdk = verify_run_attestation(envelope)
+    assert sdk.valid is True
+    assert CHECK_VERDICT_FAIL not in sdk.checks
+
+    result = await gate_attested_settle(
+        run_id="run-fail",
+        session_id="sess-1",
+        expected_charter_hash=CHARTER,
+        db=gate_db,
+    )
+
+    assert result["outcome"] == "refused"
+    assert result["failed_checks"] == [CHECK_VERDICT_FAIL]
+    _assert_refusal_audited(gate_db, "run-fail", [CHECK_VERDICT_FAIL])
+
+    again = await gate_attested_settle(
+        run_id="run-fail",
+        session_id="sess-1",
+        expected_charter_hash=CHARTER,
+        db=gate_db,
+    )
+    assert again["outcome"] == "refused"
+    assert again["failed_checks"] == [CHECK_VERDICT_FAIL]
+    assert all(r.outcome != "settled" for r in gate_db.attestedsettlement.rows)
+
+
+async def test_two_fail_verdicts_name_one_check(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL, gate_attested_settle
+
+    mock_lookup["envelope"] = make_envelope(
+        "run-two-fail",
+        verdicts=[
+            {"check": "exit_zero", "result": "fail"},
+            {"check": "lint", "result": "fail"},
+        ],
+    )
+
+    result = await gate_attested_settle(
+        run_id="run-two-fail", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    assert result["outcome"] == "refused"
+    assert result["failed_checks"] == [CHECK_VERDICT_FAIL]
+
+
+async def test_warn_verdict_does_not_refuse(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from superagent.pricing.settle_gate import gate_attested_settle
+
+    mock_lookup["envelope"] = make_envelope(
+        "run-warn",
+        verdicts=[{"check": "lint", "result": "warn"}],
+    )
+
+    result = await gate_attested_settle(
+        run_id="run-warn", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    assert result["outcome"] == "settled"
+    assert result["failed_checks"] == []
+    assert gate_db.attestedsettlement.rows[0].outcome == "settled"
+
+
+async def test_pass_verdict_still_settles(make_envelope, gate_db, mock_lookup) -> None:
+    from superagent.pricing.settle_gate import gate_attested_settle
+
+    mock_lookup["envelope"] = make_envelope(
+        "run-pass",
+        verdicts=[{"check": "exit_zero", "result": "pass"}],
+    )
+
+    result = await gate_attested_settle(
+        run_id="run-pass", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    assert result["outcome"] == "settled"
+    assert result["failed_checks"] == []
+
+
+async def test_malformed_verdicts_refuse_verify_error(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from superagent.pricing.settle_gate import gate_attested_settle
+
+    envelope = make_envelope("run-bad-v")
+    envelope["verdicts"] = "not-a-list"
+    mock_lookup["envelope"] = envelope
+
+    result = await gate_attested_settle(
+        run_id="run-bad-v", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    # Tampering verdicts after sign fails integrity first — still refuse,
+    # no credit. The explicit unreadable path is covered when verify is
+    # bypassed below via a structurally valid envelope whose field is wrong.
+    assert result["outcome"] == "refused"
+    assert result["failed_checks"]
+    _assert_refusal_audited(gate_db, "run-bad-v", result["failed_checks"])
+
+
+async def test_unreadable_verdicts_after_verify_is_verify_error(
+    make_envelope, gate_db, mock_lookup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import emerge.run_attestation
+    from superagent.pricing.settle_gate import gate_attested_settle
+
+    envelope = make_envelope("run-unread")
+    envelope["verdicts"] = {"oops": True}
+    mock_lookup["envelope"] = envelope
+
+    monkeypatch.setattr(
+        emerge.run_attestation,
+        "verify_run_attestation",
+        lambda _env: type("V", (), {"valid": True, "checks": {}})(),
+    )
+
+    result = await gate_attested_settle(
+        run_id="run-unread", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    assert result["outcome"] == "refused"
+    assert result["failed_checks"] == ["verify_error"]
+    _assert_refusal_audited(gate_db, "run-unread", ["verify_error"])
 
 
 async def test_missing_attestation_refuses(gate_db, mock_lookup) -> None:
@@ -911,6 +1052,8 @@ def test_credit_write_error_is_in_the_vocabulary_and_outside_verifier_order() ->
     assert settle_gate.CHECK_CREDIT_WRITE not in settle_gate._VERIFIER_CHECK_ORDER
     assert settle_gate.CHECK_AGENT_DID == "agent_did"
     assert settle_gate.CHECK_AGENT_DID not in settle_gate._VERIFIER_CHECK_ORDER
+    assert settle_gate.CHECK_VERDICT_FAIL == "verdict_fail"
+    assert settle_gate.CHECK_VERDICT_FAIL not in settle_gate._VERIFIER_CHECK_ORDER
 
 
 # ── Story 2.4: the revenue split is validated at boot ───────────────────────

@@ -52,6 +52,8 @@ Close the gap between "the run was sealed" and "a person holds the bytes."
 
 - HTTP fetch of a sealed envelope by run (the route serves bytes; it does
   not verify)
+- A signed `fail` verdict refuses settlement (gate policy, not an
+  `orcha-sdk verify` check — a refusal envelope is still `valid=True`)
 - A download from the finished chat turn, then
   `uvx --from orcha-sdk orcha verify`
 - A first vertical whose success criterion is machine-checkable — recommended:

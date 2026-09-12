@@ -8,8 +8,10 @@ reimplemented here), enforce the MVP charter policy, and record every
 outcome in ``attested_settlements``.
 
 Fail-closed throughout (AD-6): missing attestation, failed checks, run_id
-mismatch, charter null/wrong, or a verify exception all refuse — and every
-refuse is still audited.
+mismatch, charter null/wrong, a verify exception, or a signed
+``verdicts[]`` ``fail`` all refuse — and every refuse is still audited.
+A ``fail`` verdict is gate policy (``CHECK_VERDICT_FAIL``), not an SDK
+check: ``orcha-sdk verify`` still returns valid on that envelope.
 
 Idempotent per run (Story 2.3, AR-11): at most one ``outcome=settled`` row
 can exist for a ``run_id``, enforced by a unique index on the
@@ -58,6 +60,12 @@ CHECK_ALREADY_SETTLED = "already_settled"
 # outside ``_VERIFIER_CHECK_ORDER``. The claim was rolled back with the
 # credit, so the run is not settled and may be settled again.
 CHECK_CREDIT_WRITE = "credit_write_error"
+# A signed ``verdicts[]`` entry with ``result: fail``. Gate policy, not a
+# verifier check: ``orcha-sdk verify`` still returns valid=True (the
+# envelope is honest about the failure). The gate is what refuses to pay.
+# Stays outside ``_VERIFIER_CHECK_ORDER`` so ``_failed_checks_in_order``
+# never pretends the SDK ran this check. ``warn`` does not refuse.
+CHECK_VERDICT_FAIL = "verdict_fail"
 
 # Revenue-split shares, in basis points of the base fee. Read by
 # ``settlement.read_share_bps`` on every settle and validated once at boot.
@@ -108,6 +116,39 @@ def _failed_checks_in_order(checks: dict[str, Any]) -> list[str]:
         if name in checks and not checks[name]:
             return [name]
     return [name for name, ok in checks.items() if not ok]
+
+
+_VERDICT_RESULTS = frozenset({"pass", "fail", "warn"})
+
+
+def _verdicts_policy_refuse(envelope: dict[str, Any]) -> list[str] | None:
+    """Gate-policy read of signed ``verdicts[]``.
+
+    Returns ``[CHECK_VERDICT_FAIL]`` if any entry is ``fail``, ``[]`` if
+    every entry is ``pass``/``warn`` or the list is empty, and ``None``
+    when the field is unreadable (caller maps that to ``CHECK_VERIFY_ERROR``).
+    Observers compute these entries; they must never refuse. This is the
+    generalisation of ``sign_case_attestation``'s fail-closed guard.
+    """
+    try:
+        verdicts = envelope.get("verdicts", [])
+        if verdicts is None:
+            verdicts = []
+        if not isinstance(verdicts, list):
+            return None
+        saw_fail = False
+        for entry in verdicts:
+            if not isinstance(entry, dict):
+                return None
+            result = entry.get("result")
+            if result not in _VERDICT_RESULTS:
+                return None
+            if result == "fail":
+                saw_fail = True
+        return [CHECK_VERDICT_FAIL] if saw_fail else []
+    except Exception:
+        logger.exception("gate_attested_settle: verdicts policy read failed")
+        return None
 
 
 def validate_gate_config(settings: Any) -> None:
@@ -358,6 +399,16 @@ async def gate_attested_settle(
     if not verdict.valid:
         failed = _failed_checks_in_order(verdict.checks)
         return await _refuse(failed or [CHECK_VERIFY_ERROR], digest, charter)
+
+    # Acceptance (gate policy): a signed fail verdict refuses settlement.
+    # Integrity already passed — ``orcha-sdk verify`` is valid=True on this
+    # envelope. The refusal is this check plus the audit row, never the
+    # verifier exit code.
+    verdict_refuse = _verdicts_policy_refuse(envelope)
+    if verdict_refuse is None:
+        return await _refuse([CHECK_VERIFY_ERROR], digest=digest, charter=charter)
+    if verdict_refuse:
+        return await _refuse(verdict_refuse, digest=digest, charter=charter)
 
     # Signer trust anchor is gate policy (review finding, 2.1): the SDK check
     # verifies the signature against the envelope's own embedded key, so any

@@ -70,6 +70,11 @@ Exit codes: `0` envelope is valid · `1` envelope is invalid (schema, chain, or
 signature check failed) · `2` usage/input error (unreadable file, malformed
 JSON, unsupported option).
 
+`valid=True` means the signature and commitments are sound. It does **not**
+mean the run was accepted. A signed `verdicts[]` entry with `result: fail`
+still verifies: the envelope is honest about the failure. Settlement refusal
+is gate policy (`verdict_fail` on the settle audit row), never this exit code.
+
 ## How it works
 
 The decorator records your handler and declared skills. `orcha-sdk run` serves an
