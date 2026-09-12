@@ -400,16 +400,6 @@ async def gate_attested_settle(
         failed = _failed_checks_in_order(verdict.checks)
         return await _refuse(failed or [CHECK_VERIFY_ERROR], digest, charter)
 
-    # Acceptance (gate policy): a signed fail verdict refuses settlement.
-    # Integrity already passed — ``orcha-sdk verify`` is valid=True on this
-    # envelope. The refusal is this check plus the audit row, never the
-    # verifier exit code.
-    verdict_refuse = _verdicts_policy_refuse(envelope)
-    if verdict_refuse is None:
-        return await _refuse([CHECK_VERIFY_ERROR], digest=digest, charter=charter)
-    if verdict_refuse:
-        return await _refuse(verdict_refuse, digest=digest, charter=charter)
-
     # Signer trust anchor is gate policy (review finding, 2.1): the SDK check
     # verifies the signature against the envelope's own embedded key, so any
     # self-signed envelope passes it. The gate additionally requires the
@@ -430,6 +420,18 @@ async def gate_attested_settle(
     # requires a configured expected hash matching the envelope's.
     if expected_charter_hash is None or charter != expected_charter_hash:
         return await _refuse([CHECK_CHARTER], digest=digest, charter=charter)
+
+    # Acceptance (gate policy): a signed fail verdict refuses settlement.
+    # Runs AFTER trust anchors so an untrusted signer is named signer_did,
+    # not verdict_fail — we do not treat that party's self-assertion as
+    # decision-relevant. Integrity already passed — ``orcha-sdk verify`` is
+    # valid=True on this envelope. The refusal is this check plus the audit
+    # row, never the verifier exit code.
+    verdict_refuse = _verdicts_policy_refuse(envelope)
+    if verdict_refuse is None:
+        return await _refuse([CHECK_VERIFY_ERROR], digest=digest, charter=charter)
+    if verdict_refuse:
+        return await _refuse(verdict_refuse, digest=digest, charter=charter)
 
     # Idempotency, layer 1 of 2 (Story 2.3, AR-11) — the courtesy fast path.
     #

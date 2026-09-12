@@ -689,6 +689,29 @@ async def test_wrong_signer_did_refuses(make_envelope, gate_db, mock_lookup) -> 
     _assert_refusal_audited(gate_db, "run-rogue", ["signer_did"])
 
 
+async def test_untrusted_signer_plus_fail_verdict_names_signer_did(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    """Trust anchors first: bad signer + fail verdict audits as signer_did."""
+    from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL, gate_attested_settle
+
+    envelope = make_envelope(
+        "run-rogue-fail",
+        signer_did="did:orcha:system:rogue",
+        verdicts=[{"check": "exit_zero", "result": "fail"}],
+    )
+    mock_lookup["envelope"] = envelope
+
+    result = await gate_attested_settle(
+        run_id="run-rogue-fail", expected_charter_hash=CHARTER, db=gate_db
+    )
+
+    assert result["outcome"] == "refused"
+    assert result["failed_checks"] == ["signer_did"]
+    assert CHECK_VERDICT_FAIL not in result["failed_checks"]
+    _assert_refusal_audited(gate_db, "run-rogue-fail", ["signer_did"])
+
+
 async def test_settled_audit_write_failure_refuses(make_envelope, mock_lookup) -> None:
     """No settled outcome without an audit row: write failure → refused."""
     from superagent.pricing.settle_gate import gate_attested_settle
