@@ -1,12 +1,13 @@
 """Orcha agent CLI — the launch-scope developer surface.
 
-Installed as ``orcha-sdk`` (and ``emerge``, kept as an alias). Four commands
+Installed as ``orcha-sdk`` (and ``emerge``, kept as an alias). Five commands
 only (resist scope creep — test/deploy/login are post-launch):
 
 - ``orcha-sdk init [name]``   scaffold a new agent from the bundled template
 - ``orcha-sdk run [module]``  serve decorated agents locally + register them
 - ``orcha-sdk publish [module]``  register decorated agents against a remote registry
 - ``orcha-sdk validate``  validator demo (``--once`` synthetic attestation)
+- ``orcha-sdk verify <envelope.json>``  offline run attestation verifier (RFC 0003)
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 from . import __version__
 from .client import DEFAULT_REGISTRY_URL, RegistryError, register
 from .manifest import manifest_yaml
+from .run_attestation import AttestationVerdict, verify_run_attestation
 from .sdk import AgentSpec, clear_registry, registered_agents
 from .server import serve_agent
 
@@ -231,6 +233,75 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Verify an RFC 0003 run attestation envelope, fully offline."""
+    if args.resolve_did:
+        print(
+            "emerge verify: --resolve-did is not yet supported — the SDK has no "
+            "DID resolution infrastructure.\n"
+            "  Re-run without --resolve-did: default verification is fully "
+            "offline against the envelope's embedded signer.public_key_b64.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        if args.envelope == "-":
+            raw = sys.stdin.read()
+        else:
+            raw = Path(args.envelope).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"emerge verify: cannot read {args.envelope}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"emerge verify: malformed JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(envelope, dict):
+        print(
+            "emerge verify: envelope must be a JSON object "
+            f"(got {type(envelope).__name__})",
+            file=sys.stderr,
+        )
+        return 2
+
+    verdict = verify_run_attestation(envelope)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "valid": verdict.valid,
+                    "verdict": verdict.verdict,
+                    "run_id": verdict.run_id,
+                    "signer_did": verdict.signer_did,
+                    "step_count": verdict.step_count,
+                    "checks": verdict.checks,
+                }
+            )
+        )
+    else:
+        _print_verdict(verdict)
+    return 0 if verdict.valid else 1
+
+
+def _print_verdict(verdict: AttestationVerdict) -> None:
+    def _mark(passed: bool) -> str:
+        return "ok" if passed else "FAILED"
+
+    print("Run attestation verification (orcha.run-attestation/v1, offline)")
+    print(f"  run_id:    {verdict.run_id or 'n/a'}")
+    print(f"  signer:    {verdict.signer_did or 'n/a'}")
+    print(
+        f"  steps:     {verdict.step_count if verdict.step_count is not None else 'n/a'}"
+    )
+    print(f"  schema:      {_mark(verdict.checks['schema'])}")
+    print(f"  steps_root:  {_mark(verdict.checks['steps_root'])}")
+    print(f"  merkle_root: {_mark(verdict.checks['steps_merkle_root'])}")
+    print(f"  signature:   {_mark(verdict.checks['signature'])}")
+    print(f"Verdict: {verdict.verdict.upper()}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Orcha agent developer CLI")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -297,6 +368,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit one synthetic attestation and exit (local demo)",
     )
     pv.set_defaults(func=cmd_validate)
+
+    pver = sub.add_parser(
+        "verify",
+        help="verify a signed run attestation envelope offline (RFC 0003)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Verification is fully offline: schema check, step hash-chain\n"
+            "recomputation, steps_root comparison, and Ed25519 signature\n"
+            "verification against the envelope's embedded signer key.\n"
+            "No network calls are made.\n"
+            "\n"
+            "exit codes:\n"
+            "  0  envelope is valid\n"
+            "  1  envelope is invalid (schema, chain, or signature check failed)\n"
+            "  2  usage/input error (unreadable file, malformed JSON, unsupported option)"
+        ),
+    )
+    pver.add_argument(
+        "envelope",
+        help="path to the envelope JSON file, or '-' to read from stdin",
+    )
+    pver.add_argument(
+        "--json",
+        action="store_true",
+        help="emit a machine-readable JSON result instead of human-readable output",
+    )
+    pver.add_argument(
+        "--resolve-did",
+        action="store_true",
+        help="resolve the signer DID document to cross-check the embedded key "
+        "(not yet supported — fails with a clear message)",
+    )
+    pver.set_defaults(func=cmd_verify)
 
     return p
 

@@ -43,9 +43,30 @@ pip install orcha-sdk
 | `orcha-sdk init "My Agent"` | scaffold a new agent from a template |
 | `orcha-sdk run [module]` | serve decorated agents locally + register them against `http://localhost:8000` |
 | `orcha-sdk publish [module] --registry <url>` | register against a remote registry |
+| `orcha-sdk verify <envelope.json>` | verify a signed run attestation envelope offline (RFC 0003) |
 
 `orcha-sdk run --no-register` serves without registering. Set `ORCHA_REGISTRY_URL`
 and `ORCHA_PAT` to point at and authenticate against a non-local registry.
+
+## Verifying run attestations
+
+When the runtime runs with `RUN_ATTESTATION_ENABLED`, every completed run is
+sealed into a signed `orcha.run-attestation/v1` envelope (RFC 0003). Anyone
+holding the envelope JSON can verify it for free, fully offline:
+
+```bash
+emerge verify envelope.json          # human-readable report
+emerge verify envelope.json --json   # machine-readable verdict
+cat envelope.json | emerge verify -  # read from stdin
+```
+
+Verification recomputes the schema check, the step hash chain (`steps_root`),
+and the Ed25519 signature against the envelope's embedded
+`signer.public_key_b64` — no network calls, no registry, no DID resolution.
+
+Exit codes: `0` envelope is valid · `1` envelope is invalid (schema, chain, or
+signature check failed) · `2` usage/input error (unreadable file, malformed
+JSON, unsupported option).
 
 ## How it works
 

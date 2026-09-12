@@ -8,6 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "Metaorcha" }]
 keywords = ["ai-agents", "mcp", "a2a", "orchestration", "orcha", "emerge"]
 dependencies = [
+    "cryptography>=42",
     "pyyaml>=6.0",
 ]
 classifiers = [
