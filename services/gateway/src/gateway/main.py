@@ -178,6 +178,7 @@ from .auth.routes import router as auth_router  # noqa: E402
 from .credentials.routes import router as credentials_router  # noqa: E402
 from .files.routes import router as files_router  # noqa: E402
 from .health import router as health_router  # noqa: E402
+from .runs.routes import router as runs_router  # noqa: E402
 from .sessions.routes import router as sessions_router  # noqa: E402
 from .settings_router.routes import router as settings_router  # noqa: E402
 from .wallet.routes import router as wallet_router  # noqa: E402
@@ -186,6 +187,7 @@ from .workflows.routes import router as workflows_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sessions_router)
+app.include_router(runs_router)
 app.include_router(files_router)
 app.include_router(credentials_router)
 app.include_router(workflows_router)
