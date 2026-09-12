@@ -125,6 +125,11 @@ class RunAttestationObserver:
         # envelopes; entries are popped by the reader, so the bound only
         # matters when no gate observer is registered.
         self.last_sealed: dict[str, str] = {}
+        # session_id → last sealed run_id that is safe to publish on the
+        # stream / fetch route. Unlike last_sealed this is NOT popped by the
+        # settlement gate — popping that binding is the gate's one-shot
+        # handoff and must not hide the receipt from the person in the turn.
+        self.published: dict[str, str] = {}
 
     async def on_step_complete(self, record: Any) -> None:
         """Observer contract — accumulate one completed step for its run."""
@@ -211,6 +216,7 @@ class RunAttestationObserver:
     def _record_sealed(self, session_id: str, run_id: str) -> None:
         """Record the session's just-sealed run_id, evicting past the bound."""
         self.last_sealed[session_id] = run_id
+        self.published[session_id] = run_id
         while len(self.last_sealed) > self._max_envelopes:
             evicted_session = next(iter(self.last_sealed))
             del self.last_sealed[evicted_session]
@@ -220,6 +226,9 @@ class RunAttestationObserver:
                 self._max_envelopes,
                 evicted_session,
             )
+        while len(self.published) > self._max_envelopes:
+            evicted_session = next(iter(self.published))
+            del self.published[evicted_session]
 
     async def on_run_complete(self, session_id: str) -> None:
         """Seal the run: build + sign + persist the attestation envelope.

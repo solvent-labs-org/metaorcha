@@ -161,6 +161,27 @@ def get_observer() -> ExecutionObserver:
     return _observer
 
 
+def peek_published_run_id(session_id: str) -> str | None:
+    """RFC 0003 ``run_id`` sealed for this session, if the producer published one.
+
+    Walks a ``CompositeObserver`` without popping ``last_sealed`` — that
+    binding is the settlement gate's one-shot handoff. Stock OSS (no
+    attestation observer) returns ``None``.
+    """
+    if not session_id:
+        return None
+    observer = _observer
+    children = getattr(observer, "observers", None)
+    candidates = children if children else (observer,)
+    for child in candidates:
+        published = getattr(child, "published", None)
+        if isinstance(published, dict):
+            run_id = published.get(session_id)
+            if isinstance(run_id, str) and run_id:
+                return run_id
+    return None
+
+
 async def emit_step_complete(record: StepResult) -> None:
     """Dispatch a completed step to the installed observer, swallowing errors.
 

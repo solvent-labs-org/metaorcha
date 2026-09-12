@@ -24,7 +24,9 @@ from validator.run_envelope import (
     compute_envelope_digest,
     compute_steps_merkle_root,
     compute_steps_root,
+    get_latest_run_attestation_for_session,
     get_run_attestation_by_run_id,
+    get_run_attestation_record,
     persist_run_attestation,
     sign_run_envelope,
     verify_run_envelope,
@@ -527,6 +529,7 @@ async def test_observer_run_without_steps_emits_nothing() -> None:
     await observer.on_run_complete("sess-empty")
     assert observer.envelopes == {}
     assert observer.last_sealed == {}
+    assert observer.published == {}
 
 
 @pytest.mark.asyncio
@@ -538,6 +541,7 @@ async def test_observer_records_last_sealed_binding() -> None:
 
     assert list(observer.last_sealed) == ["sess-1"]
     sealed_run_id = observer.last_sealed["sess-1"]
+    assert observer.published["sess-1"] == sealed_run_id
     assert sealed_run_id in observer.envelopes
     assert observer.envelopes[sealed_run_id]["run_id"] == sealed_run_id
 
@@ -545,6 +549,9 @@ async def test_observer_records_last_sealed_binding() -> None:
     await observer.on_step_complete(_step_result("c2"))
     await observer.on_run_complete("sess-1")
     assert observer.last_sealed["sess-1"] != sealed_run_id
+    assert observer.published["sess-1"] == observer.last_sealed["sess-1"]
+    observer.last_sealed.pop("sess-1")
+    assert observer.published["sess-1"] != sealed_run_id
 
 
 @pytest.mark.asyncio
@@ -776,6 +783,7 @@ async def test_get_run_attestation_by_run_id_corrupt_payload_returns_none() -> N
         id="att-9", run_id="sess-corrupt", payload="not-a-dict"
     )
     assert await get_run_attestation_by_run_id("sess-corrupt", db=db) is None
+    assert await get_run_attestation_record("sess-corrupt", db=db) is None
 
 
 @pytest.mark.asyncio
@@ -827,3 +835,44 @@ def test_schema_accepts_any_did_method_but_the_producer_enforces_the_profile() -
         build_run_envelope(**{**base, "agent_dids": ["did:web:example.com"]})
     with pytest.raises(ValueError, match="signer_did"):
         build_run_envelope(**{**base, "signer_did": "did:key:z6Mk"})
+
+
+@pytest.mark.asyncio
+async def test_get_run_attestation_record_includes_session_id() -> None:
+    db = FakeDB()
+    envelope = _signed_envelope("sess-1-rec01")
+    await persist_run_attestation("sess-1", envelope, db=db)
+
+    record = await get_run_attestation_record("sess-1-rec01", db=db)
+
+    assert record is not None
+    assert record["session_id"] == "sess-1"
+    assert record["run_id"] == "sess-1-rec01"
+    assert record["envelope"]["run_id"] == envelope["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_get_latest_run_attestation_for_session_returns_newest() -> None:
+    db = FakeDB()
+    first = _signed_envelope("sess-1-old01")
+    second = _signed_envelope("sess-1-new01")
+    await persist_run_attestation("sess-1", first, db=db)
+    await persist_run_attestation("sess-1", second, db=db)
+
+    record = await get_latest_run_attestation_for_session("sess-1", db=db)
+
+    assert record is not None
+    assert record["run_id"] == "sess-1-new01"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_run_attestation_for_session_unknown_returns_none() -> None:
+    assert await get_latest_run_attestation_for_session("never", db=FakeDB()) is None
+
+
+@pytest.mark.asyncio
+async def test_get_latest_run_attestation_rejects_bad_input() -> None:
+    db = FakeDB()
+    assert await get_latest_run_attestation_for_session(None, db=db) is None
+    assert await get_latest_run_attestation_for_session("", db=db) is None
+    assert await get_run_attestation_record(None, db=db) is None

@@ -5,8 +5,9 @@ read-only Postgres query for the persisted attestation row -> chain reveal
 from the envelope's canonical steps (same reveal code as sim mode — no
 crypto is reimplemented here).
 
-Envelope retrieval is a direct DB read because no HTTP endpoint exists for
-attestations yet (deferred product follow-up). The query is read-only.
+Envelope retrieval still has a read-only Postgres fallback. SuperAgent now
+serves the same bytes at ``GET /runs/{run_id}/attestation`` and
+``GET /sessions/{session_id}/attestation`` (ownership-checked, not verified).
 """
 
 from __future__ import annotations

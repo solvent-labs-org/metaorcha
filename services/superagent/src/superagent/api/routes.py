@@ -6,6 +6,8 @@ POST /sessions/{id}/resume      → SSE stream
 PATCH /sessions/{id}/context      → merge lead_gen_options / email_campaign_context
 GET  /sessions/{id}/status      → { status, pending_interrupt }
 GET  /sessions/{id}/audit       → Verified Runs evidence package
+GET  /sessions/{id}/attestation → latest RFC 0003 envelope (bytes only)
+GET  /runs/{run_id}/attestation → RFC 0003 envelope by run_id (bytes only)
 GET  /health                    → { status: "ok" }
 """
 
@@ -20,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .models import (
     AgentEnvStatusResponse,
@@ -164,6 +166,53 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="Session not found")
     rows = await load_transcript_rows(session_id)
     return build_run_audit(session_id, rows)
+
+
+def _attestation_response(run_id: str, envelope: dict[str, Any]) -> JSONResponse:
+    """Raw envelope bytes. The route does not verify (AR-5 / AD-5)."""
+    return JSONResponse(
+        content=envelope,
+        headers={
+            "Content-Disposition": f'attachment; filename="{run_id}.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/runs/{run_id}/attestation")
+async def get_run_attestation(
+    run_id: str,
+    user_id: str = Query(..., description="Caller user id for ownership check"),
+) -> JSONResponse:
+    """Serve a sealed RFC 0003 envelope. Does not verify it."""
+    from validator.run_envelope import get_run_attestation_record
+
+    from ..persistence.transcript_store import verify_session_owner
+
+    record = await get_run_attestation_record(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Attestation not found")
+    if not await verify_session_owner(record["session_id"], user_id):
+        raise HTTPException(status_code=404, detail="Attestation not found")
+    return _attestation_response(record["run_id"] or run_id, record["envelope"])
+
+
+@router.get("/sessions/{session_id}/attestation")
+async def get_session_attestation(
+    session_id: str,
+    user_id: str = Query(..., description="Caller user id for ownership check"),
+) -> JSONResponse:
+    """Serve the newest sealed envelope for a session. Does not verify it."""
+    from validator.run_envelope import get_latest_run_attestation_for_session
+
+    from ..persistence.transcript_store import verify_session_owner
+
+    if not await verify_session_owner(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Attestation not found")
+    record = await get_latest_run_attestation_for_session(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Attestation not found")
+    return _attestation_response(record["run_id"], record["envelope"])
 
 
 async def _load_artifact_refs(artifact_ids: list[str]) -> dict[str, Any]:

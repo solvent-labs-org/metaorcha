@@ -37,15 +37,37 @@ class FakeAttestationTable:
 
     async def create(self, data: dict[str, Any]) -> SimpleNamespace:
         self._seq += 1
-        row = SimpleNamespace(id=f"att-{self._seq}", **data)
+        payload = dict(data)
+        payload.setdefault("created_at", self._seq)
+        row = SimpleNamespace(id=f"att-{self._seq}", **payload)
         self.rows[row.id] = row
         return row
 
-    async def find_first(self, where: dict[str, Any]) -> SimpleNamespace | None:
-        for row in self.rows.values():
-            if all(getattr(row, key, None) == value for key, value in where.items()):
-                return row
-        return None
+    async def find_first(
+        self,
+        where: dict[str, Any],
+        order: dict[str, str] | None = None,
+    ) -> SimpleNamespace | None:
+        rows = await self.find_many(where, order=order)
+        return rows[0] if rows else None
+
+    async def find_many(
+        self,
+        where: dict[str, Any],
+        order: dict[str, str] | None = None,
+    ) -> list[SimpleNamespace]:
+        rows = [
+            row
+            for row in self.rows.values()
+            if all(getattr(row, key, None) == value for key, value in where.items())
+        ]
+        if order:
+            key, direction = next(iter(order.items()))
+            rows.sort(
+                key=lambda row: getattr(row, key, 0) or 0,
+                reverse=direction == "desc",
+            )
+        return rows
 
     async def find_unique(self, where: dict[str, Any]) -> SimpleNamespace | None:
         return await self.find_first(where)
