@@ -18,7 +18,7 @@ requires-python = ">=3.12"
 version = "0.1.0"
 
 [tool.uv.workspace]
-members = ["services/*", "common/*", "packages/*", "sdk", "node"]
+members = ["services/*", "common/*", "packages/*", "sdk", "node", "apps/attestation-playground"]
 exclude = ["services/wallet-service"]
 
 [tool.uv.sources]

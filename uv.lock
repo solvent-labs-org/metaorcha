@@ -13,6 +13,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "attestation-playground",
     "charter",
     "common-database",
     "common-kafka",
@@ -316,6 +317,35 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/7a/15e37d45e7f7c94facc1e9148c0e455e8f33c08f0b8a0b1deb2c5171771b/asyncpg-0.31.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:8df714dba348efcc162d2adf02d213e5fab1bd9f557e1305633e851a61814a7a", size = 3429426, upload-time = "2025-11-24T23:26:41.032Z" },
     { url = "https://files.pythonhosted.org/packages/13/d5/71437c5f6ae5f307828710efbe62163974e71237d5d46ebd2869ea052d10/asyncpg-0.31.0-cp314-cp314t-win32.whl", hash = "sha256:1b41f1afb1033f2b44f3234993b15096ddc9cd71b21a42dbd87fc6a57b43d65d", size = 614495, upload-time = "2025-11-24T23:26:42.659Z" },
     { url = "https://files.pythonhosted.org/packages/3c/d7/8fb3044eaef08a310acfe23dae9a8e2e07d305edc29a53497e52bc76eca7/asyncpg-0.31.0-cp314-cp314t-win_amd64.whl", hash = "sha256:bd4107bb7cdd0e9e65fae66a62afd3a249663b844fa34d479f6d5b3bef9c04c3", size = 706062, upload-time = "2025-11-24T23:26:44.086Z" },
+]
+
+[[package]]
+name = "attestation-playground"
+version = "0.1.0"
+source = { editable = "apps/attestation-playground" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "common-kafka" },
+    { name = "cryptography" },
+    { name = "emerge-node" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "orcha-sdk" },
+    { name = "uvicorn" },
+    { name = "validator-service" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "common-kafka", editable = "common/kafka" },
+    { name = "cryptography", specifier = ">=42" },
+    { name = "emerge-node", editable = "node" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "orcha-sdk", editable = "sdk" },
+    { name = "uvicorn", specifier = ">=0.29" },
+    { name = "validator-service", editable = "services/validator" },
 ]
 
 [[package]]
