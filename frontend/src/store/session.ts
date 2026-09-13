@@ -71,6 +71,10 @@ interface SessionState {
   appendToken: (token: string) => void
   beginStreaming: () => string
   endStreaming: (markAsThinking?: boolean) => void
+  attachReceiptToLastTurn: (receipt: {
+    runId: string
+    attestationPath: string
+  }) => void
   setAgents: (agents: AgentInfo[]) => void
   updateAgent: (agentId: string, patch: Partial<AgentInfo>) => void
   setChecklist: (tasks: ChecklistTask[]) => void
@@ -228,6 +232,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { messages, streamingMessageId: null }
     })
   },
+
+  attachReceiptToLastTurn: ({ runId, attestationPath }) =>
+    set((s) => {
+      const messages = [...s.messages]
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'agent') {
+          messages[i] = { ...messages[i], runId, attestationPath }
+          return { messages }
+        }
+      }
+      const seq = s.timelineSeq + 1
+      messages.push({
+        id: crypto.randomUUID(),
+        role: 'agent',
+        content: '',
+        timestamp: Date.now(),
+        sortIndex: seq,
+        runId,
+        attestationPath,
+      })
+      return { messages, timelineSeq: seq }
+    }),
 
   setAgents: (agents) => set({ agents }),
 
