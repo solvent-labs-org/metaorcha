@@ -470,6 +470,40 @@ def test_env_key_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     assert verify_run_envelope(signed) is True
 
 
+def test_unset_key_without_opt_in_raises_named_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv(signer.ALLOW_EPHEMERAL_KEY_ENV, raising=False)
+    signer._reset_signing_key_for_tests()
+    with pytest.raises(
+        signer.EphemeralAttestationKeyRefused, match="ATTESTATION_PRIVATE_KEY_B64"
+    ):
+        signer.get_signing_key()
+
+
+def test_startup_refuses_ephemeral_without_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv(signer.ALLOW_EPHEMERAL_KEY_ENV, raising=False)
+    signer._reset_signing_key_for_tests()
+    with pytest.raises(signer.EphemeralAttestationKeyRefused):
+        signer.require_signing_key_for_receipts()
+
+
+def test_env_key_same_public_key_across_two_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(signer.PRIVATE_KEY_ENV, EXAMPLE_SEED_B64)
+    monkeypatch.delenv(signer.ALLOW_EPHEMERAL_KEY_ENV, raising=False)
+    signer._reset_signing_key_for_tests()
+    _, pub_first = signer.get_signing_key()
+    signer._reset_signing_key_for_tests()
+    _, pub_second = signer.get_signing_key()
+    assert pub_first == pub_second == EXAMPLE_PUBLIC_KEY_B64
+
+
 # ── RunAttestationObserver ──────────────────────────────────────────────────
 
 

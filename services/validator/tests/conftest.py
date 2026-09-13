@@ -122,4 +122,5 @@ def _step_result(
 def _reset_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate the process-wide key cache; ephemeral key per test by default."""
     monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.setenv(signer.ALLOW_EPHEMERAL_KEY_ENV, "1")
     signer._reset_signing_key_for_tests()
