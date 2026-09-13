@@ -131,6 +131,7 @@ async def settle_invocation(
     latency_ms: int,
     execution_success: bool,
     platform_tokens: int = 0,
+    input_tokens: int = 0,
     run_id: str | None = None,
 ) -> None:
     """
@@ -148,6 +149,13 @@ async def settle_invocation(
     """
     from ..config import settings
 
+    logger.info(
+        "settle_invocation: recorded tokens input=%s output=%s call_id=%s",
+        input_tokens,
+        platform_tokens,
+        call_id,
+    )
+
     # (1) Sync flag-check + defer — FIRST, before any await (FIFO race guard).
     gate_required = settings.settlement_require_attestation and execution_success
     deferred = gate_required and run_id is None
@@ -162,6 +170,7 @@ async def settle_invocation(
                 "base_fee": base_fee,
                 "latency_ms": latency_ms,
                 "platform_tokens": platform_tokens,
+                "input_tokens": input_tokens,
                 "execution_success": execution_success,
             },
         )
