@@ -5,6 +5,7 @@ import { Sidebar } from '../components/layout/Sidebar'
 import { SessionListPanel } from '../components/layout/SessionListPanel'
 import { RightPanel } from '../components/layout/RightPanel'
 import { ToolTimelineRow } from '../components/chat/ExecutionTimeline'
+import { DownloadReceiptButton } from '../components/chat/DownloadReceiptButton'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { StreamingDots } from '../components/chat/StreamingDots'
 import { ModelChip } from '../components/chat/ModelChip'
@@ -389,6 +390,8 @@ export function Chat() {
                   item.msg.role === 'agent' && store.canvases.length > 0 ? null :
                   // Also hide streaming/thinking messages — they're internal reasoning.
                   item.msg.role === 'agent' && (item.msg.streaming || item.msg.streamedAsThinking) ? null :
+                  // Receipt-only markers have no text; the download control is below.
+                  item.msg.role === 'agent' && item.msg.content.trim() === '' ? null :
                   item.msg.role === 'user' ? (
                     <li key={item.msg.id} className="list-none animate-message-in">
                       <MessageBubble message={item.msg} />
@@ -406,6 +409,13 @@ export function Chat() {
                   <ToolTimelineRow key={item.trace.call_id} trace={item.trace} />
                 ),
               )}
+              {store.messages
+                .filter((m): m is typeof m & { runId: string } => Boolean(m.runId))
+                .map((m) => (
+                  <li key={`receipt-${m.runId}`} className="list-none">
+                    <DownloadReceiptButton runId={m.runId} />
+                  </li>
+                ))}
               {store.status === 'running' && !store.streamingMessageId && (
                 <li className="list-none">
                   <StreamingDots phase={store.runPhase} agentName={store.activeAgentName} />
