@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..auth.models import TokenPayload
-from ..dependencies import require_dev_mode
+from ..dependencies import require_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/dev/agents", tags=["dev-agents"])
@@ -33,7 +33,7 @@ async def _proxy(request: Request, method: str, path: str, **kwargs: Any) -> Res
 @router.get("")
 async def list_agents(
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_dev_mode)],
+    payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
     return await _proxy(request, "GET", "/api/v1/agents")
 
@@ -41,7 +41,7 @@ async def list_agents(
 @router.post("", status_code=201)
 async def register_agent(
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_dev_mode)],
+    payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
     body = await request.body()
     content_type = request.headers.get("content-type", "")
@@ -58,7 +58,7 @@ async def register_agent(
 async def get_agent(
     agent_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_dev_mode)],
+    payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
     return await _proxy(request, "GET", f"/api/v1/agents/{agent_id}")
 
@@ -67,7 +67,7 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_dev_mode)],
+    payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
     body = await request.json()
     return await _proxy(request, "PUT", f"/api/v1/agents/{agent_id}", json=body)
@@ -77,6 +77,6 @@ async def update_agent(
 async def delete_agent(
     agent_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_dev_mode)],
+    payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
     return await _proxy(request, "DELETE", f"/api/v1/agents/{agent_id}")
