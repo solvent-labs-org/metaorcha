@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/Badge'
 import { workflows } from '../api/client'
 import type { WorkflowResponse, WorkflowStatus } from '../types'
 import { cn } from '../components/ui/cn'
+import { A2aComposePanel } from '../components/workflows/A2aComposePanel'
 
 type FilterTab = 'All' | 'Active' | 'Inactive' | 'Scheduled'
 const TABS: FilterTab[] = ['All', 'Active', 'Inactive', 'Scheduled']
@@ -93,6 +94,8 @@ export function Workflows() {
 
         {/* Workflow list */}
         <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-4 flex flex-col gap-3">
+          <A2aComposePanel />
+
           {isLoading && (
             <div className="text-text-secondary text-body-md">Loading…</div>
           )}
