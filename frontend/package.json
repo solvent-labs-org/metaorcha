@@ -8,7 +8,8 @@
     "dev:owl": "vite --config owl-lab/vite.config.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:mcp-yaml": "node --experimental-strip-types src/lib/mcpEmergeYaml.test.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
