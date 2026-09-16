@@ -272,6 +272,12 @@ export const workflows = {
       body: JSON.stringify({ session_id, name, description }),
     }),
 
+  compose: (name: string, agent_ids: string[], description?: string) =>
+    apiFetch<WorkflowResponse>('/api/v1/workflows/compose', {
+      method: 'POST',
+      body: JSON.stringify({ name, agent_ids, description }),
+    }),
+
   update: (id: string, patch: { name?: string; description?: string; status?: WorkflowStatus }) =>
     apiFetch<WorkflowResponse>(`/api/v1/workflows/${id}`, {
       method: 'PATCH',
