@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .criteria import compose_policy_version
 from .run_envelope import (
     build_run_envelope,
     cdv_score_to_bp,
@@ -69,6 +70,8 @@ class _AccumulatedStep:
     cdv_bp: int | None
     agent_id: str
     verdict: dict[str, Any] | None
+    declared_acceptance: dict[str, Any] | None
+    criteria_digest: str | None
     completed_at: datetime
 
 
@@ -145,6 +148,9 @@ class RunAttestationObserver:
                 else None
             )
             session_id = record.session_id or "default"
+            meta = record.metadata if isinstance(record.metadata, dict) else {}
+            declared = meta.get("declared_acceptance")
+            digest = meta.get("criteria_digest")
             self._steps.setdefault(session_id, []).append(
                 _AccumulatedStep(
                     call_id=record.call_id,
@@ -158,6 +164,10 @@ class RunAttestationObserver:
                     verdict=record.verdict
                     if isinstance(record.verdict, dict)
                     else None,
+                    declared_acceptance=declared
+                    if isinstance(declared, dict)
+                    else None,
+                    criteria_digest=digest if isinstance(digest, str) else None,
                     completed_at=_parse_ts(record.completed_at),
                 )
             )
@@ -181,7 +191,35 @@ class RunAttestationObserver:
             if reason:
                 entry["detail"] = f"{step.call_id}: {reason}"
             verdicts.append(entry)
+        declared = self._declared_acceptance(steps)
+        if declared is not None:
+            verdicts.append(declared)
         return verdicts
+
+    @staticmethod
+    def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
+        """One run-level declared_acceptance verdict from step metadata."""
+        seen = [s.declared_acceptance for s in steps if s.declared_acceptance]
+        if not seen:
+            return None
+        failed = next((item for item in seen if item.get("result") == "fail"), None)
+        chosen = failed or seen[-1]
+        result = chosen.get("result")
+        if result not in ("pass", "fail"):
+            return None
+        entry: dict[str, Any] = {"check": "declared_acceptance", "result": result}
+        detail = chosen.get("detail")
+        if detail:
+            entry["detail"] = str(detail)
+        return entry
+
+    @staticmethod
+    def _criteria_digest_from_steps(steps: list[_AccumulatedStep]) -> str | None:
+        for step in steps:
+            digest = step.criteria_digest
+            if isinstance(digest, str) and len(digest) == 64:
+                return digest
+        return None
 
     async def discard_run(self, session_id: str) -> None:
         """Drop buffered steps for an abandoned run (error/cancel before seal).
@@ -249,7 +287,9 @@ class RunAttestationObserver:
                 run_id=f"{session_id}-{uuid.uuid4().hex[:12]}",
                 agent_dids=list(dict.fromkeys(s.agent_id for s in steps)),
                 charter_hash=self.charter_hash,
-                policy_version=self.policy_version,
+                policy_version=compose_policy_version(
+                    self.policy_version, self._criteria_digest_from_steps(steps)
+                ),
                 steps=[
                     {
                         "call_id": s.call_id,
