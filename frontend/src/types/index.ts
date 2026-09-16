@@ -227,7 +227,12 @@ export type SSEEvent =
       size_bytes: number
     }
   | InterruptEvent
-  | { type: 'done'; session_id: string }
+  | {
+      type: 'done'
+      session_id: string
+      run_id?: string
+      attestation_path?: string
+    }
   | { type: 'stopped'; session_id: string }
   | {
       type: 'checklist_snapshot'
@@ -381,6 +386,10 @@ export interface ChatMessage {
   sortIndex?: number
   /** Shown in timeline for uploads; restored from transcript ``tool_inputs``. */
   attachedArtifacts?: AttachedArtifactRef[]
+  /** Sealed-run id from the SSE ``done`` event when attestation is on. */
+  runId?: string
+  /** SuperAgent-relative fetch path; Gateway prefixes ``/api/v1``. */
+  attestationPath?: string
 }
 
 export interface Artifact {
