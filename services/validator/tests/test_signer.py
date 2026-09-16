@@ -55,8 +55,13 @@ class FakeDB:
 
 @pytest.fixture(autouse=True)
 def _reset_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate the process-wide key cache; ephemeral key per test by default."""
+    """Isolate the process-wide key cache; ephemeral key per test by default.
+
+    Same name as the suite conftest fixture, so this one wins. Keep the
+    ephemeral opt-in here or case-signing tests refuse at get_signing_key().
+    """
     monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.setenv(signer.ALLOW_EPHEMERAL_KEY_ENV, "1")
     signer._reset_signing_key_for_tests()
 
 
