@@ -50,9 +50,7 @@ def build_mcp_emerge_yaml(
         ep = (endpoint or "").strip()
         if not ep.startswith(("http://", "https://")):
             raise ValueError("endpoint must be an http(s) URL for SSE MCP")
-        transport_block = (
-            f"  transport:\n    type: sse\n    endpoint: {json.dumps(ep)}"
-        )
+        transport_block = f"  transport:\n    type: sse\n    endpoint: {json.dumps(ep)}"
         health = ep
     else:
         raise ValueError("transport must be sse or stdio")
@@ -74,7 +72,7 @@ def build_mcp_emerge_yaml(
         '  version: "1.0.0"\n'
         f"  description: {json.dumps(desc)}\n"
         "  tags:\n    - mcp\n    - user\n\n"
-        "protocol:\n  type: mcp\n  version: \"1.0\"\n"
+        'protocol:\n  type: mcp\n  version: "1.0"\n'
         f"{transport_block}\n\n"
         f"health_endpoint: {json.dumps(health)}\n\n"
         "security:\n  transport_layer:\n    type: none"

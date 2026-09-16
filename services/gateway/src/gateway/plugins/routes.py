@@ -59,7 +59,9 @@ async def connect_mcp(
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     data = resp.json()
-    agent_id = (data.get("data") or {}).get("agent_id") or agent_did_from_name(body.name)
+    agent_id = (data.get("data") or {}).get("agent_id") or agent_did_from_name(
+        body.name
+    )
     if body.auth_value and body.auth_var:
         sa = request.app.state.superagent
         cred = await sa.post(
@@ -71,5 +73,7 @@ async def connect_mcp(
             },
         )
         if cred.status_code >= 400:
-            logger.warning("mcp connect registered but vault write failed: %s", cred.text)
+            logger.warning(
+                "mcp connect registered but vault write failed: %s", cred.text
+            )
     return data
