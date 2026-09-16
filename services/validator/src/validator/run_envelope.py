@@ -37,7 +37,8 @@ byte-identical output):
 
 Key handling mirrors ``signer.py`` (FR-9.4, mock-first): the signing key comes
 from ``ATTESTATION_PRIVATE_KEY_B64`` (base64 32-byte Ed25519 seed); when unset,
-an ephemeral in-memory keypair is generated with a loud warning.
+an ephemeral in-memory keypair is generated only if
+``ATTESTATION_ALLOW_EPHEMERAL_KEY=1``.
 """
 
 from __future__ import annotations
@@ -275,7 +276,8 @@ def build_run_envelope(
     lands in the envelope) and ``seq`` is assigned by position.
 
     When *public_key_b64* is omitted the process-wide attestation key is used
-    (``ATTESTATION_PRIVATE_KEY_B64``, or an ephemeral keypair with a warning).
+    (``ATTESTATION_PRIVATE_KEY_B64``, or an ephemeral keypair when
+    ``ATTESTATION_ALLOW_EPHEMERAL_KEY=1``).
 
     Raises ValueError on any input that cannot produce a conformant envelope.
     """
