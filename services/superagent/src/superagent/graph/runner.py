@@ -462,6 +462,7 @@ class SessionRunner:
         email_campaign_context: dict[str, Any] | None = None,
         model: str | None = None,
         custom_instructions: str | None = None,
+        acceptance_criteria: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:  # noqa: UP006
         """
         Execute one turn of the ReAct loop, yielding streaming events.
@@ -542,6 +543,8 @@ class SessionRunner:
             state_update["orchestrator_model_override"] = model
         if custom_instructions:
             state_update["custom_instructions"] = custom_instructions
+        # Per-turn: overwrite so a later turn without criteria is today's envelope.
+        state_update["_declared_criteria"] = acceptance_criteria
 
         # Keep session credentials visible in both configurable and state paths.
         state_update["_session_credentials"] = session_credentials or {}

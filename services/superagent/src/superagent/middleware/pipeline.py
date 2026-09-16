@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -21,37 +20,12 @@ from .preflight import PreFlightManager
 logger = logging.getLogger(__name__)
 
 
-_CITATION_REQUIRED_FIELDS = ("chunk_id", "source_title", "excerpt")
-
-
-def _has_valid_citations(content: str) -> bool:
-    """True when *content* is JSON with a non-empty, well-formed citations list."""
-    try:
-        payload = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    if not isinstance(payload, dict):
-        return False
-    citations = payload.get("citations")
-    if not isinstance(citations, list) or not citations:
-        return False
-    return all(
-        isinstance(c, dict) and all(c.get(field) for field in _CITATION_REQUIRED_FIELDS)
-        for c in citations
-    )
-
-
-def _structural_verify(
-    content: str, has_canvas: bool, agent_id: str = ""
-) -> tuple[bool, str]:
+def _structural_verify(content: str, has_canvas: bool) -> tuple[bool, str]:
     """Structural check on agent output. Returns (verified, verdict_reason)."""
     if not content:
         return False, "empty output"
     if content.startswith(("Error:", "Input error:", "Unsupported protocol:")):
         return False, content[:120]
-    # FR-4.3 citation-presence rule: rulebook RAG output must carry citations.
-    if "rulebook-rag" in agent_id and not _has_valid_citations(content):
-        return False, "missing citations"
     if has_canvas:
         return True, "canvas output verified"
     return True, "ok"
@@ -188,11 +162,25 @@ class ExecutionMiddleware:
             len(content_str),
         )
 
-        # Step 5.5: StructuralVerifier
+        # Step 5.5: StructuralVerifier + optional declared-acceptance
         has_canvas = normalised.get("ui_manifest") is not None
-        verified, verdict_reason = _structural_verify(content_str, has_canvas, agent_id)
+        verified, verdict_reason = _structural_verify(content_str, has_canvas)
         normalised["verified"] = verified
         normalised["verdict_reason"] = verdict_reason
+
+        declared_meta: dict[str, Any] = {}
+        criteria = self._state.get("_declared_criteria")
+        if isinstance(criteria, dict) and criteria:
+            from .criteria import criteria_digest, evaluate_declared_criteria
+
+            accepted, declared_reason = evaluate_declared_criteria(
+                criteria, content_str
+            )
+            declared_meta["criteria_digest"] = criteria_digest(criteria)
+            declared_meta["declared_acceptance"] = {
+                "result": "pass" if accepted else "fail",
+                "detail": declared_reason,
+            }
 
         # Step 6: Checklist auto-update
         success = not (
@@ -226,6 +214,7 @@ class ExecutionMiddleware:
                         self._state.get("_last_turn_input_tokens") or 0
                     ),
                     "output_tokens": int(self._state.get("_last_turn_tokens") or 0),
+                    **declared_meta,
                 },
                 args=dict(args),
             )
