@@ -93,38 +93,83 @@ def test_no_declared_criteria_does_not_require_citations():
     assert reason == "ok"
 
 
-def test_unknown_criterion_exit_zero_fails_closed():
-    ok, reason = evaluate_declared_criteria({"exit_zero": True}, "no tests ran")
+def test_unknown_criterion_fails_closed():
+    ok, reason = evaluate_declared_criteria({"not_a_criterion": True}, "no tests ran")
     assert ok is False
-    assert reason == "unsupported criterion: exit_zero"
+    assert reason == "unsupported criterion: not_a_criterion"
 
 
 def test_typo_citation_required_fails_closed():
-    ok, reason = evaluate_declared_criteria(
-        {"citation_required": True}, "no citations"
-    )
+    ok, reason = evaluate_declared_criteria({"citation_required": True}, "no citations")
     assert ok is False
     assert reason == "unsupported criterion: citation_required"
 
 
 def test_mixed_known_and_unknown_criterion_fails_closed():
     ok, reason = evaluate_declared_criteria(
+        {"citations_required": True, "not_a_criterion": True},
+        _cited_output(),
+    )
+    assert ok is False
+    assert reason == "unsupported criterion: not_a_criterion"
+
+
+def test_exit_zero_passes_on_zero():
+    ok, reason = evaluate_declared_criteria(
+        {"exit_zero": True}, json.dumps({"exit_code": 0, "stdout": "ok"})
+    )
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_exit_zero_fails_on_nonzero():
+    ok, reason = evaluate_declared_criteria(
+        {"exit_zero": True}, json.dumps({"exit_code": 1, "stdout": "failed"})
+    )
+    assert ok is False
+    assert reason == "nonzero exit: 1"
+
+
+def test_exit_zero_returncode_alias():
+    ok, reason = evaluate_declared_criteria(
+        {"exit_zero": True}, json.dumps({"returncode": 0})
+    )
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_exit_zero_missing_code_fails_closed():
+    ok, reason = evaluate_declared_criteria({"exit_zero": True}, "no tests ran")
+    assert ok is False
+    assert reason == "no exit code in step output"
+
+
+def test_exit_zero_bool_true_is_not_an_exit_code():
+    ok, reason = evaluate_declared_criteria(
+        {"exit_zero": True}, json.dumps({"exit_code": True})
+    )
+    assert ok is False
+    assert reason == "no exit code in step output"
+
+
+def test_mixed_citations_and_exit_zero_needs_both():
+    ok, reason = evaluate_declared_criteria(
         {"citations_required": True, "exit_zero": True},
         _cited_output(),
     )
     assert ok is False
-    assert reason == "unsupported criterion: exit_zero"
+    assert reason == "no exit code in step output"
 
 
 def test_superagent_message_request_rejects_unknown_criterion():
     from pydantic import ValidationError
     from superagent.api.models import MessageRequest
 
-    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
+    with pytest.raises(ValidationError, match="unsupported criterion: not_a_criterion"):
         MessageRequest(
             user_id="u",
             message="run the suite",
-            acceptance_criteria={"exit_zero": True},
+            acceptance_criteria={"not_a_criterion": True},
         )
 
 
@@ -132,11 +177,11 @@ def test_superagent_message_request_rejects_mixed_unknown_key():
     from pydantic import ValidationError
     from superagent.api.models import MessageRequest
 
-    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
+    with pytest.raises(ValidationError, match="unsupported criterion: not_a_criterion"):
         MessageRequest(
             user_id="u",
             message="run the suite",
-            acceptance_criteria={"citations_required": True, "exit_zero": True},
+            acceptance_criteria={"citations_required": True, "not_a_criterion": True},
         )
 
 
@@ -149,3 +194,14 @@ def test_superagent_message_request_accepts_known_criterion():
         acceptance_criteria={"citations_required": True},
     )
     assert body.acceptance_criteria == {"citations_required": True}
+
+
+def test_superagent_message_request_accepts_exit_zero():
+    from superagent.api.models import MessageRequest
+
+    body = MessageRequest(
+        user_id="u",
+        message="run the suite",
+        acceptance_criteria={"exit_zero": True},
+    )
+    assert body.acceptance_criteria == {"exit_zero": True}

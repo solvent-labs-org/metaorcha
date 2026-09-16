@@ -193,3 +193,49 @@ def test_peek_published_run_id_walks_composite_without_popping():
     assert peek_published_run_id("sess-1") == "sess-1-abc"
     publisher = get_observer().observers[0]
     assert publisher.last_sealed["sess-1"] == "sess-1-abc"
+
+
+@pytest.mark.asyncio
+async def test_system_tool_step_lands_on_the_observer_seam():
+    """FR-7: a system-tool call is a recorded step, not a silent registry hit."""
+    import json
+
+    from superagent.middleware.system_steps import (
+        SYSTEM_TOOL_AGENT_DID,
+        SYSTEM_TOOL_PROTOCOL,
+        attest_system_tool_step,
+    )
+
+    seen: list[StepResult] = []
+
+    class Recorder:
+        async def on_step_complete(self, record: StepResult) -> None:
+            seen.append(record)
+
+    set_observer(Recorder())
+    output = json.dumps({"exit_code": 1, "stdout": "failed"})
+    await attest_system_tool_step(
+        call_id="call-suite",
+        tool_name="run_tests",
+        args={"cwd": "."},
+        content=output,
+        success=True,
+        latency_ms=12,
+        state={
+            "user_id": "u1",
+            "session_id": "s1",
+            "_declared_criteria": {"exit_zero": True},
+        },
+    )
+
+    assert len(seen) == 1
+    rec = seen[0]
+    assert rec.call_id == "call-suite"
+    assert rec.agent_id == SYSTEM_TOOL_AGENT_DID
+    assert rec.protocol == SYSTEM_TOOL_PROTOCOL
+    assert rec.tool_name == "run_tests"
+    assert rec.args == {"cwd": "."}
+    assert rec.metadata["declared_acceptance"] == {
+        "result": "fail",
+        "detail": "nonzero exit: 1",
+    }
