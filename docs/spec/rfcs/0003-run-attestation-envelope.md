@@ -450,9 +450,9 @@ requires for `n ≥ 1`.
   post-execution concern wired through the `ExecutionObserver` seam; runs
   without attestation are unaffected.
 - **Crypto reuse, not invention.** Canonicalisation, key handling
-  (`ATTESTATION_PRIVATE_KEY_B64`, base64 32-byte seed, ephemeral dev
-  fallback), and verification reuse the existing envelope/charter/validator
-  code paths verbatim.
+  (`ATTESTATION_PRIVATE_KEY_B64`, base64 32-byte seed; ephemeral key only
+  when `ATTESTATION_ALLOW_EPHEMERAL_KEY=1`, dev/test only), and verification
+  reuse the existing envelope/charter/validator code paths verbatim.
 - The `format` version suffix is the only evolution mechanism: breaking
   envelope changes require `v2` and a new RFC; additive optional fields may
   extend `v1` (consumers must reject unknown fields when *validating* but

@@ -15,6 +15,13 @@ from superagent.pnd.models import (
     ToolCandidate,
 )
 
+
+@pytest.fixture(autouse=True)
+def _allow_ephemeral_attestation_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests that seal envelopes do not need a persistent seed."""
+    monkeypatch.setenv("ATTESTATION_ALLOW_EPHEMERAL_KEY", "1")
+
+
 # ── LLM mocks ─────────────────────────────────────────────────────────────────
 
 
