@@ -32,6 +32,12 @@ from .server import serve_agent
 logger = logging.getLogger("emerge")
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates" / "your-first-agent"
+_SKIP_SCAFFOLD_SUFFIXES = {".pyc", ".pyo", ".so"}
+
+
+def _is_scaffold_noise(rel: Path) -> bool:
+    """True for bytecode pip/compileall drops into the template after install."""
+    return "__pycache__" in rel.parts or rel.suffix.lower() in _SKIP_SCAFFOLD_SUFFIXES
 
 
 def _dan_experimental_enabled() -> bool:
@@ -94,6 +100,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     for src in _TEMPLATE_DIR.rglob("*"):
         rel = src.relative_to(_TEMPLATE_DIR)
+        if _is_scaffold_noise(rel):
+            continue
         target = dest / rel
         if src.is_dir():
             target.mkdir(parents=True, exist_ok=True)
