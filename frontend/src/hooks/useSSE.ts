@@ -146,6 +146,12 @@ export function useSSE() {
           s.endStreaming()
           s.setStatus('complete')
           s.appendSessionLog('Turn complete')
+          if (event.run_id && event.attestation_path) {
+            s.attachReceiptToLastTurn({
+              runId: event.run_id,
+              attestationPath: event.attestation_path,
+            })
+          }
           break
         }
         case 'stopped': {
