@@ -29,6 +29,11 @@ ORCHA_DB_BASE="${ORCHA_DB_BASE:-postgresql://postgres:postgres@localhost:5432/or
 ORCHA_DB_URL="${ORCHA_DB_BASE}?schema=public"   # Prisma wants the schema param
 ORCHA_DB_NAME="${ORCHA_DB_BASE##*/}"; ORCHA_DB_NAME="${ORCHA_DB_NAME%%\?*}"
 
+# ---------------------------------------------------------------- dev env ---
+# Local launcher only. A copy-pasted deployment must fail loudly — leave
+# ATTESTATION_ALLOW_EPHEMERAL_KEY commented in .env.example.
+export ATTESTATION_ALLOW_EPHEMERAL_KEY=1
+
 SKIP_INFRA=false
 SKIP_SEED=false
 for arg in "$@"; do
