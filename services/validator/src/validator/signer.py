@@ -12,8 +12,10 @@ one crypto implementation, compatible signatures.
 
 Key management (FR-9.4, mock-first): the signing key comes from the env var
 ``ATTESTATION_PRIVATE_KEY_B64`` (base64 32-byte Ed25519 seed). If unset, an
-ephemeral keypair is generated in memory at first use with a loud warning —
-private keys are NEVER written to disk or git.
+ephemeral keypair is generated only when ``ATTESTATION_ALLOW_EPHEMERAL_KEY=1``
+(dev/test). Otherwise the process refuses — at startup for a receipt-issuing
+deployment, and at first seal otherwise. Private keys are NEVER written to
+disk or git.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -34,9 +36,51 @@ from emerge_node.envelope import generate_keypair, verify_bytes
 logger = logging.getLogger(__name__)
 
 PRIVATE_KEY_ENV = "ATTESTATION_PRIVATE_KEY_B64"
+ALLOW_EPHEMERAL_KEY_ENV = "ATTESTATION_ALLOW_EPHEMERAL_KEY"
 
 # Process-wide signing key, loaded lazily on first use (service start).
 _signing_key: tuple[Ed25519PrivateKey, str] | None = None
+
+
+class EphemeralAttestationKeyRefused(RuntimeError):
+    """Named: receipts cannot be issued from an un-opted-in ephemeral key."""
+
+
+MINT_SEED_ONELINER = (
+    'python -c "from emerge_node.envelope import generate_keypair; '
+    "from cryptography.hazmat.primitives.serialization import "
+    "Encoding, PrivateFormat, NoEncryption; import base64; "
+    "k,_=generate_keypair(); print(base64.b64encode(k.private_bytes("
+    'Encoding.Raw, PrivateFormat.Raw, NoEncryption())).decode())"'
+)
+
+
+def _ephemeral_key_allowed() -> bool:
+    return os.environ.get(ALLOW_EPHEMERAL_KEY_ENV, "").strip() == "1"
+
+
+def _refuse_ephemeral() -> NoReturn:
+    raise EphemeralAttestationKeyRefused(
+        "ATTESTATION_PRIVATE_KEY_B64 is unset. A deployment that issues "
+        "receipts needs a persistent seed, or ATTESTATION_ALLOW_EPHEMERAL_KEY=1 "
+        "(dev/test only — receipts will not verify across restarts). Mint a "
+        f"seed with: {MINT_SEED_ONELINER}"
+    )
+
+
+def require_signing_key_for_receipts() -> None:
+    """Startup guard: refuse to boot a receipt issuer on an ephemeral key."""
+    raw = os.environ.get(PRIVATE_KEY_ENV, "").strip()
+    if raw:
+        get_signing_key()
+        return
+    if _ephemeral_key_allowed():
+        logger.warning(
+            "%s=1 — ephemeral attestation key allowed (dev/test only)",
+            ALLOW_EPHEMERAL_KEY_ENV,
+        )
+        return
+    _refuse_ephemeral()
 
 
 def _canonical_case_bytes(case_payload: dict[str, Any]) -> bytes:
@@ -61,8 +105,9 @@ def get_signing_key() -> tuple[Ed25519PrivateKey, str]:
     """Return (private_key, public_key_b64), loading or generating on first use.
 
     Env var ``ATTESTATION_PRIVATE_KEY_B64`` holds a base64 32-byte seed. When
-    absent, an ephemeral keypair is generated in memory (dev/demo only) and a
-    warning is logged — the key is never persisted.
+    absent, an ephemeral keypair is generated only if
+    ``ATTESTATION_ALLOW_EPHEMERAL_KEY=1``; otherwise this raises
+    :class:`EphemeralAttestationKeyRefused`. The key is never persisted.
     """
     global _signing_key
     if _signing_key is not None:
@@ -81,13 +126,15 @@ def get_signing_key() -> tuple[Ed25519PrivateKey, str]:
             private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         ).decode("ascii")
         logger.info("Attestation signing key loaded from %s", PRIVATE_KEY_ENV)
-    else:
+    elif _ephemeral_key_allowed():
         logger.warning(
             "%s not set — generating an EPHEMERAL attestation keypair in memory. "
-            "Signatures will not verify across restarts (dev/demo only).",
+            "Signatures will not verify across restarts (dev/test only).",
             PRIVATE_KEY_ENV,
         )
         private_key, public_key_b64 = generate_keypair()
+    else:
+        _refuse_ephemeral()
 
     _signing_key = (private_key, public_key_b64)
     return _signing_key

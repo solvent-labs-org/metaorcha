@@ -37,7 +37,8 @@
 # Requires: registry, PnD, superagent and gateway up (defaults
 # :8000/:8001/:8002/:8080, overridable as above), a superagent booted with
 # RUN_ATTESTATION_ENABLED, SETTLEMENT_REQUIRE_ATTESTATION and
-# RUN_ATTESTATION_CHARTER_HASH set, and Postgres carrying the lane tables with
+# RUN_ATTESTATION_CHARTER_HASH set, plus ATTESTATION_PRIVATE_KEY_B64 or
+# ATTESTATION_ALLOW_EPHEMERAL_KEY=1, and Postgres carrying the lane tables with
 # every migration on this line applied (`attested_settlements.call_id`).
 # Agent registration needs the registry booted with DISABLE_AUTH=true (the
 # local path in docs/setup.md) or ORCHA_PAT exported for `emerge publish`.
@@ -153,6 +154,13 @@ else
     ok "RUN_ATTESTATION_CHARTER_HASH set (${CHARTER_ENV:0:12}…)"
   else
     fail "RUN_ATTESTATION_CHARTER_HASH unset — every gated settle refuses on charter_hash"
+  fi
+  KEY_ENV="$(sa_env ATTESTATION_PRIVATE_KEY_B64)"
+  EPH_ENV="$(sa_env ATTESTATION_ALLOW_EPHEMERAL_KEY)"
+  if [[ -n "$KEY_ENV" || "$EPH_ENV" == "1" ]]; then
+    ok "ATTESTATION_PRIVATE_KEY_B64 set or ATTESTATION_ALLOW_EPHEMERAL_KEY=1"
+  else
+    fail "receipt issuer needs ATTESTATION_PRIVATE_KEY_B64 or ATTESTATION_ALLOW_EPHEMERAL_KEY=1"
   fi
   # The DB the process actually talks to, not the one an .env file names.
   SLICE_DB_URL="$(sa_env DATABASE_URL)"
