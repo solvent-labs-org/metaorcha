@@ -191,6 +191,8 @@ async def send_message(
         sa_body["model"] = body.model
     if body.custom_instructions:
         sa_body["custom_instructions"] = body.custom_instructions
+    if body.acceptance_criteria:
+        sa_body["acceptance_criteria"] = body.acceptance_criteria
 
     async def gen() -> AsyncIterator[str]:
         async for chunk in proxy_superagent_sse(
