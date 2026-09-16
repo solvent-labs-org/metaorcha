@@ -12,12 +12,14 @@ from common.database.src.generated_client.fields import Json as PrismaJson
 
 from ..adapters import A2AAdapter, CapabilityData, HarvestResult, MCPAdapter
 from ..config import settings
+from ..health_probe import should_skip_health_probe
 from ..models.emerge_config import EmergeConfig
 from .health_check import HealthCheckService
 from .validation import ConflictError, ValidationError, ValidationService
 from .version_manager import VersionManager
 
 logger = logging.getLogger(__name__)
+
 
 _AUTH_TYPE_MAP: dict[str, str] = {
     "x_api_key": "X_API_KEY",
@@ -84,10 +86,9 @@ class RegistrationService:
 
         await self._assert_agent_not_exists(emerge_config, user_id)
 
-        # STDIO agents have no HTTP endpoint to probe — they are launched as
-        # child processes by the client. Skip the health check entirely.
-        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
-        if not is_stdio:
+        # STDIO has no HTTP port. Remote MCP SSE/HTTP usually has no /health;
+        # harvest is the connectivity check. A2A HTTP still probes.
+        if not should_skip_health_probe(emerge_config):
             await self._verify_health_endpoint(emerge_config.health_endpoint)
 
         harvest_result = await self._harvest_capabilities(
@@ -97,6 +98,7 @@ class RegistrationService:
             f"Harvested {len(harvest_result.capabilities)} capabilities for agent {emerge_config.identity.name} version {emerge_config.identity.version}"
         )
 
+        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
         agent = await self._save_agent_to_db(
             emerge_config, harvest_result, user_id, is_stdio=is_stdio
         )
