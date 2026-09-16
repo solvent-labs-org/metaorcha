@@ -6,7 +6,7 @@ only (resist scope creep — test/deploy/login are post-launch):
 - ``orcha-sdk init [name]``   scaffold a new agent from the bundled template
 - ``orcha-sdk run [module]``  serve decorated agents locally + register them
 - ``orcha-sdk publish [module]``  register decorated agents against a remote registry
-- ``orcha-sdk validate``  validator demo (``--once`` synthetic attestation)
+- ``orcha-sdk validate``  experimental observer demo (``--once``); not a folder check
 - ``orcha-sdk verify <envelope.json>``  offline run attestation verifier (RFC 0003)
 """
 
@@ -32,6 +32,14 @@ from .server import serve_agent
 logger = logging.getLogger("emerge")
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates" / "your-first-agent"
+
+# docs/spec/test-vectors/run-attestation-golden.json is this shape, not an envelope.
+_GOLDEN_PAIR_KEYS = frozenset({"valid", "tampered"})
+
+
+def _is_golden_pair(obj: dict) -> bool:
+    """True for the RFC 0003 golden *pair* file ({valid, tampered}), not one envelope."""
+    return obj.keys() >= _GOLDEN_PAIR_KEYS and "schema" not in obj
 
 
 def _dan_experimental_enabled() -> bool:
@@ -265,6 +273,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if _is_golden_pair(envelope):
+        print(
+            "emerge verify: this JSON is the golden *pair* "
+            "({valid, tampered}), not a single RFC 0003 envelope.\n"
+            "  Pass one nested object, e.g.\n"
+            f"    jq .valid {args.envelope} | orcha verify -\n"
+            "  or the envelope a run downloaded (schema "
+            "orcha.run-attestation/v1).",
+            file=sys.stderr,
+        )
+        return 2
 
     verdict = verify_run_attestation(envelope)
     if args.json:
@@ -348,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pv = sub.add_parser(
         "validate",
-        help="run a validator observer node (experimental — --once demo)",
+        help="experimental observer demo (--once); not a check of your agent folder",
     )
     pv.add_argument(
         "--validator-did",
