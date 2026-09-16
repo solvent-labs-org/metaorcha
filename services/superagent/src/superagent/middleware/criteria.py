@@ -1,12 +1,13 @@
 """Evaluate a turn's declared acceptance criteria (machine-checkable).
 
-v1 understands ``citations_required``. The digest of the criteria document
-is composed into ``policy_version`` by the run observer — this module only
-evaluates and hashes.
+v1 understands ``citations_required`` and ``exit_zero``. The digest of the
+criteria document is composed into ``policy_version`` by the run observer —
+this module only evaluates and hashes.
 
 Criteria are evaluated **per step** against that step's content. A multi-tool
 turn that declares ``citations_required`` therefore fails on the first
-non-citing step. Single-agent turns are unaffected.
+non-citing step; ``exit_zero`` fails on the first step whose output has no
+parseable zero exit code. Single-agent turns are unaffected.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import hashlib
 import json
 from typing import Any
 
-SUPPORTED_CRITERIA = frozenset({"citations_required"})
+SUPPORTED_CRITERIA = frozenset({"citations_required", "exit_zero"})
+_EXIT_KEYS = ("exit_code", "returncode", "exit")
 
 _CITATION_REQUIRED_FIELDS = ("chunk_id", "source_title", "excerpt")
 
@@ -44,6 +46,27 @@ def criteria_digest(criteria: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def parse_exit_code(content: str) -> int | None:
+    """Read an integer exit code from JSON ``exit_code`` / ``returncode`` / ``exit``.
+
+    Bool is not an exit code (``True`` is a subclass of ``int``). Missing or
+    unparseable content returns ``None`` so ``exit_zero`` can fail closed.
+    """
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in _EXIT_KEYS:
+        raw = payload.get(key)
+        if type(raw) is int:
+            return raw
+        if isinstance(raw, str) and raw.lstrip("-").isdigit():
+            return int(raw)
+    return None
+
+
 def evaluate_declared_criteria(
     criteria: dict[str, Any], content: str
 ) -> tuple[bool, str]:
@@ -51,11 +74,18 @@ def evaluate_declared_criteria(
 
     Unknown keys fail closed so they cannot be signed as
     ``declared_acceptance: pass``. Evaluation is per step: a multi-tool turn
-    with ``citations_required`` fails on the first non-citing step.
+    with ``citations_required`` fails on the first non-citing step;
+    ``exit_zero`` fails on the first step without a parseable zero exit.
     """
     for key in criteria:
         if key not in SUPPORTED_CRITERIA:
             return False, f"unsupported criterion: {key}"
     if criteria.get("citations_required") and not has_valid_citations(content):
         return False, "missing citations"
+    if criteria.get("exit_zero"):
+        code = parse_exit_code(content)
+        if code is None:
+            return False, "no exit code in step output"
+        if code != 0:
+            return False, f"nonzero exit: {code}"
     return True, "ok"
