@@ -52,7 +52,7 @@ Output is not a chat bubble. Agents return a declarative [CanvasKit](docs/spec/c
 
 ## Register an agent in 4 lines
 
-> Metaorcha ships the **`orcha-sdk`** package (import name `emerge`). `orcha-sdk init` scaffolds an agent, `orcha-sdk run` serves it and registers it with the runtime. No clone required: `uvx orcha-sdk init my-agent`.
+> Metaorcha ships the **`orcha-sdk`** package (import name `emerge`). `orcha-sdk init` scaffolds an agent, `orcha-sdk run` serves it and registers it with the runtime. No clone required: `uvx orcha-sdk init my-agent`. Holding a signed run envelope: `uvx --from orcha-sdk orcha verify envelope.json` (`orcha-sdk` 0.1.3+). `uvx orcha` fails — that PyPI name is taken.
 
 ```python
 import emerge
