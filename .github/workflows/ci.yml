@@ -922,6 +922,7 @@ jobs:
             --lockfile=frontend/package-lock.json
             --lockfile=agents/google-workspace-orchestrator/uv.lock
             --lockfile=agents/finance-dashboard-agent/uv.lock
+            --lockfile=agents/test-runner-agent/uv.lock
 
   # ============================================================================
   # CI complete — the single required status check.
