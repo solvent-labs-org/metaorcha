@@ -157,7 +157,12 @@ export const sessions = {
     sessionId: string,
     message: string,
     artifactIds: string[] = [],
-    options: { model?: string; customInstructions?: string } = {},
+    options: {
+      model?: string
+      customInstructions?: string
+      /** Declared acceptance criteria, e.g. { exit_zero: true }. */
+      acceptanceCriteria?: Record<string, boolean>
+    } = {},
   ): Promise<Response> =>
     streamFetch(`/api/v1/sessions/${sessionId}/message`, {
       method: 'POST',
@@ -167,6 +172,9 @@ export const sessions = {
         ...(options.model ? { model: options.model } : {}),
         ...(options.customInstructions
           ? { custom_instructions: options.customInstructions }
+          : {}),
+        ...(options.acceptanceCriteria
+          ? { acceptance_criteria: options.acceptanceCriteria }
           : {}),
       }),
     }),

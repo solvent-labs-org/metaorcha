@@ -9,6 +9,7 @@ import { DownloadReceiptButton } from '../components/chat/DownloadReceiptButton'
 import { MessageBubble } from '../components/chat/MessageBubble'
 import { StreamingDots } from '../components/chat/StreamingDots'
 import { ModelChip } from '../components/chat/ModelChip'
+import { CriteriaChip } from '../components/chat/CriteriaChip'
 import { InputBar } from '../components/ui/InputBar'
 import { CredentialsModal } from '../components/modals/CredentialsModal'
 import { SaveWorkflowModal } from '../components/modals/SaveWorkflowModal'
@@ -19,6 +20,7 @@ import { useSessionSidebarStore } from '../store/sessionSidebar'
 import { useAuthStore } from '../store/auth'
 import { useSettingsStore } from '../store/settings'
 import { useByokStore } from '../store/byok'
+import { useCriteriaStore } from '../store/criteria'
 import { sessions, files } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { useSessionStatusSync } from '../hooks/useSessionStatusSync'
@@ -195,6 +197,7 @@ export function Chat() {
             ? byok.model.trim()
             : defaultModel,
         customInstructions: byok.systemPrompt.trim() || undefined,
+        acceptanceCriteria: useCriteriaStore.getState().toPayload(),
       })
       if (res.ok) {
         await streamResponse(res)
@@ -489,8 +492,9 @@ export function Chat() {
             isRunning={store.status === 'running'}
             size="chat"
           />
-          <div className="mt-2 flex items-center">
+          <div className="mt-2 flex items-center gap-2">
             <ModelChip />
+            <CriteriaChip />
           </div>
           </div>
         </div>
