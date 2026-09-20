@@ -238,4 +238,5 @@ async def test_system_tool_step_lands_on_the_observer_seam():
     assert rec.metadata["declared_acceptance"] == {
         "result": "fail",
         "detail": "nonzero exit: 1",
+        "criteria": {"exit_zero": "fail"},
     }

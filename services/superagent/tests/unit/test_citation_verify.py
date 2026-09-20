@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 
 import pytest
-from superagent.middleware.criteria import evaluate_declared_criteria
+from superagent.middleware.criteria import (
+    evaluate_declared_criteria,
+    step_declared_acceptance,
+)
 from superagent.middleware.pipeline import _structural_verify
 
 CITATIONS = {"citations_required": True}
@@ -138,27 +141,61 @@ def test_exit_zero_returncode_alias():
     assert reason == "ok"
 
 
-def test_exit_zero_missing_code_fails_closed():
+def test_exit_zero_missing_code_is_not_applicable_on_the_step():
+    # A read or patch step carries no exit code: exit_zero is n/a there, not a
+    # failure. The run fails only if NO step reported one (run_observer rule).
+    entry = step_declared_acceptance({"exit_zero": True}, "no tests ran")
+    assert entry == {
+        "result": "n/a",
+        "detail": "no exit code in step output",
+        "criteria": {"exit_zero": "n/a"},
+    }
     ok, reason = evaluate_declared_criteria({"exit_zero": True}, "no tests ran")
-    assert ok is False
+    assert ok is True  # not a step failure
     assert reason == "no exit code in step output"
+
+
+def test_exit_zero_step_entries_carry_per_criterion_results():
+    assert step_declared_acceptance(
+        {"exit_zero": True}, json.dumps({"exit_code": 0})
+    ) == {"result": "pass", "detail": "ok", "criteria": {"exit_zero": "pass"}}
+    assert step_declared_acceptance(
+        {"exit_zero": True}, json.dumps({"exit_code": 2})
+    ) == {
+        "result": "fail",
+        "detail": "nonzero exit: 2",
+        "criteria": {"exit_zero": "fail"},
+    }
 
 
 def test_exit_zero_bool_true_is_not_an_exit_code():
-    ok, reason = evaluate_declared_criteria(
+    entry = step_declared_acceptance(
         {"exit_zero": True}, json.dumps({"exit_code": True})
     )
-    assert ok is False
-    assert reason == "no exit code in step output"
+    assert entry["criteria"] == {"exit_zero": "n/a"}
+    assert entry["detail"] == "no exit code in step output"
 
 
-def test_mixed_citations_and_exit_zero_needs_both():
-    ok, reason = evaluate_declared_criteria(
+def test_mixed_citations_and_exit_zero_on_a_citing_step_without_exit_code():
+    # citations_required applies to every step; exit_zero is n/a here. The
+    # step passes on what applies; the run observer still requires some step
+    # to have reported an exit code.
+    entry = step_declared_acceptance(
         {"citations_required": True, "exit_zero": True},
         _cited_output(),
     )
-    assert ok is False
-    assert reason == "no exit code in step output"
+    assert entry["result"] == "pass"
+    assert entry["criteria"] == {"citations_required": "pass", "exit_zero": "n/a"}
+
+
+def test_mixed_criteria_fail_wins_on_the_step():
+    entry = step_declared_acceptance(
+        {"citations_required": True, "exit_zero": True},
+        json.dumps({"exit_code": 0}),  # exit ok, no citations
+    )
+    assert entry["result"] == "fail"
+    assert entry["detail"] == "missing citations"
+    assert entry["criteria"] == {"citations_required": "fail", "exit_zero": "pass"}
 
 
 def test_superagent_message_request_rejects_unknown_criterion():

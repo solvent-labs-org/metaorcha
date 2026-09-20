@@ -171,16 +171,12 @@ class ExecutionMiddleware:
         declared_meta: dict[str, Any] = {}
         criteria = self._state.get("_declared_criteria")
         if isinstance(criteria, dict) and criteria:
-            from .criteria import criteria_digest, evaluate_declared_criteria
+            from .criteria import criteria_digest, step_declared_acceptance
 
-            accepted, declared_reason = evaluate_declared_criteria(
+            declared_meta["criteria_digest"] = criteria_digest(criteria)
+            declared_meta["declared_acceptance"] = step_declared_acceptance(
                 criteria, content_str
             )
-            declared_meta["criteria_digest"] = criteria_digest(criteria)
-            declared_meta["declared_acceptance"] = {
-                "result": "pass" if accepted else "fail",
-                "detail": declared_reason,
-            }
 
         # Step 6: Checklist auto-update
         success = not (
