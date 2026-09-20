@@ -70,3 +70,36 @@ volumes persist across rebuilds; `make down` does not delete data
 - VM must have a **valid OpenRouter key** before seeding — verify with
   `curl -H "Authorization: Bearer $KEY" https://openrouter.ai/api/v1/auth/key`
   (expect 200, not 401).
+
+## 7. Attested profile (local bed) — record a run, refuse a failed one
+
+The example env ships with the attested profile **on**. What it needs and what it
+proves, in order:
+
+1. **Key.** `openssl rand -base64 32` → `ATTESTATION_PRIVATE_KEY_B64` in
+   `.env.sandbox`. `make -f deploy/sandbox/Makefile check-env` refuses a blank key
+   while `RUN_ATTESTATION_ENABLED=true`; an ephemeral key
+   (`ATTESTATION_ALLOW_EPHEMERAL_KEY=1`) is for throwaway boots only, because its
+   receipts cannot be re-verified after a restart.
+2. **Schema.** `make -f deploy/sandbox/Makefile up` now runs `migrate` after the
+   containers start (the `attestations` and `attested_settlements` tables come
+   from Prisma migrations, not from `init-db`). Re-run `migrate` alone after
+   pulling new migrations.
+3. **Proof of wiring.** `make -f deploy/sandbox/Makefile attest-check` — both lines
+   must read `OK`.
+4. **Record.** Send one multi-tool turn through the chat. When the run completes,
+   the session's audit download carries the sealed envelope. Verify it without the
+   stack: `uvx --from orcha-sdk orcha verify <envelope.json>` → `valid=True`. Flip
+   one byte and verify again — the check that breaks is named.
+5. **Refuse.** With `SETTLEMENT_REQUIRE_ATTESTATION=true`, a charged call settles
+   only after the seal and only if the signed `verdicts[]` carry no `fail`. Run a
+   turn whose declared criterion fails: the settle log names
+   `CHECK_VERDICT_FAIL`, no credit is written, and the envelope still verifies —
+   the refusal is in the signed bytes.
+
+Honesty: the envelope proves what the runtime recorded and that it was not
+altered afterwards. It does not prove the work was correct.
+
+Host-run tools: containers resolve `host.docker.internal` to your machine, so an
+MCP or A2A server you run locally registers as
+`http://host.docker.internal:<port>`.
