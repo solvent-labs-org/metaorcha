@@ -7,6 +7,13 @@ import re
 
 _DID_SLUG = re.compile(r"[^a-z0-9._-]+")
 
+# An environment-variable name, nothing else: ``auth_var`` is interpolated into
+# the yaml unquoted (``env:`` key, ``${VAR}`` and ``token_vault_ref``), so a
+# colon, newline or ``#`` would rewrite the document a user does not otherwise
+# control. Same pattern at the route (422) and here (ValueError).
+AUTH_VAR_PATTERN = r"^[A-Z_][A-Z0-9_]{0,63}$"
+_AUTH_VAR = re.compile(AUTH_VAR_PATTERN)
+
 
 def agent_did_from_name(name: str) -> str:
     slug = _DID_SLUG.sub("-", name.strip().lower()).strip("-")[:48] or "mcp"
@@ -29,6 +36,11 @@ def build_mcp_emerge_yaml(
     did = agent_did_from_name(name)
     desc = (description or f"User MCP: {name}").strip()
     auth = (auth_var or "").strip() or None
+    if auth and not _AUTH_VAR.fullmatch(auth):
+        raise ValueError(
+            "auth_var must be an environment variable name "
+            "(uppercase letters, digits, underscore; max 64 chars)"
+        )
     transport = transport.strip().lower()
 
     if transport == "stdio":

@@ -38,3 +38,20 @@ def test_sse_requires_url():
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+def test_auth_var_must_be_an_env_var_name():
+    # Unquoted in the yaml: a colon or newline would rewrite the document.
+    for bad in ("MCP TOKEN", "mcp_token", "X: y", "A\nB", "1ABC", "A" * 65, "#"):
+        try:
+            build_mcp_emerge_yaml(
+                name="x", transport="sse", endpoint="https://e.com", auth_var=bad
+            )
+        except ValueError as exc:
+            assert "auth_var" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")
+    text = build_mcp_emerge_yaml(
+        name="x", transport="sse", endpoint="https://e.com", auth_var="_A1_TOKEN"
+    )
+    assert "token_vault_ref: _A1_TOKEN" in text
