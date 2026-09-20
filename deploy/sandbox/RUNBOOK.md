@@ -84,7 +84,9 @@ proves, in order:
 2. **Schema.** `make -f deploy/sandbox/Makefile up` now runs `migrate` after the
    containers start (the `attestations` and `attested_settlements` tables come
    from Prisma migrations, not from `init-db`). Re-run `migrate` alone after
-   pulling new migrations.
+   pulling new migrations. A postgres volume from before this step has tables
+   but no migration history and stops with Prisma `P3005`; `migrate` now names
+   the two ways out (fresh volume, or baseline with `migrate resolve --applied`).
 3. **Proof of wiring.** `make -f deploy/sandbox/Makefile attest-check` — both lines
    must read `OK`.
 4. **Record.** Send one multi-tool turn through the chat. When the run completes,

@@ -22,6 +22,15 @@ check-env:
 # inside the superagent image, which carries common/database. Idempotent.
 migrate:
 	@echo "Applying Prisma migrations..."
+	@# A volume created before this target existed has tables but no Prisma
+	@# history; `migrate deploy` then stops with P3005 and no hint. Say what
+	@# it means and what the two ways out are, instead of a Prisma error code.
+	@if [ "$$(docker exec -i sandbox-postgres psql -U postgres orcha -tAc "select (select count(*) from information_schema.tables where table_schema='public' and table_name<>'_prisma_migrations') > 0 and not exists (select 1 from information_schema.tables where table_name='_prisma_migrations')" 2>/dev/null)" = "t" ]; then \
+	  echo "ERROR: the sandbox database already has tables but no Prisma migration history (P3005): this volume predates the migrate step."; \
+	  echo "  Fresh start (destroys sandbox data):  $(COMPOSE) down -v   then   make -f deploy/sandbox/Makefile up"; \
+	  echo "  Keep the data: baseline it, then re-run migrate — for each migration already reflected in the schema:"; \
+	  echo "    $(COMPOSE) run --rm --no-deps -T --entrypoint python superagent -m prisma migrate resolve --applied <migration_dir_name> --schema=/app/common/database/schema.prisma"; \
+	  exit 1; fi
 	@$(COMPOSE) run --rm --no-deps -T --entrypoint python superagent -m prisma migrate deploy --schema=/app/common/database/schema.prisma
 	@echo "  migrations applied."
 
