@@ -317,6 +317,28 @@ export const devAgents = {
     apiFetch<void>(`/api/v1/dev/agents/${id}`, { method: 'DELETE' }),
 }
 
+// ── Plugins (user-owned MCP) ──────────────────────────────────────────────────
+export interface ConnectMcpRequest {
+  name: string
+  description?: string
+  transport: 'sse' | 'stdio'
+  endpoint?: string
+  command?: string
+  args?: string[]
+  /** Environment-variable name for the token; sent only together with auth_value. */
+  auth_var?: string
+  auth_value?: string
+}
+
+export const plugins = {
+  /** The Gateway builds the manifest and stores the token in the vault (PR #81). */
+  connectMcp: (body: ConnectMcpRequest) =>
+    apiFetch<RegisterAgentResponse>('/api/v1/plugins/mcp', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 export const settingsApi = {
   get: () =>
