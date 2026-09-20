@@ -81,13 +81,25 @@ RUN /app/.venv/bin/playwright install --with-deps --only-shell chromium \
 COPY --chown=appuser:appuser services/superagent/src ./services/superagent/src
 COPY --chown=appuser:appuser services/superagent/.env.example ./services/superagent/.env.example
 
+# Attested profile (RFC 0003): the run observer + signer (services/validator),
+# the envelope crypto (node/emerge_node) and the verifier the settle gate
+# calls (sdk/emerge.run_attestation) are optional workspace packages that
+# `uv sync --package superagent` does not install. Ship their sources on the
+# path — a path, not a dependency — so a stock boot still degrades gracefully
+# and the attested boot does not exit with "validator package is unavailable".
+# Their only third-party needs (cryptography, pyyaml, httpx) are already in
+# the venv.
+COPY --chown=appuser:appuser services/validator/src ./services/validator/src
+COPY --chown=appuser:appuser node/src ./node/src
+COPY --chown=appuser:appuser sdk/src ./sdk/src
+
 # Platform MCP manifests + servers (e.g. Chomper) for PlatformToolSeeder
 COPY --chown=appuser:appuser common/emerge-tools /app/common/emerge-tools
 
 USER appuser
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app:$PYTHONPATH" \
+    PYTHONPATH="/app:/app/services/validator/src:/app/node/src:/app/sdk/src:$PYTHONPATH" \
     HOME=/app
 
 EXPOSE 8002
