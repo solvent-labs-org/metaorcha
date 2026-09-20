@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { credentials, devAgents } from '../../api/client'
-import { buildMcpEmergeYaml } from '../../lib/mcpEmergeYaml'
+import { plugins } from '../../api/client'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 
@@ -27,24 +26,17 @@ export function PluginsModal({ open, onClose }: PluginsModalProps) {
     setError(null)
     setBusy(true)
     try {
-      const yaml = buildMcpEmergeYaml({
-        name,
+      // One JSON call. The Gateway writes the manifest and stores the token
+      // in the vault before registering; the token never touches the browser
+      // beyond this request body.
+      const token = authValue.trim()
+      await plugins.connectMcp({
+        name: name.trim(),
         transport,
-        endpoint: transport === 'sse' ? endpoint : undefined,
-        command: transport === 'stdio' ? command : undefined,
-        authVar: authValue.trim() ? authVar : undefined,
+        endpoint: transport === 'sse' ? endpoint.trim() : undefined,
+        command: transport === 'stdio' ? command.trim() : undefined,
+        ...(token ? { auth_var: authVar, auth_value: token } : {}),
       })
-      const file = new File([yaml], 'emerge.yaml', { type: 'text/yaml' })
-      const res = await devAgents.register(file)
-      const agentId = res.data.agent_id
-      if (authValue.trim()) {
-        await credentials.set({
-          agent_id: agentId,
-          var_name: authVar,
-          value: authValue.trim(),
-          scope: 'permanent',
-        })
-      }
       void qc.invalidateQueries({ queryKey: ['dev-agents'] })
       onClose()
       setName('')
