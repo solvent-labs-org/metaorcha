@@ -526,7 +526,7 @@ class SettlementGateObserver:
         per tool call, harmless because the composite continues, but noise on
         every attested run).
         """
-        return None
+        return
 
     async def on_run_complete(self, session_id: str) -> None:
         try:
