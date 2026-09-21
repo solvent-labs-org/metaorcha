@@ -173,9 +173,17 @@ class ExecutionMiddleware:
         if isinstance(criteria, dict) and criteria:
             from .criteria import criteria_digest, step_declared_acceptance
 
+            # Criteria read the agent's bytes, not the rendered card: the
+            # normalizer caps plain-text content at 280 chars for the
+            # markdown_card, which cut a 500-char test-runner JSON mid-string
+            # on the 2026-09-21 bed and turned `exit_code: 1` into "no exit
+            # code" (n/a). A long *passing* output would have been refused
+            # the same way. Fall back to the display content only when the
+            # dispatch did not return text.
+            criteria_source = raw_output if isinstance(raw_output, str) else content_str
             declared_meta["criteria_digest"] = criteria_digest(criteria)
             declared_meta["declared_acceptance"] = step_declared_acceptance(
-                criteria, content_str
+                criteria, criteria_source
             )
 
         # Step 6: Checklist auto-update
