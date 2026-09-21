@@ -198,10 +198,59 @@ class RunAttestationObserver:
 
     @staticmethod
     def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
-        """One run-level declared_acceptance verdict from step metadata."""
+        """One run-level declared_acceptance verdict from step metadata.
+
+        Per criterion across the run's steps: ``fail`` if any applicable step
+        failed; ``pass`` if at least one applicable step passed and none
+        failed; and a criterion no step was applicable to fails the run
+        ("no step reported an exit code") — declaring ``exit_zero`` and never
+        running anything is not acceptance. Steps sealed before per-criterion
+        results existed (no ``criteria`` map) fall back to fail-wins-else-last.
+        """
         seen = [s.declared_acceptance for s in steps if s.declared_acceptance]
         if not seen:
             return None
+        if all(isinstance(e.get("criteria"), dict) for e in seen):
+            keys: list[str] = []
+            for e in seen:
+                for k in e["criteria"]:
+                    if k not in keys:
+                        keys.append(k)
+            if not keys:
+                return None
+            per_key: dict[str, str] = {}
+            for key in keys:
+                results = [e["criteria"][key] for e in seen if key in e["criteria"]]
+                if "fail" in results:
+                    per_key[key] = "fail"
+                elif "pass" in results:
+                    per_key[key] = "pass"
+                else:
+                    per_key[key] = "n/a"
+            failing = [k for k, v in per_key.items() if v == "fail"]
+            unapplied = [k for k, v in per_key.items() if v == "n/a"]
+            if failing:
+                key = failing[0]
+                step_detail = next(
+                    (
+                        str(e.get("detail"))
+                        for e in seen
+                        if e["criteria"].get(key) == "fail" and e.get("detail")
+                    ),
+                    "fail",
+                )
+                result, detail = "fail", f"{key}: {step_detail}"
+            elif unapplied:
+                key = unapplied[0]
+                result = "fail"
+                detail = (
+                    "no step reported an exit code"
+                    if key == "exit_zero"
+                    else f"no step was applicable to {key}"
+                )
+            else:
+                result, detail = "pass", "ok"
+            return {"check": "declared_acceptance", "result": result, "detail": detail}
         failed = next((item for item in seen if item.get("result") == "fail"), None)
         chosen = failed or seen[-1]
         result = chosen.get("result")
