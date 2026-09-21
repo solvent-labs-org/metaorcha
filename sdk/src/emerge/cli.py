@@ -9,7 +9,9 @@ only (resist scope creep — test/deploy/login are post-launch):
 - ``orcha-sdk validate``  validator demo (``--once`` synthetic attestation)
 - ``orcha-sdk verify <envelope.json>``  offline run attestation verifier (RFC 0003)
 - ``orcha-sdk record seal <run.json>``  seal a run into a signed envelope with a
-  local key and no service (RFC 0003 producer); ``record keygen`` mints the key
+  local key and no service (RFC 0003 producer); ``record keygen`` mints the key;
+  ``record hook claude-code`` is the Claude Code hook that journals every tool
+  call and seals the receipt on Stop
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import importlib.util
 import json
 import logging
 import os
+import shlex
 import sys
 import threading
 from datetime import UTC, datetime
@@ -26,6 +29,8 @@ from pathlib import Path
 
 from . import __version__
 from .client import DEFAULT_REGISTRY_URL, RegistryError, register
+from .hooks import claude_code_settings, run_claude_code_hook
+from .journal import DEFAULT_POLICY, parse_criteria
 from .manifest import manifest_yaml
 from .record import (
     EphemeralKeyRefused,
@@ -385,6 +390,44 @@ def cmd_record_seal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_record_hook(args: argparse.Namespace) -> int:
+    """Harness hook entry point: one payload on stdin -> journal step or receipt."""
+    prog = f"orcha record hook {args.harness}"
+    try:
+        criteria = parse_criteria(args.criteria)
+    except ValueError as exc:
+        print(f"{prog}: {exc}", file=sys.stderr)
+        return 1
+    if args.print_settings:
+        command = "orcha record hook claude-code"
+        if args.key:
+            command += f" --key {shlex.quote(args.key)}"
+        if args.policy != DEFAULT_POLICY:
+            command += f" --policy {shlex.quote(args.policy)}"
+        if args.criteria:
+            command += f" --criteria {shlex.quote(args.criteria)}"
+        if args.agent_did:
+            command += f" --agent-did {shlex.quote(args.agent_did)}"
+        print(json.dumps(claude_code_settings(command), indent=2))
+        return 0
+    try:
+        payload = json.loads(sys.stdin.read())
+    except json.JSONDecodeError as exc:
+        print(f"{prog}: malformed hook payload: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(payload, dict):
+        print(f"{prog}: hook payload must be a JSON object", file=sys.stderr)
+        return 1
+    return run_claude_code_hook(
+        payload,
+        root=args.root,
+        key_path=args.key,
+        policy=args.policy,
+        criteria=criteria,
+        agent_did=args.agent_did,
+    )
+
+
 def cmd_record_keygen(args: argparse.Namespace) -> int:
     """Mint a local Ed25519 signing key (base64 seed, mode 0600). Never prints it."""
     prog = "emerge record keygen"
@@ -545,6 +588,53 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="replace an existing key file"
     )
     pkey.set_defaults(func=cmd_record_keygen)
+
+    phook = rsub.add_parser(
+        "hook",
+        help="harness hook: journal one tool call, or seal the receipt on Stop",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Reads one hook payload from stdin. On PostToolUse/PostToolUseFailure\n"
+            "it appends the call (args, output, success, latency, and for Bash the\n"
+            "exit code) to <cwd>/.orcha/runs/<session_id>.json; on Stop it seals\n"
+            "that journal with the local key into\n"
+            "<cwd>/.orcha/receipts/<session_id>.json and prints the verify line.\n"
+            "Raw args and outputs stay in the journal on this machine; the\n"
+            "receipt carries only their hashes.\n"
+            "\n"
+            "Install (Claude Code): merge the output of\n"
+            "  orcha record hook claude-code --print-settings --criteria exit_zero\n"
+            "into .claude/settings.json, and mint a key with `orcha record keygen`.\n"
+            "\n"
+            "exit codes: 0 recorded/sealed (or not our event); 1 non-blocking\n"
+            "error shown by the harness. Never 2 - a receipt never blocks a call."
+        ),
+    )
+    phook.add_argument(
+        "harness", choices=["claude-code"], help="which harness's payload"
+    )
+    phook.add_argument(
+        "--key", help="signing key file (default: ORCHA_KEY_PATH or ~/.orcha/key)"
+    )
+    phook.add_argument(
+        "--policy",
+        default=DEFAULT_POLICY,
+        help=f"policy name for policy_version (default {DEFAULT_POLICY})",
+    )
+    phook.add_argument(
+        "--criteria",
+        help="comma-separated declared criteria, e.g. exit_zero,citations_required",
+    )
+    phook.add_argument(
+        "--agent-did", help="agent DID for the receipt (default: the key's)"
+    )
+    phook.add_argument("--root", help="journal root instead of the payload's cwd")
+    phook.add_argument(
+        "--print-settings",
+        action="store_true",
+        help="print the .claude/settings.json hooks block for this command and exit",
+    )
+    phook.set_defaults(func=cmd_record_hook)
 
     return p
 
