@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -243,12 +244,25 @@ async def test_system_tool_step_lands_on_the_observer_seam():
 
 
 @pytest.mark.asyncio
-async def test_declared_criteria_read_the_raw_output_not_the_280_char_card():
+async def test_declared_criteria_read_the_raw_output_not_the_280_char_card(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Regression from the 2026-09-21 local bed: the normalizer caps plain
     text at 280 chars for the markdown_card; a test-runner JSON longer than
     that was cut mid-string, so ``exit_code: 1`` read as "no exit code"."""
     import json
     from unittest.mock import AsyncMock, patch
+
+    # Importing the pipeline builds superagent.config.Settings; the hosted
+    # observer-seam job runs without these, so supply placeholders here.
+    for key, value in {
+        "OPENROUTER_API_KEY": "test",
+        "REDIS_URL": "redis://localhost:6379/9",
+        "DATABASE_URL": "postgresql://u:p@localhost:5432/x",
+        "VAULT_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "PND_SERVICE_URL": "http://localhost:8001",
+    }.items():
+        monkeypatch.setenv(key, os.environ.get(key, value))
 
     from superagent.middleware.pipeline import ExecutionMiddleware
 
