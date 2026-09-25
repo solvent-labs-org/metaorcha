@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { OwlMascot, type OwlState } from '../components/ui/OwlMascot'
 import { Button } from '../components/ui/Button'
 
-const STATES: OwlState[] = ['idle', 'executing', 'verified', 'error']
+const STATES: OwlState[] = ['idle', 'executing', 'complete', 'error']
 
 /**
  * Dev-only playground for Metis (the owl mascot) — mounted at /dev/owl in
@@ -57,7 +57,7 @@ export function OwlPreview() {
       </div>
 
       <p className="max-w-lg text-center text-caption text-text-secondary">
-        Locked Metis design — black idle · yellow executing · green verified · red error.
+        Locked Metis design — black idle · yellow executing · green complete · red error.
         Blinks and wing reveal on state change. Source: <code>components/ui/metis/</code>.
       </p>
     </div>
