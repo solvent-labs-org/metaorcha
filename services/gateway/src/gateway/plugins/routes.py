@@ -8,6 +8,8 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, model_validator
 
+from common.utils.src.operator import STDIO_OPERATOR_ONLY, is_operator
+
 from ..auth.models import TokenPayload
 from ..dependencies import require_auth
 from .mcp_manifest import (
@@ -45,6 +47,12 @@ async def connect_mcp(
     request: Request,
     payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Any:
+    # AD-13: a stdio transport runs a subprocess on our host. Operators only,
+    # on this door and on the Registry's — the Registry re-checks.
+    if body.transport == "stdio" and not is_operator(payload.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=STDIO_OPERATOR_ONLY
+        )
     try:
         yaml_text = build_mcp_emerge_yaml(
             name=body.name,

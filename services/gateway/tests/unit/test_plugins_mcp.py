@@ -132,3 +132,58 @@ async def test_auth_var_and_value_come_together(client_with_mocks):
     resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=half)
     assert resp.status_code == 422
     registry.post.assert_not_awaited()
+
+
+# ── AD-13: stdio is operator-only on the connect door ────────────────────────
+
+_STDIO = {
+    "name": "Local MCP",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "some-mcp-server"],
+}
+
+
+def _no_operators(monkeypatch):
+    monkeypatch.delenv("OPERATOR_USER_IDS", raising=False)
+    monkeypatch.delenv("DISABLE_AUTH", raising=False)
+
+
+async def test_stdio_refused_for_a_non_operator(client_with_mocks, monkeypatch):
+    _no_operators(monkeypatch)
+    ac, registry, headers, superagent = client_with_mocks
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_STDIO)
+    assert resp.status_code == 403
+    assert resp.json()["detail"].startswith("stdio_operator_only")
+    registry.post.assert_not_awaited()
+    superagent.post.assert_not_awaited()
+
+
+async def test_stdio_allowed_for_a_listed_operator(client_with_mocks, monkeypatch):
+    _no_operators(monkeypatch)
+    monkeypatch.setenv("OPERATOR_USER_IDS", "someone-else, user-001")
+    ac, registry, headers, _ = client_with_mocks
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_STDIO)
+    assert resp.status_code == 201
+    registry.post.assert_awaited_once()
+
+
+async def test_stdio_allowed_when_auth_is_disabled(client_with_mocks, monkeypatch):
+    _no_operators(monkeypatch)
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+    ac, registry, headers, _ = client_with_mocks
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_STDIO)
+    assert resp.status_code == 201
+    registry.post.assert_awaited_once()
+
+
+async def test_sse_is_not_operator_gated(client_with_mocks, monkeypatch):
+    _no_operators(monkeypatch)
+    ac, registry, headers, _ = client_with_mocks
+    resp = await ac.post(
+        "/api/v1/plugins/mcp",
+        headers=headers,
+        json={"name": "Docs MCP", "transport": "sse", "endpoint": "https://x.io/mcp"},
+    )
+    assert resp.status_code == 201
+    registry.post.assert_awaited_once()
