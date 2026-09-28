@@ -11,15 +11,21 @@ from pydantic import BaseModel, Field, model_validator
 from common.utils.src.operator import STDIO_OPERATOR_ONLY, is_operator
 
 from ..auth.models import TokenPayload
-from ..dependencies import require_auth
+from ..config import settings
+from ..dependencies import require_member
 from .mcp_manifest import (
     AUTH_VAR_PATTERN,
-    agent_did_from_name,
     build_mcp_emerge_yaml,
+    mint_connection_did,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/plugins", tags=["plugins"])
+
+CONNECTIONS_DISABLED = (
+    "connections_disabled: connecting a tool is turned off on this deployment "
+    "(CONNECTIONS_ENABLED)"
+)
 
 
 class ConnectMcpRequest(BaseModel):
@@ -45,14 +51,21 @@ class ConnectMcpRequest(BaseModel):
 async def connect_mcp(
     body: ConnectMcpRequest,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    payload: Annotated[TokenPayload, Depends(require_member)],
 ) -> Any:
+    # AD-18: the whole connections feature sits behind one flag, off by default.
+    if not settings.connections_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=CONNECTIONS_DISABLED
+        )
     # AD-13: a stdio transport runs a subprocess on our host. Operators only,
     # on this door and on the Registry's — the Registry re-checks.
     if body.transport == "stdio" and not is_operator(payload.user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=STDIO_OPERATOR_ONLY
         )
+    # AD-15: one DID per registration, minted before anything is stored.
+    agent_id = mint_connection_did(body.name)
     try:
         yaml_text = build_mcp_emerge_yaml(
             name=body.name,
@@ -62,18 +75,18 @@ async def connect_mcp(
             args=body.args,
             auth_var=body.auth_var if body.auth_value else None,
             description=body.description,
+            did=agent_id,
         )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
-    # The manifest pins the DID from the name, so the vault key is known
-    # before the Registry answers. Store the credential FIRST: if the vault
-    # refuses, nothing is registered and the caller can simply retry. The
-    # old order (register, then vault) returned 201 on a failed vault write
-    # and left a registered MCP with no credential behind it.
-    agent_id = agent_did_from_name(body.name)
+    # The manifest pins the minted DID, so the vault key is known before the
+    # Registry answers. Store the credential FIRST: if the vault refuses,
+    # nothing is registered and the caller can simply retry. The old order
+    # (register, then vault) returned 201 on a failed vault write and left a
+    # registered MCP with no credential behind it.
     if body.auth_value and body.auth_var:
         sa = request.app.state.superagent
         cred = await sa.post(

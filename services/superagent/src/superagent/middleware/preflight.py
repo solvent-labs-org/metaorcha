@@ -16,7 +16,13 @@ from internal_commons.interrupts import (
     InterruptType,
 )
 
-from .auth_manager import AuthManager, AuthResolutionError
+from .auth_manager import AuthManager, AuthResolutionError, read_credential, token_ref
+from .connections import (
+    CONNECTIONS_DISABLED,
+    connections_enabled,
+    credential_missing,
+    is_connection,
+)
 from .manifest_cache import MANIFEST_CACHE
 from .oauth_grants import (
     capability_grant_key as _redis_cap_key,
@@ -124,6 +130,14 @@ class PreFlightManager:
         # 1. Fetch manifest
         manifest = await MANIFEST_CACHE.get_manifest(agent_id)
         transport_type = manifest.get("transport", {}).get("type", "").upper()
+
+        # 1.5 Connections (story 1.3): refused while the feature is off, and a
+        #     missing token fails here, before the health probe below sends
+        #     anything to the platform.
+        if is_connection(manifest):
+            await self._assert_connection_callable(
+                agent_id, user_id, manifest, capability_id
+            )
 
         # 2. Health check — skipped for STDIO agents (they are spawned as subprocesses,
         #    not long-running HTTP services; there is no endpoint to probe).
@@ -238,6 +252,37 @@ class PreFlightManager:
             "headers": headers,
             "resolved_env": resolved_env,
         }
+
+    async def _assert_connection_callable(
+        self,
+        agent_id: str,
+        user_id: str,
+        manifest: dict[str, Any],
+        capability_id: str,
+    ) -> None:
+        """Refuse a connection call that cannot succeed, before any request.
+
+        Raises PreFlightError (a named hard failure, not an auth interrupt):
+        ``connections_disabled`` while CONNECTIONS_ENABLED is off, or
+        ``credential_missing`` when the connection has token strategies and
+        the caller's vault holds none of their tokens.
+        """
+        if not connections_enabled():
+            raise PreFlightError(CONNECTIONS_DISABLED)
+        refs = [
+            ref
+            for ref in (
+                token_ref(s)
+                for s in self._extract_auth_strategies(manifest, capability_id)
+            )
+            if ref
+        ]
+        if not refs:
+            return
+        for ref in refs:
+            if await read_credential(self._vault, user_id, agent_id, ref):
+                return
+        raise PreFlightError(credential_missing(refs[0]))
 
     # ── Auth interrupt construction ───────────────────────────────────────────
 
