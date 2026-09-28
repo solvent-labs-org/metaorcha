@@ -50,6 +50,12 @@ class StepResult:
     # (auth headers live on the handlers, not here). In-process only —
     # stripped from the Kafka fan-out payload (step_events.step_result_payload).
     args: dict[str, Any] = field(default_factory=dict)
+    # The raw handler result as the JSON value the RFC 0003 output_hash
+    # commits to: emerge.preimage.output_preimage, credentials already
+    # redacted, taken before the OutputNormalizer (spine AD-16). None when it
+    # was not built — the observer then hashes ``content``. In-process only,
+    # stripped from the Kafka fan-out payload like ``args``.
+    output_preimage: Any = None
 
 
 @runtime_checkable

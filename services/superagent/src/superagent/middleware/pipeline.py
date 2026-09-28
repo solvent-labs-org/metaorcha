@@ -16,8 +16,19 @@ from .input_guard import InputGuard, InputGuardError
 from .observers import StepResult, emit_step_complete
 from .output_normalizer import OutputNormalizer
 from .preflight import PreFlightManager
+from .step_output import call_credentials, step_output_preimage
 
 logger = logging.getLogger(__name__)
+
+
+def _is_control_flow(exc: BaseException) -> bool:
+    """Interrupts pause a call; they are not a failed call and record no step."""
+    from langgraph.errors import GraphInterrupt
+
+    from ..pricing.guard import PaymentInterrupt
+    from .preflight import AuthInterruptRequired
+
+    return isinstance(exc, (AuthInterruptRequired, PaymentInterrupt, GraphInterrupt))
 
 
 def _structural_verify(content: str, has_canvas: bool) -> tuple[bool, str]:
@@ -120,6 +131,11 @@ class ExecutionMiddleware:
 
         auth_headers: dict[str, str] = result["headers"]
         manifest: dict[str, Any] = result["manifest"]
+        # AD-16: the credentials resolved for this call, redacted out of the
+        # output before its hash is taken.
+        credentials = call_credentials(
+            manifest, result.get("resolved_env"), auth_headers
+        )
 
         # Step 4: Handler Dispatch
         _call_start = datetime.now(UTC)
@@ -131,16 +147,35 @@ class ExecutionMiddleware:
         # ${VAR} placeholders from the vault; pass a copy so we don't mutate the cache.
         if result.get("resolved_env") is not None:
             transport = {**transport, "resolved_env": result["resolved_env"]}
-        raw_output = await self._dispatch_with_timeout(
-            protocol=protocol,
-            agent_id=agent_id,
-            capability_id=capability_id,
-            args=args,
-            auth_headers=auth_headers,
-            transport=transport,
-            config=config,
-            call_id=call_id,
-        )
+        try:
+            raw_output = await self._dispatch_with_timeout(
+                protocol=protocol,
+                agent_id=agent_id,
+                capability_id=capability_id,
+                args=args,
+                auth_headers=auth_headers,
+                transport=transport,
+                config=config,
+                call_id=call_id,
+            )
+        except Exception as exc:
+            if not _is_control_flow(exc):
+                await self._emit_failed_dispatch(
+                    exc,
+                    agent_id=agent_id,
+                    capability_id=capability_id,
+                    protocol=protocol,
+                    tool_name=tool_name,
+                    args=args,
+                    call_id=call_id,
+                    base_fee=base_fee,
+                    credentials=credentials,
+                    started=_call_start,
+                )
+            raise
+        # AD-16: the step commits to the raw result, not the display copy the
+        # normalizer builds next.
+        output_preimage = step_output_preimage(raw_output, credentials)
 
         # Step 5: OutputNormalizer (async — may upload to S3 for file outputs)
         agent_name = str(manifest.get("name") or "").strip()
@@ -203,6 +238,7 @@ class ExecutionMiddleware:
                 tool_name=tool_name,
                 success=success,
                 content=content_str,
+                output_preimage=output_preimage,
                 user_id=self._state.get("user_id", ""),
                 session_id=self._state.get("session_id", ""),
                 latency_ms=_latency_ms,
@@ -248,6 +284,53 @@ class ExecutionMiddleware:
         normalised["llm_cost_usd"] = str(llm_cost)
         normalised["total_cost_usd"] = str(total_cost)
         return normalised
+
+    async def _emit_failed_dispatch(
+        self,
+        exc: Exception,
+        *,
+        agent_id: str,
+        capability_id: str,
+        protocol: str,
+        tool_name: str,
+        args: dict[str, Any],
+        call_id: str,
+        base_fee: Decimal,
+        credentials: list[tuple[str, str]],
+        started: datetime,
+    ) -> None:
+        """Record a call whose dispatch raised as a ``success: false`` step.
+
+        The caller re-raises, so retry and error handling are unchanged. A
+        retried call re-emits under the same ``call_id``; the run-attestation
+        observer keeps the last attempt, so the receipt has one row per call.
+        The content matches the ToolMessage the node builds from the error.
+        Never raises: it runs inside the caller's ``except``, where a new
+        exception would replace the one being re-raised.
+        """
+        try:
+            error_text = f"Error: {exc}"
+            record = StepResult(
+                call_id=call_id,
+                agent_id=agent_id,
+                capability_id=capability_id,
+                protocol=protocol,
+                tool_name=tool_name,
+                success=False,
+                content=error_text,
+                output_preimage=step_output_preimage(error_text, credentials),
+                user_id=self._state.get("user_id", ""),
+                session_id=self._state.get("session_id", ""),
+                latency_ms=int((datetime.now(UTC) - started).total_seconds() * 1000),
+                base_fee=str(base_fee),
+                verdict={"verified": False, "reason": error_text[:120]},
+                metadata={"goal": self._session_goal()},
+                args=dict(args),
+            )
+        except Exception:
+            logger.exception("failed-dispatch step not recorded | call_id=%s", call_id)
+            return
+        await emit_step_complete(record)
 
     async def _resolve_base_fee(self, agent_id: str) -> Decimal:
         """Fetch the agent's base_fee from DB (or manifest cache). Returns Decimal("0") if free."""
