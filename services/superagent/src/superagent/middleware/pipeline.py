@@ -22,12 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 def _is_control_flow(exc: BaseException) -> bool:
-    """Interrupts pause a call; they are not a failed call and record no step."""
-    from langgraph.errors import GraphInterrupt
+    """Interrupts pause a call; they are not a failed call and record no step.
 
-    from ..pricing.guard import PaymentInterrupt
-    from .preflight import AuthInterruptRequired
+    Runs inside the dispatch ``except``: if the interrupt types cannot be
+    imported, record nothing rather than raise over the original exception.
+    """
+    try:
+        from langgraph.errors import GraphInterrupt
 
+        from ..pricing.guard import PaymentInterrupt
+        from .preflight import AuthInterruptRequired
+    except Exception:
+        return True
     return isinstance(exc, (AuthInterruptRequired, PaymentInterrupt, GraphInterrupt))
 
 

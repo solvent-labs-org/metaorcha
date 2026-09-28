@@ -7,9 +7,12 @@ nothing. A hosted deployment injects its own observer (e.g. a
 it is never part of the public package.
 
 The contract is deliberately tiny: one coroutine, called once per agent
-execution, immediately after the OutputNormalizer step. Observers MUST NOT
-raise — a failing observer must never break a user-facing execution. The
-pipeline guards the call, but observers should also fail closed internally.
+execution, immediately after the OutputNormalizer step — and once per
+dispatch attempt that raises, with ``success=False``. A retried call can
+therefore report more than once under one ``call_id``; the last report is the
+call's outcome. Observers MUST NOT raise — a failing observer must never
+break a user-facing execution. The pipeline guards the call, but observers
+should also fail closed internally.
 """
 
 from __future__ import annotations
@@ -64,7 +67,9 @@ class ExecutionObserver(Protocol):
 
     The public repo ships :class:`NoOpObserver`. Hosted deployments inject a
     recorder server-side. Implementations must be non-blocking-friendly and
-    must never raise out to the caller.
+    must never raise out to the caller. A dispatch that raises is reported
+    too (``success=False``) and retries reuse the ``call_id``, so an observer
+    that keys by ``call_id`` must treat the last report as the outcome.
 
     Optional second hook: observers may also implement
     ``async def on_run_complete(self, session_id: str)``, dispatched once per

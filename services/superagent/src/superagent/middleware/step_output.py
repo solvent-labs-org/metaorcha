@@ -13,6 +13,7 @@ only the value the observer hashes changes.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Mapping
@@ -116,13 +117,29 @@ def call_credentials(
     return pairs
 
 
+@functools.cache
+def _warn_sdk_missing() -> None:
+    """Say once, and only where receipts are sealed, that AD-16 is inactive."""
+    try:
+        from ..config import settings  # noqa: PLC0415
+
+        attesting = bool(getattr(settings, "run_attestation_enabled", False))
+    except Exception:
+        attesting = False
+    if attesting:
+        logger.warning(
+            "RUN_ATTESTATION_ENABLED=true but emerge.preimage (orcha-sdk) is not "
+            "importable — receipts hash the display copy, not the raw output (AD-16)"
+        )
+
+
 def step_output_preimage(raw_output: Any, credentials: list[tuple[str, str]]) -> Any:
     """The redacted pre-image of *raw_output*, or None when it cannot be built.
 
     None tells the run-attestation observer to fall back to the display
     content. That happens only where the SDK is not installed (the SuperAgent
-    image ships without it, and without the validator that consumes this).
-    Never raises.
+    image ships without it, and without the validator that consumes this);
+    with run attestation on, that is logged once. Never raises.
     """
     try:
         from emerge.preimage import (  # noqa: PLC0415 — optional workspace package
@@ -130,6 +147,7 @@ def step_output_preimage(raw_output: Any, credentials: list[tuple[str, str]]) ->
             redact_credentials,
         )
     except ImportError:
+        _warn_sdk_missing()
         return None
     try:
         return redact_credentials(output_preimage(raw_output), credentials)

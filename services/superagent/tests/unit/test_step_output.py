@@ -10,6 +10,8 @@ propagates; an interrupt is neither.
 from __future__ import annotations
 
 import builtins
+import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,7 +23,11 @@ from superagent.middleware.observers import (
 )
 from superagent.middleware.pipeline import ExecutionMiddleware
 from superagent.middleware.step_events import step_result_payload
-from superagent.middleware.step_output import call_credentials, step_output_preimage
+from superagent.middleware.step_output import (
+    _warn_sdk_missing,
+    call_credentials,
+    step_output_preimage,
+)
 
 SECRET = "ghp_exampleTokenValue123"
 
@@ -121,6 +127,23 @@ def test_preimage_is_none_without_the_sdk(monkeypatch: pytest.MonkeyPatch) -> No
     assert step_output_preimage("anything", []) is None
 
 
+def test_a_missing_sdk_is_reported_once_where_receipts_are_sealed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from superagent import config
+
+    monkeypatch.setattr(config.settings, "run_attestation_enabled", True)
+    _warn_sdk_missing.cache_clear()
+    with caplog.at_level(logging.WARNING):
+        _warn_sdk_missing()
+        _warn_sdk_missing()
+    _warn_sdk_missing.cache_clear()
+    assert [r.message for r in caplog.records].count(
+        "RUN_ATTESTATION_ENABLED=true but emerge.preimage (orcha-sdk) is not "
+        "importable — receipts hash the display copy, not the raw output (AD-16)"
+    ) == 1
+
+
 def test_kafka_payload_strips_the_preimage() -> None:
     record = StepResult(
         call_id="c1",
@@ -156,7 +179,13 @@ def _preflight(headers: dict[str, str]):
     return FakePreFlightManager
 
 
-async def _execute(dispatch: AsyncMock, *, normalized: str = "display copy"):
+async def _execute(
+    dispatch: AsyncMock,
+    *,
+    normalized: str = "display copy",
+    call_id: str = "call_1",
+    capability: str = "search_repos",
+):
     with (
         patch(
             "superagent.middleware.pipeline.PreFlightManager",
@@ -180,11 +209,11 @@ async def _execute(dispatch: AsyncMock, *, normalized: str = "display copy"):
             state={"user_id": "u1", "session_id": "s1"}
         ).execute(
             agent_id="did:orcha:agent:gh",
-            capability_id="search_repos",
+            capability_id=capability,
             protocol="MCP",
-            tool_name="gh__search_repos",
+            tool_name=f"gh__{capability}",
             args={"q": "orcha"},
-            call_id="call_1",
+            call_id=call_id,
         )
 
 
@@ -219,3 +248,73 @@ async def test_an_interrupt_during_dispatch_records_no_step(recorder) -> None:
     with pytest.raises(GraphInterrupt):
         await _execute(AsyncMock(side_effect=GraphInterrupt(())))
     assert recorder.records == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_to_signed_receipt_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both sides of the seam at once: pipeline → observer → seal → SDK verify."""
+    run_observer = pytest.importorskip("validator.run_observer")
+    signer = pytest.importorskip("validator.signer")
+    from emerge.run_attestation import (
+        canonical_json_bytes,
+        sha256_hex,
+        verify_run_attestation,
+    )
+
+    monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.setenv(signer.ALLOW_EPHEMERAL_KEY_ENV, "1")
+    signer._reset_signing_key_for_tests()
+    table = SimpleNamespace(
+        create=AsyncMock(side_effect=lambda data: SimpleNamespace(id="att-1", **data))
+    )
+    observer = run_observer.RunAttestationObserver(
+        db=SimpleNamespace(attestation=table)
+    )
+    set_observer(observer)
+    try:
+        raw = {
+            "call_a": "x" * 400 + f" {SECRET}",
+            "call_b": {"items": [f"Bearer {SECRET}"]},
+            "call_c": b"\x89PNG binary",
+        }
+        await _execute(
+            AsyncMock(return_value=raw["call_a"]),
+            call_id="call_a",
+            capability="search_repos",
+            normalized=raw["call_a"][:280],
+        )
+        await _execute(
+            AsyncMock(return_value=raw["call_b"]),
+            call_id="call_b",
+            capability="list_issues",
+        )
+        await _execute(
+            AsyncMock(return_value=raw["call_c"]),
+            call_id="call_c",
+            capability="get_file",
+        )
+        await observer.on_run_complete("s1")
+    finally:
+        set_observer(NoOpObserver())
+        signer._reset_signing_key_for_tests()
+
+    (envelope,) = observer.envelopes.values()
+    assert verify_run_attestation(envelope).valid
+    marker = "[REDACTED:Authorization]"
+    expected = [
+        "x" * 400 + f" {marker}",
+        {"items": [marker]},
+        sha256_hex(b"\x89PNG binary"),
+    ]
+    steps = envelope["steps"]
+    assert [s["tool"] for s in steps] == [
+        "did:orcha:agent:gh#search_repos",
+        "did:orcha:agent:gh#list_issues",
+        "did:orcha:agent:gh#get_file",
+    ]
+    assert [s["output_hash"] for s in steps] == [
+        sha256_hex(canonical_json_bytes(v)) for v in expected
+    ]
+    assert SECRET not in canonical_json_bytes(envelope).decode()
