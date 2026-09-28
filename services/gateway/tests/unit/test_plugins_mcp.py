@@ -110,6 +110,28 @@ async def test_connect_mcp_stores_credential_then_registers(client_with_mocks):
     assert f'id: "{did}"'.encode() in files["emerge_yaml"][1]
 
 
+async def test_the_token_goes_to_the_registry_for_the_harvest_only(
+    client_with_mocks,
+):
+    # A server that lists its tools only to a token holder cannot be
+    # registered without it; the Registry gets it in its own header, apart
+    # from the caller's JWT, never in the manifest.
+    ac, registry, headers, _ = client_with_mocks
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_MCP_WITH_AUTH)
+    assert resp.status_code == 201
+    sent = registry.post.await_args.kwargs["headers"]
+    assert sent["X-Harvest-Authorization"] == "Bearer not-a-real-token"
+    assert sent["authorization"] == headers["Authorization"]
+
+
+async def test_no_token_sends_no_harvest_header(client_with_mocks):
+    ac, registry, headers, _ = client_with_mocks
+    open_mcp = {k: v for k, v in _MCP_WITH_AUTH.items() if not k.startswith("auth_")}
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=open_mcp)
+    assert resp.status_code == 201
+    assert "X-Harvest-Authorization" not in registry.post.await_args.kwargs["headers"]
+
+
 async def test_vault_write_failure_is_not_a_201(client_with_mocks):
     ac, registry, headers, superagent = client_with_mocks
     superagent.post = AsyncMock(return_value=Response(500, text="vault down"))

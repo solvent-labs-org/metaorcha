@@ -26,6 +26,8 @@ CONNECTIONS_DISABLED = (
     "connections_disabled: connecting a tool is turned off on this deployment "
     "(CONNECTIONS_ENABLED)"
 )
+# The Registry's register route reads this header for the harvest only.
+HARVEST_AUTHORIZATION_HEADER = "X-Harvest-Authorization"
 
 
 class ConnectMcpRequest(BaseModel):
@@ -112,6 +114,11 @@ async def connect_mcp(
     auth = request.headers.get("authorization")
     if auth:
         headers["authorization"] = auth
+    # A server that lists its tools only to a token holder cannot be harvested
+    # without the token. The Registry uses this for the one harvest, the same
+    # way the SuperAgent sends it on dispatch (http_bearer), and stores nothing.
+    if body.auth_value and body.auth_var:
+        headers[HARVEST_AUTHORIZATION_HEADER] = f"Bearer {body.auth_value}"
     resp = await request.app.state.registry.post(
         "/api/v1/agents/register", files=files, headers=headers
     )
