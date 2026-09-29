@@ -110,3 +110,100 @@ async def test_no_criteria_policy_version_is_today() -> None:
     assert envelope["policy_version"] == DEFAULT_POLICY_VERSION
     assert "+criteria:" not in envelope["policy_version"]
     assert all(v["check"] != "declared_acceptance" for v in envelope["verdicts"])
+
+
+def _declared(result: str, detail: str, **criteria: str) -> dict[str, object]:
+    return {"result": result, "detail": detail, "criteria": criteria}
+
+
+async def _run_verdict(
+    steps: list[dict[str, object]], session: str
+) -> dict[str, object]:
+    observer = RunAttestationObserver(db=FakeDB())
+    digest = criteria_digest({"exit_zero": True})
+    for i, declared in enumerate(steps):
+        await observer.on_step_complete(
+            _step_result(
+                f"c{i}",
+                session_id=session,
+                metadata={"declared_acceptance": declared, "criteria_digest": digest},
+            )
+        )
+    await observer.on_run_complete(session)
+    envelope = next(iter(observer.envelopes.values()))
+    assert verify_run_attestation(envelope).valid is True
+    return next(v for v in envelope["verdicts"] if v["check"] == "declared_acceptance")
+
+
+@pytest.mark.asyncio
+async def test_prd_journey_read_patch_tests_exit_zero_passes() -> None:
+    # read (n/a) → patch (n/a) → tests exit 0 (pass): the run passes.
+    verdict = await _run_verdict(
+        [
+            _declared("n/a", "no exit code in step output", exit_zero="n/a"),
+            _declared("n/a", "no exit code in step output", exit_zero="n/a"),
+            _declared("pass", "ok", exit_zero="pass"),
+        ],
+        "sess-journey-pass",
+    )
+    assert verdict == {"check": "declared_acceptance", "result": "pass", "detail": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_prd_journey_tests_exit_one_fails_and_names_the_step_detail() -> None:
+    verdict = await _run_verdict(
+        [
+            _declared("n/a", "no exit code in step output", exit_zero="n/a"),
+            _declared("fail", "nonzero exit: 1", exit_zero="fail"),
+        ],
+        "sess-journey-fail",
+    )
+    assert verdict["result"] == "fail"
+    assert verdict["detail"] == "exit_zero: nonzero exit: 1"
+
+
+@pytest.mark.asyncio
+async def test_no_step_reported_an_exit_code_fails_the_run() -> None:
+    # Declaring exit_zero and never running anything is not acceptance.
+    verdict = await _run_verdict(
+        [
+            _declared("n/a", "no exit code in step output", exit_zero="n/a"),
+            _declared("n/a", "no exit code in step output", exit_zero="n/a"),
+        ],
+        "sess-journey-none",
+    )
+    assert verdict == {
+        "check": "declared_acceptance",
+        "result": "fail",
+        "detail": "no step reported an exit code",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fail_wins_across_steps_even_after_a_pass() -> None:
+    verdict = await _run_verdict(
+        [
+            _declared("pass", "ok", exit_zero="pass"),
+            _declared("fail", "nonzero exit: 3", exit_zero="fail"),
+        ],
+        "sess-fail-after-pass",
+    )
+    assert verdict["result"] == "fail"
+    assert verdict["detail"] == "exit_zero: nonzero exit: 3"
+
+
+@pytest.mark.asyncio
+async def test_citations_fail_on_one_step_fails_the_run_with_exit_zero_passing() -> (
+    None
+):
+    verdict = await _run_verdict(
+        [
+            _declared(
+                "fail", "missing citations", citations_required="fail", exit_zero="n/a"
+            ),
+            _declared("pass", "ok", citations_required="pass", exit_zero="pass"),
+        ],
+        "sess-mixed",
+    )
+    assert verdict["result"] == "fail"
+    assert verdict["detail"] == "citations_required: missing citations"
