@@ -7,8 +7,10 @@ characters and replaces binary with an artifact reference. This module
 collects the credentials resolved for one call from PreFlight's result and
 builds that value for the observer seam.
 
-The display copy, the checklist, criteria and the ToolMessage are untouched:
-only the value the observer hashes changes.
+The display copy is redacted the same way (``redact_output``) before the
+OutputNormalizer, the criteria step, the checklist, the ToolMessage, the
+transcript and the SSE stream see it: an agent that echoes its own request
+headers must not put the token into the chat or the run audit (story 1.6b).
 """
 
 from __future__ import annotations
@@ -115,6 +117,59 @@ def call_credentials(
     except Exception:
         logger.exception("call_credentials: could not collect credentials")
     return pairs
+
+
+def redact_output(value: Any, credentials: list[tuple[str, str]]) -> Any:
+    """*value* with the exact bytes of every credential replaced by its marker.
+
+    Walks strings, lists, tuples and dict keys/values; anything else that
+    still renders a secret (a content-block object, say) is replaced by its
+    redacted ``str()``. Longer secrets are matched first so a marker is never
+    rewritten. Total: never raises, and without credentials returns *value*.
+    """
+    try:
+        pairs = [
+            (var, secret)
+            for var, secret in credentials or []
+            if isinstance(var, str) and isinstance(secret, str) and secret
+        ]
+        if not pairs:
+            return value
+        pairs.sort(key=lambda pair: len(pair[1]), reverse=True)
+        names = {secret: var for var, secret in pairs}
+        pattern = re.compile("|".join(re.escape(secret) for _, secret in pairs))
+        return _redact_value(value, pattern, names, 0)
+    except Exception:
+        logger.exception("redact_output: could not redact the display copy")
+        return value
+
+
+def _redact_value(
+    value: Any, pattern: re.Pattern[str], names: dict[str, str], depth: int
+) -> Any:
+    def sub(text: str) -> str:
+        return pattern.sub(lambda m: f"[REDACTED:{names[m.group(0)]}]", text)
+
+    if isinstance(value, str):
+        return sub(value)
+    if depth > 64:
+        return sub(str(value))
+    if isinstance(value, dict):
+        return {
+            _redact_value(k, pattern, names, depth + 1): _redact_value(
+                v, pattern, names, depth + 1
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        items = [_redact_value(v, pattern, names, depth + 1) for v in value]
+        return items if isinstance(value, list) else tuple(items)
+    if isinstance(value, (bytes, bytearray, int, float, bool)) or value is None:
+        return value
+    # An object (an MCP content block, an artifact ref): keep it unless it
+    # renders a secret, in which case only its redacted text survives.
+    rendered = str(value)
+    return sub(rendered) if pattern.search(rendered) else value
 
 
 @functools.cache

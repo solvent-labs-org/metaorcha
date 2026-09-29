@@ -297,6 +297,7 @@ async def resume_session(
                 session_id=session_id,
                 value=value,
                 session_credentials=body.session_credentials,
+                user_id=body.user_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:

@@ -24,6 +24,7 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 
 from ..config import settings
+from ..graph.state import session_credentials_from_config
 from ..pnd.gate import pnd_gate
 from ..runtime.session_cancel import (
     get_cancel_event,
@@ -126,6 +127,38 @@ def _make_chat_llm(
         max_tokens=settings.orchestrator_max_tokens,
         **kwargs,
     )
+
+
+async def resolve_byok(config: RunnableConfig, user_id: str) -> dict[str, str] | None:
+    """The ``__llm__`` credentials for this turn, as a local — never state.
+
+    Session-scoped credentials on the run config win (the Gateway forwards
+    them per request); otherwise the permanent BYOK key written via
+    ``POST /api/v1/credentials scope=permanent`` is read from the vault at
+    call time. Returns None when there is no complete key. Never raises.
+    """
+    session = session_credentials_from_config(config).get("__llm__")
+    if isinstance(session, dict) and session.get("api_key"):
+        return {k: str(v) for k, v in session.items() if isinstance(v, str)}
+    if not user_id:
+        return None
+    try:
+        from ..vault.client import VaultClient
+
+        vault = VaultClient()
+        byok: dict[str, str] = {}
+        for var in ("api_key", "base_url", "model"):
+            value = await vault.get_agent_env(user_id, "__llm__", var)
+            if value:
+                byok[var] = value
+        if byok.get("api_key"):
+            logger.info(
+                "orchestrator: using permanent BYOK __llm__ key for user %s", user_id
+            )
+            return byok
+    except Exception:
+        logger.debug("orchestrator: BYOK vault read failed", exc_info=True)
+    return None
 
 
 def _get_small_llm() -> AsyncOpenAI:
@@ -673,11 +706,15 @@ async def orchestrator_llm_node(
         ", ".join(t["function"]["name"] for t in all_tools),
     )
 
+    # AD-14: the BYOK key is resolved into this local for the one call and is
+    # never assigned into state (state is checkpointed).
+    byok = await resolve_byok(config, str(state.get("user_id") or ""))
     chat = _make_chat_llm(
         stream_usage=True,
         model_override=state.get("orchestrator_model_override"),
-        byok=(state.get("_session_credentials") or {}).get("__llm__"),
+        byok=byok,
     )
+    del byok
     _assert_openai_compatible_tool_names(all_tools)
     bound = chat.bind_tools(all_tools) if all_tools else chat
 
