@@ -107,7 +107,10 @@ async def connect_mcp(
     data = resp.json()
     registered = (data.get("data") or {}).get("agent_id")
     if registered and registered != agent_id:
+        # Both ids derive from the caller's name: strip line breaks before logging.
         logger.warning(
-            "mcp connect: registry returned %s for manifest id %s", registered, agent_id
+            "mcp connect: registry returned %s for manifest id %s",
+            str(registered).replace("\r", "").replace("\n", ""),
+            agent_id.replace("\r", "").replace("\n", ""),
         )
     return data
