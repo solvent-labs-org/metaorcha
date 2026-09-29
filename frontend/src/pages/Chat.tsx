@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import { Sidebar } from '../components/layout/Sidebar'
 import { SessionListPanel } from '../components/layout/SessionListPanel'
 import { RightPanel } from '../components/layout/RightPanel'
@@ -13,7 +13,7 @@ import { InputBar } from '../components/ui/InputBar'
 import { CredentialsModal } from '../components/modals/CredentialsModal'
 import { SaveWorkflowModal } from '../components/modals/SaveWorkflowModal'
 import { CrmSetupModal } from '../components/modals/CrmSetupModal'
-import { IntegrationsModal } from '../components/modals/IntegrationsModal'
+import { PluginsModal } from '../components/modals/PluginsModal'
 import { useSessionStore } from '../store/session'
 import { useSessionSidebarStore } from '../store/sessionSidebar'
 import { useAuthStore } from '../store/auth'
@@ -29,6 +29,7 @@ import { CanvasRenderer } from '../components/canvas'
 import { queryClient } from '../lib/queryClient'
 import type {
   AgentClarificationMetadata,
+  AgentInfo,
   AttachedArtifactRef,
   HitlClarificationMetadata,
   Interrupt,
@@ -39,7 +40,6 @@ import { HitlApprovalModal } from '../components/modals/HitlApprovalModal'
 import { OAuthPopupHandler } from '../components/modals/OAuthPopupHandler'
 import { InterruptCredentialModal } from '../components/modals/InterruptCredentialModal'
 import { AgentInterruptModal } from '../components/interrupts/AgentInterruptModal'
-import { leadGenBaseUrl } from '../lib/leadGenBaseUrl'
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   idle: { label: '● ready', color: 'text-text-secondary' },
@@ -57,11 +57,13 @@ const SUGGESTED_GOALS = [
 
 export function Chat() {
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>()
+  const location = useLocation()
   const [input, setInput] = useState('')
   const [pendingArtifacts, setPendingArtifacts] = useState<PendingArtifact[]>([])
   const [receiptOpen, setReceiptOpen] = useState(false)
   const [receiptEmail, setReceiptEmail] = useState('')
   const [receiptError, setReceiptError] = useState<string | null>(null)
+  const [pluginsOpen, setPluginsOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const sessionSidebarOpen = useSessionSidebarStore((s) => s.isOpen)
@@ -95,10 +97,17 @@ export function Chat() {
   useEffect(() => {
     if (!urlSessionId) return
     const st = useSessionStore.getState()
-    if (st.sessionId === urlSessionId) return
-    st.reset()
-    st.setSessionId(urlSessionId)
-  }, [urlSessionId])
+    if (st.sessionId !== urlSessionId) {
+      st.reset()
+      st.setSessionId(urlSessionId)
+    }
+    const bot = (location.state as { bot?: AgentInfo } | null)?.bot
+    if (!bot) return
+    const cur = useSessionStore.getState()
+    if (cur.sessionId !== urlSessionId) return
+    if (cur.agents.some((a) => a.agent_id === bot.agent_id)) return
+    cur.setAgents([...cur.agents, { ...bot, status: bot.status ?? 'pending' }])
+  }, [urlSessionId, location.state])
 
   useEffect(() => {
     if (!urlSessionId || !transcriptData?.entries?.length) return
@@ -305,7 +314,6 @@ export function Chat() {
           <div className="flex-1" />
           <div className="flex items-center gap-2">
             <span className="font-mono text-[10px] text-text-disabled select-none">beta</span>
-            <IntegrationsButton />
             <button
               onClick={handleDownloadAudit}
               disabled={store.messages.length === 0}
@@ -489,8 +497,17 @@ export function Chat() {
             isRunning={store.status === 'running'}
             size="chat"
           />
-          <div className="mt-2 flex items-center">
+          <div className="mt-2 flex items-center gap-2">
             <ModelChip />
+            <button
+              type="button"
+              onClick={() => setPluginsOpen(true)}
+              aria-label="Bring an MCP"
+              title="Connect one of your MCP servers"
+              className="flex h-7 items-center gap-1.5 rounded-full border border-surface-border bg-surface-elevated px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:border-surface-borderLight hover:text-text-body focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+            >
+              Plugins
+            </button>
           </div>
           </div>
         </div>
@@ -503,7 +520,7 @@ export function Chat() {
       <CredentialsModal />
       <SaveWorkflowModal />
       <CrmSetupModal />
-      <IntegrationsModal />
+      <PluginsModal open={pluginsOpen} onClose={() => setPluginsOpen(false)} />
     </div>
   )
 }
@@ -791,52 +808,5 @@ function ClarificationInput({
         </button>
       </div>
     </div>
-  )
-}
-
-// ── Integrations button ────────────────────────────────────────────────────────
-
-const LEAD_GEN_URL = leadGenBaseUrl()
-
-function IntegrationsButton() {
-  const sessionId            = useSessionStore((s) => s.sessionId)
-  const integrationsOpen     = useSessionStore((s) => s.integrationsModalOpen)
-  const openIntegrationsModal = useSessionStore((s) => s.openIntegrationsModal)
-
-  const [connectedCount, setConnectedCount] = useState(0)
-
-  const fetchStatus = useCallback(async () => {
-    if (!sessionId) return
-    try {
-      const res = await fetch(
-        `${LEAD_GEN_URL}/tool-settings/status?tenant_id=${encodeURIComponent(sessionId)}`,
-      )
-      if (!res.ok) return
-      const data = await res.json()
-      const count = Object.values(data.tools ?? {}).filter(
-        (t) => (t as { connected: boolean }).connected,
-      ).length
-      setConnectedCount(count)
-    } catch { /* lead-gen may not be running */ }
-  }, [sessionId])
-
-  useEffect(() => { void fetchStatus() }, [fetchStatus])
-  useEffect(() => { if (!integrationsOpen) void fetchStatus() }, [integrationsOpen, fetchStatus])
-
-  return (
-    <button
-      onClick={openIntegrationsModal}
-      aria-label="Manage integrations"
-      title="Connect tools your agents can use"
-      className="relative flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface-overlay border border-surface-borderLight text-[12px] font-medium text-text-body hover:border-surface-muted transition-colors"
-    >
-      <span>⚡</span>
-      <span>Integrations</span>
-      {connectedCount > 0 && (
-        <span className="flex items-center justify-center size-4 rounded-full bg-semantic-success text-[9px] font-bold text-white leading-none">
-          {connectedCount}
-        </span>
-      )}
-    </button>
   )
 }
