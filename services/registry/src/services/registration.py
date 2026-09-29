@@ -9,15 +9,18 @@ from typing import Any
 import yaml
 
 from common.database.src.generated_client.fields import Json as PrismaJson
+from common.utils.src.operator import STDIO_OPERATOR_ONLY, is_operator
 
 from ..adapters import A2AAdapter, CapabilityData, HarvestResult, MCPAdapter
 from ..config import settings
+from ..health_probe import should_skip_health_probe
 from ..models.emerge_config import EmergeConfig
 from .health_check import HealthCheckService
 from .validation import ConflictError, ValidationError, ValidationService
 from .version_manager import VersionManager
 
 logger = logging.getLogger(__name__)
+
 
 _AUTH_TYPE_MAP: dict[str, str] = {
     "x_api_key": "X_API_KEY",
@@ -78,16 +81,19 @@ class RegistrationService:
             f"Validation passed for agent {emerge_config.identity.name} version {emerge_config.identity.version}"
         )
 
+        # AD-13: refuse a non-operator's stdio manifest before any DB or network step.
+        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
+        self._assert_stdio_operator(is_stdio, user_id)
+
         # If a soft-deleted record with the same identity exists, remove it so
         # re-registration creates a fresh record (cascade handles child rows).
         await self._purge_soft_deleted_agent(emerge_config, user_id)
 
         await self._assert_agent_not_exists(emerge_config, user_id)
 
-        # STDIO agents have no HTTP endpoint to probe — they are launched as
-        # child processes by the client. Skip the health check entirely.
-        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
-        if not is_stdio:
+        # STDIO has no HTTP port. Remote MCP SSE/HTTP usually has no /health;
+        # harvest is the connectivity check. A2A HTTP still probes.
+        if not should_skip_health_probe(emerge_config):
             await self._verify_health_endpoint(emerge_config.health_endpoint)
 
         harvest_result = await self._harvest_capabilities(
@@ -127,6 +133,10 @@ class RegistrationService:
         if not is_valid:
             raise error
 
+        self._assert_stdio_operator(
+            emerge_config.protocol.transport.type.lower() == "stdio", user_id
+        )
+
         existing_agent = await self.db.agent.find_unique(
             where={"id": agent_id},
             include={
@@ -163,6 +173,13 @@ class RegistrationService:
 
     # -------------------------------------------------------------------------
     # Parse / validate helpers
+
+    @staticmethod
+    def _assert_stdio_operator(is_stdio: bool, user_id: str) -> None:
+        """AD-13: stdio registration is operator-only on this door too."""
+        if is_stdio and not is_operator(user_id):
+            raise PermissionError(STDIO_OPERATOR_ONLY)
+
     # -------------------------------------------------------------------------
 
     def _parse_emerge_yaml(self, content: str) -> EmergeConfig:
