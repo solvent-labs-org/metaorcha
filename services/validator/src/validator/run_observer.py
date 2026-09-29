@@ -98,6 +98,9 @@ class _AccumulatedStep:
     declared_acceptance: dict[str, Any] | None
     criteria_digest: str | None
     completed_at: datetime
+    # Story 1.5 / AD-21: ``{"result": "pass"|"warn", "detail": ...}`` when a
+    # human approved or declined this call at the scope gate.
+    scope_approval: dict[str, Any] | None = None
 
 
 class RunAttestationObserver:
@@ -176,6 +179,7 @@ class RunAttestationObserver:
             meta = record.metadata if isinstance(record.metadata, dict) else {}
             declared = meta.get("declared_acceptance")
             digest = meta.get("criteria_digest")
+            approval = meta.get("scope_approval")
             # AD-16: hash the raw, redacted pre-image; the display content is
             # the fallback only where the producer could not build one.
             preimage = getattr(record, "output_preimage", None)
@@ -196,6 +200,7 @@ class RunAttestationObserver:
                 declared_acceptance=declared if isinstance(declared, dict) else None,
                 criteria_digest=digest if isinstance(digest, str) else None,
                 completed_at=_parse_ts(record.completed_at),
+                scope_approval=approval if isinstance(approval, dict) else None,
             )
             steps = self._steps.setdefault(session_id, [])
             # RFC 0003: call_id is unique within the run. A retried call
@@ -230,7 +235,35 @@ class RunAttestationObserver:
         declared = self._declared_acceptance(steps)
         if declared is not None:
             verdicts.append(declared)
+        verdicts.extend(self._scope_approvals(steps))
         return verdicts
+
+    @staticmethod
+    def _scope_approvals(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """One ``scope_approval:<call_id>`` verdict per human decision (AD-21).
+
+        ``pass`` with the approver's DID in ``detail``; ``warn`` with
+        ``declined`` for a refusal — never ``fail``, so a declined call does
+        not refuse the run at the gate. Outside the verifier check order:
+        this is policy in the signed record, not a check on its bytes.
+        """
+        entries: list[dict[str, Any]] = []
+        for step in steps:
+            approval = step.scope_approval
+            if not approval:
+                continue
+            result = approval.get("result")
+            if result not in ("pass", "warn"):
+                continue
+            entry: dict[str, Any] = {
+                "check": f"scope_approval:{step.call_id}",
+                "result": result,
+            }
+            detail = approval.get("detail")
+            if detail:
+                entry["detail"] = str(detail)
+            entries.append(entry)
+        return entries
 
     @staticmethod
     def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
