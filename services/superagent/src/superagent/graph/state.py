@@ -127,8 +127,11 @@ class AgentState(dict):  # type: ignore[type-arg]
     # Per-session operator instructions appended to the orchestrator system prompt.
     custom_instructions: str | None
     # Session-scoped credentials forwarded by the gateway (agent_id → var → value).
-    # Declared so LangGraph does not drop the key from state updates; read by
-    # middleware (auth cascade) and the orchestrator (BYOK `__llm__` entry).
+    # AD-14 (story 1.6b): NEVER populated. Graph state is checkpointed to Redis,
+    # so credentials ride on the run config under SESSION_CREDENTIALS_CONFIG_KEY
+    # instead (read by the auth cascade and the BYOK resolver at call time).
+    # The key stays declared so older checkpoints that carry it still load;
+    # ``test_canary.py`` asserts nothing assigns to it.
     _session_credentials: dict[str, dict[str, str]]
     # Ephemeral SSE queue from execute_agent_calls — drained in runner; cleared by orchestrator
     _pending_events: list[Any]
@@ -143,6 +146,27 @@ class AgentState(dict):  # type: ignore[type-arg]
     # Active DAG plan (Slice 1) — plain JSON-safe dict built by
     # nodes/dag_plan.new_active_plan. None on the stock ReAct path.
     active_plan: dict[str, Any] | None
+
+
+# The run-config key session-scoped credentials travel under. Double
+# underscore is load-bearing: LangGraph copies every other ``configurable``
+# key into the checkpoint metadata it persists (checkpoint.base
+# get_checkpoint_metadata skips keys starting with ``__``).
+SESSION_CREDENTIALS_CONFIG_KEY = "__session_credentials"
+
+
+def session_credentials_from_config(config: Any) -> dict[str, dict[str, str]]:
+    """The session-scoped credentials on a run config, or ``{}``. Never raises."""
+    try:
+        configurable = config.get("configurable") if isinstance(config, dict) else None
+        creds = (
+            configurable.get(SESSION_CREDENTIALS_CONFIG_KEY)
+            if isinstance(configurable, dict)
+            else None
+        )
+        return creds if isinstance(creds, dict) else {}
+    except Exception:
+        return {}
 
 
 def default_state(session_id: str, user_id: str) -> dict[str, Any]:

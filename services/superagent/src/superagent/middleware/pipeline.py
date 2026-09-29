@@ -12,11 +12,12 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from ..config import settings
+from ..graph.state import session_credentials_from_config
 from .input_guard import InputGuard, InputGuardError
 from .observers import StepResult, emit_step_complete
 from .output_normalizer import OutputNormalizer
 from .preflight import PreFlightManager
-from .step_output import call_credentials, step_output_preimage
+from .step_output import call_credentials, redact_output, step_output_preimage
 
 logger = logging.getLogger(__name__)
 
@@ -135,15 +136,9 @@ class ExecutionMiddleware:
         # Raises PreFlightError (hard) → caught at node level, yields error ToolMessage
         logger.info("Pipeline step 3: PreFlight | agent=%s", agent_id)
         preflight = PreFlightManager(vault)
-        session_credentials: dict[str, dict[str, str]] = dict(
-            self._state.get("_session_credentials") or {}
-        )
-        if not session_credentials and config:
-            configurable = config.get("configurable", {})
-            if isinstance(configurable, dict):
-                cfg_creds = configurable.get("session_credentials") or {}
-                if isinstance(cfg_creds, dict):
-                    session_credentials = cfg_creds
+        # AD-14: session-scoped credentials ride on the run config, never on
+        # graph state (state is checkpointed; the config key is not).
+        session_credentials = session_credentials_from_config(config)
         result = await preflight.run(
             agent_id=agent_id,
             user_id=self._state.get("user_id", ""),
@@ -213,6 +208,11 @@ class ExecutionMiddleware:
         # AD-16: the step commits to the raw result, not the display copy the
         # normalizer builds next.
         output_preimage = step_output_preimage(raw_output, credentials)
+        # AD-14 / story 1.6b: the display copy is redacted too, before the
+        # normalizer, the criteria step, the checklist, the ToolMessage and
+        # the SSE stream see it — an agent echoing its request headers must
+        # not put the token into the chat, the transcript or the run audit.
+        raw_output = redact_output(raw_output, credentials)
 
         # Step 5: OutputNormalizer (async — may upload to S3 for file outputs)
         agent_name = str(manifest.get("name") or "").strip()
@@ -225,6 +225,11 @@ class ExecutionMiddleware:
             user_id=self._state.get("user_id", ""),
             agent_name=agent_name,
         )
+        # The normalizer may synthesise text from the raw value (canvas
+        # summaries, str() of unknown shapes): redact what it produced as well.
+        for key in ("content", "ui_manifest"):
+            if key in normalised:
+                normalised[key] = redact_output(normalised[key], credentials)
         content = normalised.get("content", "")
         content_str = content if isinstance(content, str) else str(content)
         logger.info(
