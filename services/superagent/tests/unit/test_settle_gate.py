@@ -1123,3 +1123,34 @@ def test_validate_gate_config_accepts_a_computable_split(
     monkeypatch.delenv("COORDINATOR_SHARE_BPS")
     monkeypatch.delenv("VALIDATOR_SHARE_BPS")
     validate_gate_config(_kya_settings())
+
+
+async def test_observer_satisfies_the_step_protocol_and_is_quiet_per_step(
+    caplog,
+) -> None:
+    """The composite dispatches every step to every child; the gate observer
+    must accept a step without raising (it only acts at the run boundary)."""
+    import logging
+
+    from superagent.middleware.observers import (
+        CompositeObserver,
+        ExecutionObserver,
+        StepResult,
+    )
+    from superagent.pricing.settle_gate import SettlementGateObserver
+
+    observer = SettlementGateObserver(_FakeAttestationObserver({}))
+    assert isinstance(observer, ExecutionObserver)
+    composite = CompositeObserver([observer])
+    step = StepResult(
+        call_id="call_quiet",
+        agent_id="did:orcha:agent:test-runner",
+        capability_id="run_tests",
+        protocol="A2A",
+        tool_name="delegate__did_orcha_agent_test-runner",
+        success=True,
+        content='{"exit_code": 0}',
+    )
+    with caplog.at_level(logging.ERROR):
+        await composite.on_step_complete(step)
+    assert "raised for call_id" not in caplog.text
