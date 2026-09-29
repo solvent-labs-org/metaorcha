@@ -739,7 +739,7 @@ jobs:
 
       - name: Run Gateway unit tests
         working-directory: services/gateway
-        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py --verbose
+        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py --verbose
 
   # ============================================================================
   # Frontend — lint, typecheck, build. Had no CI at all until 2026-08-25.

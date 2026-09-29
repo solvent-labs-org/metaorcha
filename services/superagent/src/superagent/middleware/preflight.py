@@ -33,6 +33,16 @@ _HEALTH_TTL = 30.0  # seconds
 
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
+# AD-13: ``platform_env`` (a secret read from the SuperAgent process env) is a
+# platform-tool mechanism. Only ``did:orcha:system:*`` manifests may use it; a
+# user-registered agent naming ``VAULT_KEY`` as its env_key gets nothing.
+PLATFORM_DID_PREFIX = "did:orcha:system:"
+ENV_UNRESOLVED = "env_unresolved"
+
+
+def platform_env_allowed(agent_id: str) -> bool:
+    return isinstance(agent_id, str) and agent_id.startswith(PLATFORM_DID_PREFIX)
+
 
 def _oauth_grant_key(agent_id: str, capability_id: str) -> str:
     """In-memory session-state key (mirrors Redis capability_grant_key)."""
@@ -194,6 +204,15 @@ class PreFlightManager:
                 env_key = (strategy.get("config") or {}).get("env_key") or ""
                 if not env_key:
                     continue
+                if not platform_env_allowed(agent_id):
+                    logger.warning(
+                        "platform_env strategy %r ignored for agent=%s: platform "
+                        "secrets are for %s* manifests only (AD-13)",
+                        strategy.get("id", ""),
+                        agent_id,
+                        PLATFORM_DID_PREFIX,
+                    )
+                    continue
                 val = os.environ.get(env_key)
                 if val is not None and val != "":
                     raw_env[env_key] = val
@@ -311,9 +330,10 @@ class PreFlightManager:
         import urllib.parse
 
         def _resolve(value: str) -> str:
-            return _PLACEHOLDER_RE.sub(
-                lambda m: os.environ.get(m.group(1), m.group(0)), value
-            )
+            # AD-13: a ``${VAR}`` is never expanded from the host environment.
+            # Left in place, the placeholder routes to the agent's own connect
+            # endpoint below, which holds its own credentials.
+            return value
 
         base = cfg.get("authorization_url", "")
         if not base:
@@ -437,24 +457,18 @@ class PreFlightManager:
                         user_id,
                     )
                 else:
-                    # 2. Host environment
-                    secret = os.environ.get(var_name)
-                    if secret is not None:
-                        logger.debug(
-                            "Resolved ${%s} for agent=%s from host env",
-                            var_name,
-                            agent_id,
-                        )
-                    else:
-                        logger.error(
-                            "Missing env var ${%s} for agent=%s user=%s — "
-                            "not found in vault or host env.",
-                            var_name,
-                            agent_id,
-                            user_id,
-                        )
-                        missing.append(var_name)
-                        continue
+                    # AD-13: no host-environment fallback. A ``${VAR}`` the
+                    # vault cannot resolve fails the call as env_unresolved.
+                    logger.error(
+                        "%s: ${%s} for agent=%s user=%s is not in the vault "
+                        "(the host environment is never consulted)",
+                        ENV_UNRESOLVED,
+                        var_name,
+                        agent_id,
+                        user_id,
+                    )
+                    missing.append(var_name)
+                    continue
 
                 value = value.replace(f"${{{var_name}}}", secret)
 
@@ -462,9 +476,9 @@ class PreFlightManager:
 
         if missing:
             raise PreFlightError(
-                f"Agent {agent_id!r} requires credentials that are not configured "
-                f"for user {user_id!r}. Missing env vars: {missing}. "
-                f"Store them via POST /secrets/agent-env."
+                f"{ENV_UNRESOLVED}: agent {agent_id!r} requires credentials that "
+                f"are not in the vault for user {user_id!r}. Missing env vars: "
+                f"{missing}. Store them via POST /secrets/agent-env."
             )
 
         return resolved
