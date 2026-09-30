@@ -18,12 +18,14 @@ from internal_commons.interrupts import (
 
 from .auth_manager import AuthManager, AuthResolutionError, read_credential, token_ref
 from .connections import (
+    CONNECTION_REVOKED,
     CONNECTIONS_DISABLED,
+    connection_unavailable,
     connections_enabled,
     credential_missing,
     is_connection,
 )
-from .manifest_cache import MANIFEST_CACHE
+from .manifest_cache import MANIFEST_CACHE, ManifestUnavailable
 from .oauth_grants import (
     capability_grant_key as _redis_cap_key,
 )
@@ -133,9 +135,12 @@ class PreFlightManager:
 
         # 1.5 Connections (story 1.3): refused while the feature is off, and a
         #     missing token fails here, before the health probe below sends
-        #     anything to the platform.
-        if is_connection(manifest):
-            await self._assert_connection_callable(
+        #     anything to the platform. Story 1.7: the check reads the
+        #     Registry fresh and returns that manifest, so a removed
+        #     connection stops on its next call.
+        connection = is_connection(manifest)
+        if connection:
+            manifest = await self._assert_connection_callable(
                 agent_id, user_id, manifest, capability_id
             )
 
@@ -184,8 +189,21 @@ class PreFlightManager:
             )
         else:
             try:
-                headers = await self._auth.resolve(agent_id, user_id, auth_strategies)
+                headers = await self._auth.resolve(
+                    agent_id, user_id, auth_strategies, scoped_only=connection
+                )
             except AuthResolutionError:
+                if connection:
+                    # The token went between the check above and this read
+                    # (revoked mid-call): the same named failure, no request.
+                    raise PreFlightError(
+                        credential_missing(
+                            next(
+                                (r for r in map(token_ref, auth_strategies) if r),
+                                "its token",
+                            )
+                        )
+                    ) from None
                 logger.info(
                     "Auth resolution failed for %s — raising AuthInterruptRequired",
                     agent_id,
@@ -259,16 +277,39 @@ class PreFlightManager:
         user_id: str,
         manifest: dict[str, Any],
         capability_id: str,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Refuse a connection call that cannot succeed, before any request.
 
+        Returns the connection's manifest as the Registry holds it now.
+
         Raises PreFlightError (a named hard failure, not an auth interrupt):
-        ``connections_disabled`` while CONNECTIONS_ENABLED is off, or
-        ``credential_missing`` when the connection has token strategies and
-        the caller's vault holds none of their tokens.
+
+        - ``connections_disabled`` while CONNECTIONS_ENABLED is off;
+        - ``connection_unavailable`` when the Registry record cannot be read
+          now, does not say it is active, or no longer names a connection —
+          the cached copy is never trusted for a connection (AD-6);
+        - ``connection_revoked`` when the connection was removed (story 1.7);
+        - ``credential_missing`` when the connection has token strategies and
+          the caller's vault holds none of their tokens under this
+          connection's own key (a bare row is never read for a connection).
         """
         if not connections_enabled():
             raise PreFlightError(CONNECTIONS_DISABLED)
+        try:
+            manifest = await MANIFEST_CACHE.get_manifest(agent_id, fresh=True)
+        except ManifestUnavailable:
+            raise PreFlightError(
+                connection_unavailable("the Registry record could not be read")
+            ) from None
+        active = manifest.get("is_active")
+        if active is False:
+            raise PreFlightError(CONNECTION_REVOKED)
+        if active is not True or not is_connection(manifest):
+            raise PreFlightError(
+                connection_unavailable(
+                    "the Registry record is not an active connection"
+                )
+            )
         refs = [
             ref
             for ref in (
@@ -277,12 +318,32 @@ class PreFlightManager:
             )
             if ref
         ]
-        if not refs:
-            return
-        for ref in refs:
-            if await read_credential(self._vault, user_id, agent_id, ref):
-                return
-        raise PreFlightError(credential_missing(refs[0]))
+        present: set[str] = set()
+        if refs:
+            for ref in refs:
+                if await read_credential(
+                    self._vault, user_id, agent_id, ref, scoped_only=True
+                ):
+                    present.add(ref)
+                    break
+            else:
+                raise PreFlightError(credential_missing(refs[0]))
+        # A stdio connection can carry its token as a ``${VAR}`` in
+        # ``transport.env`` alone. Every such variable must be in this
+        # connection's own vault key too: a session-scoped copy (which the env
+        # resolver reads first) must not revive a revoked token (story 1.7).
+        transport = manifest.get("transport") or {}
+        if str(transport.get("type") or "").upper() == "STDIO":
+            for template in (transport.get("env") or {}).values():
+                for var in _PLACEHOLDER_RE.findall(str(template)):
+                    if var in present:
+                        continue
+                    if not await read_credential(
+                        self._vault, user_id, agent_id, var, scoped_only=True
+                    ):
+                        raise PreFlightError(credential_missing(var))
+                    present.add(var)
+        return manifest
 
     # ── Auth interrupt construction ───────────────────────────────────────────
 

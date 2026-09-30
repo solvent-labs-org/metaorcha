@@ -59,6 +59,7 @@ SSE_MANIFEST = {
     "agent_id": SSE_DID,
     "name": "GitHub",
     "tags": ["mcp", "user", "connection"],
+    "is_active": True,
     "transport": {"type": "sse", "endpoint": "https://example.com/mcp"},
     "security": {
         "auth_strategies": [
@@ -75,6 +76,7 @@ STDIO_MANIFEST = {
     "agent_id": STDIO_DID,
     "name": "Local tools",
     "tags": ["mcp", "user", "connection"],
+    "is_active": True,
     "transport": {
         "type": "stdio",
         "command": "npx",
@@ -264,7 +266,7 @@ def echoing_handler(monkeypatch) -> list[dict[str, Any]]:
 def preflight_offline(monkeypatch):
     manifests = {SSE_DID: SSE_MANIFEST, STDIO_DID: STDIO_MANIFEST}
 
-    async def get_manifest(agent_id: str) -> dict[str, Any]:
+    async def get_manifest(agent_id: str, **_: Any) -> dict[str, Any]:
         return manifests[agent_id]
 
     monkeypatch.setattr(preflight_mod.MANIFEST_CACHE, "get_manifest", get_manifest)

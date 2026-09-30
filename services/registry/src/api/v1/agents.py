@@ -263,6 +263,10 @@ async def get_agent_manifest(
                 "indexed_at": agent.indexed_at.isoformat(),
                 "health_status": agent.health_status.lower(),
                 "health_endpoint": agent.health_endpoint,
+                # Story 1.7: a removed agent is soft-deleted, not erased, so
+                # old receipts and runs still resolve it. Callers that must
+                # stop on removal (the SuperAgent, for a connection) read this.
+                "is_active": agent.is_active,
             },
             "protocol": {
                 "type": agent.protocol_type.lower(),

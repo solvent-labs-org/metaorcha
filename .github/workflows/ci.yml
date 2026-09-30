@@ -581,7 +581,10 @@ jobs:
           uv run pytest tests/unit/test_observers.py \
             tests/unit/test_step_events.py \
             tests/unit/test_settlement_three_way.py \
-            tests/unit/test_canary.py --verbose
+            tests/unit/test_canary.py \
+            tests/unit/test_connections.py \
+            tests/unit/test_scope_gate.py \
+            tests/unit/test_revoke_connection.py --verbose
 
   # ============================================================================
   # emerge-node — signed envelope helpers
@@ -740,7 +743,7 @@ jobs:
 
       - name: Run Gateway unit tests
         working-directory: services/gateway
-        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py tests/unit/test_canary.py --verbose
+        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py tests/unit/test_canary.py tests/unit/test_revoke_connection.py --verbose
 
   # ============================================================================
   # Frontend — lint, typecheck, build. Had no CI at all until 2026-08-25.
