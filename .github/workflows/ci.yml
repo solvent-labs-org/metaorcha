@@ -577,6 +577,17 @@ jobs:
 
       - name: Test the ExecutionObserver seam (open/closed boundary)
         working-directory: services/superagent
+        # Dummy, non-secret values: Settings() refuses to import without them,
+        # and every file after the first three imports it. Port 1 connects
+        # nowhere; the vault key is all zero bytes.
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
+          VAULT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          PND_SERVICE_URL: http://127.0.0.1:1
+          OPENROUTER_API_KEY: test-not-a-key
+          REDIS_URL: redis://127.0.0.1:1/0
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
         run: |
           uv run pytest tests/unit/test_observers.py \
             tests/unit/test_step_events.py \

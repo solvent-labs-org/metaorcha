@@ -165,6 +165,75 @@ async def _sweep_session_credentials(redis: Any, agent_id: str) -> int:
     return removed
 
 
+def _forwarded_auth(request: Request) -> dict[str, str]:
+    auth = request.headers.get("authorization")
+    return {"authorization": auth} if auth else {}
+
+
+async def is_connection_record(request: Request, agent_id: str) -> bool:
+    """Whether the Registry holds ``agent_id`` as a connection.
+
+    False for an id that is not a connection DID (no Registry read) and for
+    a 404. Any other read failure raises 502: a door that cannot tell must
+    not guess, or a connection would be removed without its token.
+    """
+    if not _CONNECTION_DID.fullmatch(agent_id):
+        return False
+    got = await request.app.state.registry.get(
+        f"/api/v1/agents/{agent_id}", headers=_forwarded_auth(request)
+    )
+    if got.status_code == status.HTTP_404_NOT_FOUND:
+        return False
+    if got.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="the connection could not be read; nothing was removed",
+        )
+    identity = ((got.json() or {}).get("data") or {}).get("identity") or {}
+    return CONNECTION_TAG in (identity.get("tags") or [])
+
+
+async def remove_connection(request: Request, agent_id: str, user_id: str) -> None:
+    """Steps 2-4 of ``revoke_connection``, for a record already known to be one.
+
+    Also called by the Agent Library's generic delete, so both doors that
+    remove a connection take its token with it (story 1.7).
+    """
+    sa = request.app.state.superagent
+    cred = await sa.delete(
+        f"/secrets/agent-env/{agent_id}", params={"user_id": user_id}
+    )
+    if cred.status_code >= 400:
+        logger.warning(
+            "mcp revoke: vault delete failed (%s); nothing deregistered",
+            cred.status_code,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="the token could not be removed; the connection was not removed",
+        )
+
+    resp = await request.app.state.registry.delete(
+        f"/api/v1/agents/{agent_id}", headers=_forwarded_auth(request)
+    )
+    if resp.status_code >= 400:
+        logger.warning("mcp revoke: registry delete failed (%s)", resp.status_code)
+        refused = resp.status_code in (
+            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
+            status.HTTP_404_NOT_FOUND,
+        )
+        raise HTTPException(
+            status_code=resp.status_code if refused else status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "your token for this connection was removed, but the connection "
+                "itself was not deregistered"
+            ),
+        )
+
+    await _sweep_session_credentials(request.app.state.redis, agent_id)
+
+
 @router.delete("/mcp/{agent_id}", status_code=204)
 async def revoke_connection(
     agent_id: str,
@@ -193,54 +262,6 @@ async def revoke_connection(
     Receipts already sealed are not touched: nothing here reads or writes an
     attestation, a transcript or an audit row.
     """
-    if not _CONNECTION_DID.fullmatch(agent_id):
+    if not await is_connection_record(request, agent_id):
         raise _not_a_connection(agent_id)
-    headers = {}
-    auth = request.headers.get("authorization")
-    if auth:
-        headers["authorization"] = auth
-    registry = request.app.state.registry
-
-    got = await registry.get(f"/api/v1/agents/{agent_id}", headers=headers)
-    if got.status_code == status.HTTP_404_NOT_FOUND:
-        raise _not_a_connection(agent_id)
-    if got.status_code >= 400:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="the connection could not be read; nothing was removed",
-        )
-    identity = ((got.json() or {}).get("data") or {}).get("identity") or {}
-    if CONNECTION_TAG not in (identity.get("tags") or []):
-        raise _not_a_connection(agent_id)
-
-    sa = request.app.state.superagent
-    cred = await sa.delete(
-        f"/secrets/agent-env/{agent_id}", params={"user_id": payload.user_id}
-    )
-    if cred.status_code >= 400:
-        logger.warning(
-            "mcp revoke: vault delete failed (%s); nothing deregistered",
-            cred.status_code,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="the token could not be removed; the connection was not removed",
-        )
-
-    resp = await registry.delete(f"/api/v1/agents/{agent_id}", headers=headers)
-    if resp.status_code >= 400:
-        logger.warning("mcp revoke: registry delete failed (%s)", resp.status_code)
-        refused = resp.status_code in (
-            status.HTTP_401_UNAUTHORIZED,
-            status.HTTP_403_FORBIDDEN,
-            status.HTTP_404_NOT_FOUND,
-        )
-        raise HTTPException(
-            status_code=resp.status_code if refused else status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "your token for this connection was removed, but the connection "
-                "itself was not deregistered"
-            ),
-        )
-
-    await _sweep_session_credentials(request.app.state.redis, agent_id)
+    await remove_connection(request, agent_id, payload.user_id)
