@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..auth.models import TokenPayload
 from ..dependencies import require_auth
-from .models import CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse
+from .models import (
+    ComposeWorkflowRequest,
+    CreateWorkflowRequest,
+    UpdateWorkflowRequest,
+    WorkflowResponse,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -59,6 +64,30 @@ async def create_workflow(
             "steps": captured.get("steps", []),
             "agents_used": captured.get("agents_used", []),
             "created_from_session": body.session_id,
+            "status": "active",
+        }
+    )
+    return _to_response(record)
+
+
+@router.post("/compose", response_model=WorkflowResponse, status_code=201)
+async def compose_workflow(
+    body: ComposeWorkflowRequest,
+    request: Request,
+    payload: Annotated[TokenPayload, Depends(require_auth)],
+) -> WorkflowResponse:
+    names = ", ".join(body.agent_ids)
+    goal = f"Use these agents together: {names}"
+    db = request.app.state.db
+    record = await db.workflowtemplate.create(
+        data={
+            "user_id": payload.user_id,
+            "name": body.name,
+            "description": body.description or goal[:200],
+            "goal_template": goal,
+            "parameters": {},
+            "steps": [{"kind": "a2a_compose", "agents": body.agent_ids}],
+            "agents_used": body.agent_ids,
             "status": "active",
         }
     )
