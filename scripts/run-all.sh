@@ -107,9 +107,19 @@ wait_for() {
 if [[ "$SKIP_INFRA" == "false" ]]; then
   step "Phase 1: Docker Infrastructure"
 
+  if ! command -v docker >/dev/null 2>&1; then
+    fail "docker is not on PATH. The local stack needs Docker Compose.
+    Without Docker, the working first-hour path is:
+      pip install orcha-sdk==0.1.3
+      orcha init \"My Agent\" && cd my-agent && orcha run --no-register
+      orcha verify envelope.json   # the RFC 0003 object, not the golden pair"
+  fi
+
   # --- Core infra (postgres, redis, kafka) — must succeed ---
   info "Starting postgres, redis, kafka..."
-  docker compose -f deploy/docker-compose.local.yml up -d postgres redis orcha-kafka >/dev/null 2>&1
+  if ! docker compose -f deploy/docker-compose.local.yml up -d postgres redis orcha-kafka; then
+    fail "docker compose failed starting postgres/redis/kafka (output above)"
+  fi
   success "Core Docker containers started"
 
   # --- Ollama — best-effort; native install on host takes precedence ---
