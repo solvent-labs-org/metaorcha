@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -199,28 +200,45 @@ class VaultClient:
         """Encrypt and store an env-var credential for a specific agent."""
         await self.save_user_secret(user_id, f"agent:{agent_id}:env:{var_name}", value)
 
-    async def delete_agent_env(
-        self, user_id: str, agent_id: str, var_name: str
-    ) -> None:
-        """Delete a stored env-var credential for a specific agent."""
+    async def delete_agent_env(self, user_id: str, agent_id: str, var_name: str) -> int:
+        """Delete a stored env-var credential for a specific agent.
+
+        Returns the number of rows removed (0 when there was none). A database
+        error propagates: a revoke that did not happen must not read as done
+        (story 1.7 — the old ``delete`` swallowed every error, not only the
+        missing row).
+        """
         key = f"agent:{agent_id}:env:{var_name}"
+        return await self._delete_secrets(
+            {"user_id": user_id, "key": key}, f"{user_id} / {key}"
+        )
+
+    async def delete_all_agent_env(self, user_id: str, agent_id: str) -> int:
+        """Delete every env-var credential this user holds for one agent.
+
+        Removing a whole connection (story 1.7). Filtered on the caller's
+        ``user_id`` and on the exact prefix ``agent:<DID>:env:`` — the
+        ``:env:`` right after the DID means no other agent's rows match, and
+        a bare legacy ``<VAR>`` row is never touched. Returns the count.
+        """
+        prefix = f"agent:{agent_id}:env:"
+        return await self._delete_secrets(
+            {"user_id": user_id, "key": {"startswith": prefix}},
+            f"{user_id} / {prefix}*",
+        )
+
+    async def _delete_secrets(self, where: dict[str, Any], label: str) -> int:
         try:
             from src.generated_client import Prisma
 
             db = Prisma()
             await db.connect()
             try:
-                await db.usersecret.delete(
-                    where={"user_id_key": {"user_id": user_id, "key": key}}
-                )
-            except Exception:
-                logger.debug(
-                    "delete_agent_env: record not found for %s / %s", user_id, key
-                )
+                return int(await db.usersecret.delete_many(where=where))
             finally:
                 await db.disconnect()
         except Exception:
-            logger.exception("delete_agent_env failed for %s / %s", user_id, key)
+            logger.exception("deleting user secrets failed for %s", label)
             raise
 
     async def list_agent_env_status(

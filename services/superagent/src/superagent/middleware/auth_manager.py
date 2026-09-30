@@ -36,18 +36,22 @@ def token_ref(strategy: dict[str, Any]) -> str | None:
 
 
 async def read_credential(
-    vault: Any, user_id: str, agent_id: str, var: str
+    vault: Any, user_id: str, agent_id: str, var: str, *, scoped_only: bool = False
 ) -> str | None:
     """The caller's credential ``var`` for the agent ``agent_id``.
 
     Spine AD-15: credentials live under ``agent:<DID>:env:<VAR>`` in the
     caller's own vault — the key the connect route writes. A bare ``<VAR>``
-    row (what an AUTH_FORM resume stores today) is still read as a fallback,
-    read-only: nothing is copied or deleted here.
+    row (what an AUTH_FORM resume stored before story 1.6b) is still read as
+    a fallback, read-only: nothing is copied or deleted here.
+
+    ``scoped_only`` (connections, story 1.7): no bare fallback. A bare row is
+    not this connection's token — it may be another agent's — so it must not
+    keep a revoked connection callable, nor be sent to its platform.
     """
     scoped = await vault.get_agent_env(user_id, agent_id, var)
-    if scoped:
-        return scoped
+    if scoped or scoped_only:
+        return scoped or None
     return await vault.get_user_secret(user_id, var)
 
 
@@ -71,9 +75,14 @@ class AuthManager:
         agent_id: str,
         user_id: str,
         auth_strategies: list[dict[str, Any]],
+        *,
+        scoped_only: bool = False,
     ) -> dict[str, str]:
         """
         Return HTTP headers dict with resolved credentials.
+
+        ``scoped_only`` reads token strategies from the agent-scoped vault key
+        only (see ``read_credential``); PreFlight sets it for connections.
 
         Raises AuthResolutionError if all strategies fail (triggers HITL).
         """
@@ -91,7 +100,7 @@ class AuthManager:
             config = strategy.get("config", {})
             try:
                 headers = await self._try_strategy(
-                    strategy_type, config, agent_id, user_id
+                    strategy_type, config, agent_id, user_id, scoped_only=scoped_only
                 )
                 if headers is not None:
                     return headers
@@ -107,11 +116,15 @@ class AuthManager:
         config: dict[str, Any],
         agent_id: str,
         user_id: str,
+        *,
+        scoped_only: bool = False,
     ) -> dict[str, str] | None:
         if strategy_type == "X_API_KEY":
             key_ref = token_ref({"type": strategy_type, "config": config})
             if key_ref:
-                secret = await read_credential(self._vault, user_id, agent_id, key_ref)
+                secret = await read_credential(
+                    self._vault, user_id, agent_id, key_ref, scoped_only=scoped_only
+                )
                 if secret:
                     header_name = config.get("header_name", "X-Api-Key")
                     return {header_name: secret}
@@ -119,7 +132,9 @@ class AuthManager:
         elif strategy_type == "HTTP_BEARER":
             key_ref = token_ref({"type": strategy_type, "config": config})
             if key_ref:
-                token = await read_credential(self._vault, user_id, agent_id, key_ref)
+                token = await read_credential(
+                    self._vault, user_id, agent_id, key_ref, scoped_only=scoped_only
+                )
                 if token:
                     return {"Authorization": f"Bearer {token}"}
 

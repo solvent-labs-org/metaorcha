@@ -48,6 +48,7 @@ def _manifest(**extra: Any) -> dict[str, Any]:
         "agent_id": DID,
         "name": "GitHub",
         "tags": ["mcp", "user", "connection"],
+        "is_active": True,
         "transport": {"type": "sse", "endpoint": "https://example.com/mcp"},
         "security": {"auth_strategies": []},
         "capabilities": [],
