@@ -212,3 +212,41 @@ async def test_a_failed_session_sweep_does_not_undo_the_revoke(gw) -> None:
     redis.scan_iter = broken
     resp = await ac.delete(f"/api/v1/plugins/mcp/{DID}", headers=headers)
     assert resp.status_code == 204
+
+
+# -- the Agent Library's generic delete is a second door ---------------------
+
+
+@pytest.mark.asyncio
+async def test_the_agent_library_delete_of_a_connection_takes_its_token(gw) -> None:
+    ac, headers, registry, superagent, redis, calls = gw
+    registry.request = AsyncMock()
+    resp = await ac.delete(f"/api/v1/dev/agents/{DID}", headers=headers)
+    assert resp.status_code == 204
+    assert calls == ["registry.get", "vault.delete", "registry.delete"]
+    superagent.delete.assert_awaited_once_with(
+        f"/secrets/agent-env/{DID}", params={"user_id": "user-001"}
+    )
+    registry.request.assert_not_awaited()  # not the bare soft-delete proxy
+    assert OTHER_SESSION_KEY in redis.keys
+
+
+@pytest.mark.asyncio
+async def test_the_agent_library_delete_of_any_other_agent_is_unchanged(gw) -> None:
+    ac, headers, registry, superagent, _, _ = gw
+    registry.request = AsyncMock(return_value=Response(200, json={"status": "ok"}))
+    registry.get.return_value = _manifest(["mcp"])  # a DID, not a connection
+    assert (
+        await ac.delete(f"/api/v1/dev/agents/{DID}", headers=headers)
+    ).status_code == 200
+    registry.get.reset_mock()
+    # an id that is not a connection DID is proxied without a Registry read
+    assert (
+        await ac.delete("/api/v1/dev/agents/rulebook-rag", headers=headers)
+    ).status_code == 200
+    registry.get.assert_not_awaited()
+    superagent.delete.assert_not_awaited()
+    assert [c.args[:2] for c in registry.request.await_args_list] == [
+        ("DELETE", f"/api/v1/agents/{DID}"),
+        ("DELETE", "/api/v1/agents/rulebook-rag"),
+    ]
