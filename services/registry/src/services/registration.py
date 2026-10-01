@@ -99,6 +99,7 @@ class RegistrationService:
         harvest_result = await self._harvest_capabilities(
             emerge_config, emerge_yaml_content
         )
+        self._assert_capability_ids(harvest_result)
         print(
             f"Harvested {len(harvest_result.capabilities)} capabilities for agent {emerge_config.identity.name} version {emerge_config.identity.version}"
         )
@@ -156,6 +157,7 @@ class RegistrationService:
         harvest_result = await self._harvest_capabilities(
             emerge_config, emerge_yaml_content
         )
+        self._assert_capability_ids(harvest_result)
 
         if version_changed:
             await self._save_agent_to_db(emerge_config, harvest_result, user_id)
@@ -179,6 +181,14 @@ class RegistrationService:
         """AD-13: stdio registration is operator-only on this door too."""
         if is_stdio and not is_operator(user_id):
             raise PermissionError(STDIO_OPERATOR_ONLY)
+
+    def _assert_capability_ids(self, harvest_result: HarvestResult) -> None:
+        """Raise ValidationError if any harvested capability id breaks AD-17."""
+        ok, error = self.validation_service.validate_capability_ids(
+            harvest_result.capabilities
+        )
+        if not ok and error is not None:
+            raise error
 
     # -------------------------------------------------------------------------
 
