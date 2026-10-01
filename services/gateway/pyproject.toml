@@ -13,6 +13,8 @@ dependencies = [
   "pyjwt>=2.15.1",
   "bcrypt>=4",
   "apscheduler>=3.10.0",
+  # zoneinfo data for routine schedules; slim images may carry none
+  "tzdata>=2024.1",
   "svix>=1.0",
   "privy-client",
   "boto3>=1.34",
