@@ -2,9 +2,9 @@
 
 # Metaorcha
 
-**The open harness for multi-protocol agent systems.**
+**The open harness for agent work someone else has to trust.**
 
-Give it a goal. Metaorcha plans, routes, verifies, and renders across agents speaking different protocols in a single run.
+Give it a goal. Metaorcha plans it, runs it across the agents you already have (MCP, A2A, computer-use), signs every step into a receipt, and lets anyone check the run from the receipt alone.
 
 [![Build](https://github.com/solvent-labs-org/metaorcha/actions/workflows/ci.yml/badge.svg)](https://github.com/solvent-labs-org/metaorcha/actions)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/solvent-labs-org/metaorcha/badge)](https://securityscorecards.dev/viewer/?uri=github.com/solvent-labs-org/metaorcha)
@@ -16,39 +16,39 @@ Give it a goal. Metaorcha plans, routes, verifies, and renders across agents spe
 
 ---
 
-## The missing layer
+## What a run leaves behind
 
-MCP and A2A standardized how agents talk. Models are converging. Neither solves the harder problem: discovering agents on any protocol, composing them into one run, and checking what each step actually did.
+A run can leave a **receipt**: one JSON envelope ([RFC 0003](docs/spec/rfcs/0003-run-attestation-envelope.md)) that commits to each tool call's arguments and output as SHA-256 hashes, chains the steps together, and is signed with Ed25519. It carries the run's verdicts and timing, never the raw arguments or output.
 
-Today that layer is hand-built glue code inside every serious stack. No shared identity, no common record, no way to prove a run happened the way someone claims it did.
+Anyone can check it, offline, with the published SDK:
 
-Metaorcha is that layer, open and inspectable. Neutral ground: agents stay external services that you own and run. The harness plans, routes, verifies, and renders. It does not embody any single agent.
+```bash
+uvx orcha-sdk verify receipt.json     # exit 0 = valid, 1 = invalid
+```
 
-<img src="https://metaorcha.ai/diagrams/missing-layer.svg" alt="MCP, A2A, and computer-use stacks, today connected by hand-written glue code" width="100%" />
+The verifier checks the schema, recomputes the step chain and its roots, and verifies the signature against the key in the envelope. No network, no account, no call back to the service that ran it. Change one byte of one step and the roots and signature fail together.
+
+Settlement can be gated on it. With `SETTLEMENT_REQUIRE_ATTESTATION=true`, a charged run settles only when its receipt verifies; a receipt that fails a check, or carries a `fail` verdict, is refused, and the refusal names what failed.
+
+Receipts are off by default. Turn them on with `RUN_ATTESTATION_ENABLED=true` and a signing key (`services/superagent/.env.example` shows how to mint one), then use **Download receipt** in the chat or `GET /api/v1/runs/{run_id}/attestation`. To try it with no setup, the [attestation playground](apps/attestation-playground/) runs an agent, builds the chain live, and lets you tamper with the envelope to watch verification fail.
+
+Binding the signing key to a published identity (`--resolve-did`) is not supported yet: today a receipt proves the run is intact and signed by the key it names.
 
 ## See it work
 
 Type a goal. Metaorcha discovers agents, composes MCP, A2A, and computer-use in one run, and renders a CanvasKit dashboard instead of a chat reply.
 
-Every call passes a 7-step execution pipeline: input validation, payment guard, preflight, protocol dispatch, output normalization, checklist update, settlement. Each step gets a verdict, and any run downloads as a JSON evidence package: per-step agent, protocol, verdict, cost, timing.
+Every call passes a 7-step execution pipeline: input validation, payment guard, preflight, protocol dispatch, output normalization, checklist update, settlement. Each step gets a verdict, and the run downloads as a JSON evidence package (per-step agent, protocol, verdict, cost, timing) alongside its receipt.
 
 Output is not a chat bubble. Agents return a declarative [CanvasKit](docs/spec/canvaskit.md) manifest and the runtime renders metric cards, charts, tables, and alert feeds as a live dashboard. Structured output persists, and structured output can be checked.
 
-**Hero goal (3 protocols, one run):** *"Show me my portfolio performance, use your web scraper agent to summarize https://en.wikipedia.org/wiki/Nvidia, and screenshot the Alpaca dashboard"* → finance MCP + web-scraper A2A + mock computer-use. Verified live, 5/5 runs, best wall clock 13s.
+**Hero goal (2 protocols, no keys):** *"Show me my portfolio performance, and screenshot the Alpaca dashboard"* → [`finance-dashboard-agent`](agents/finance-dashboard-agent/) over MCP, which `./scripts/run-all.sh` starts for you, plus [`computer-use-agent`](agents/computer-use-agent/) over COMPUTER_USE. The second needs no process of its own: its manifest is a placeholder and the SuperAgent's built-in mock backend answers it, so the run needs no credentials and reaches nothing external. Set `COMPUTER_USE_BACKEND` to swap in a real provider without touching the manifest.
+
+**A third protocol:** `./scripts/poc-e2e.sh` publishes [`poc-probe-agent`](agents/poc-probe-agent/), a paid A2A agent built entirely on the `emerge` SDK, and drives it through registration, discovery, execution, verification, and settlement.
 
 **Try it:** clone and run `./scripts/run-all.sh`, or bring up the [sandbox stack](deploy/sandbox/README.md) locally with `make -f deploy/sandbox/Makefile up`. Demo portfolio data is illustrative, no brokerage connection required. (A hosted public sandbox is not currently up — see the [roadmap](docs/ROADMAP.md).)
 
-**Prove it yourself:** `./scripts/poc-e2e.sh` registers a paid agent via the `emerge` SDK, runs a multi-protocol goal, and asserts verification, retry, and settlement end to end.
-
-## Terms
-
-| Term | Meaning |
-|------|---------|
-| **Harness** | Everything around the agents: planning, routing, identity, verification, rendering |
-| **Handler** | A protocol bridge. MCP, A2A, and computer-use ship today |
-| **Verdict** | The pass/fail record every pipeline step carries |
-| **Verified run** | A downloadable JSON evidence package for a run |
-| **CanvasKit** | The declarative manifest agents return, rendered as live UI |
+**Prove it yourself:** `./scripts/poc-e2e.sh` asserts verification, retry, and settlement end to end.
 
 ## Register an agent in 4 lines
 
@@ -90,9 +90,27 @@ Per-service details live in the [docs](https://metaorcha.ai/docs).
 
 Bring any OpenAI-compatible LLM key (Gemini and Groq free tiers work) or run models locally through Ollama. Payments run in mock mode by default: no wallet, no closed-service dependency.
 
+## What we didn't build
+
+- **An agent framework.** Bring the agent you have, over MCP, A2A, or computer-use. The harness only cares about the run.
+- **A chat UI.** Agents return a [CanvasKit](docs/spec/canvaskit.md) manifest, and the runtime renders it as a dashboard.
+- **A model.** Any OpenAI-compatible key works, or run models locally through Ollama.
+- **A control plane you rent.** Agents stay services you own and run, and the whole stack runs on your machine.
+
+## Terms
+
+| Term | Meaning |
+|------|---------|
+| **Harness** | Everything around the agents: planning, routing, identity, verification, rendering |
+| **Handler** | A protocol bridge. MCP, A2A, and computer-use ship today |
+| **Verdict** | The `pass` / `fail` / `warn` record a check leaves on a step or a run |
+| **Receipt** | The signed, offline-verifiable record of a run ([RFC 0003](docs/spec/rfcs/0003-run-attestation-envelope.md)) |
+| **Evidence package** | The unsigned JSON export of a run: per-step agent, protocol, verdict, cost, timing |
+| **CanvasKit** | The declarative manifest agents return, rendered as live UI |
+
 ## Architecture
 
-Goal in, verified run out:
+Protocols are plumbing: the harness speaks MCP, A2A, and computer-use so your agents do not have to share one. Goal in, receipt out:
 
 ```
 Goal
@@ -120,6 +138,16 @@ protocol. The `emerge.yaml` schema and its governance rules live in
 | Frontend | 3000 | React chat + CanvasKit renderer |
 
 </details>
+
+## The harness layer
+
+MCP and A2A standardized how agents talk. Models are converging. Neither solves the harder problem: discovering agents on any protocol, composing them into one run, and checking what each step actually did.
+
+Today that layer is hand-built glue code inside most serious stacks. The identity half is being answered: signed credentials that say who an agent is and what it may spend, checked before it acts. Evidence of the work is the newer half. Several designs for signed, hash-chained run records now exist, they do not agree on a wire format, and on the shipping payment paths none of them gates the money: the seller asserts delivery and the charge goes through.
+
+Metaorcha is that layer, open and inspectable. Neutral ground: agents stay external services that you own and run. The harness plans, routes, verifies, and renders. It does not embody any single agent.
+
+<img src="https://metaorcha.ai/diagrams/missing-layer.svg" alt="MCP, A2A, and computer-use stacks, today connected by hand-written glue code" width="100%" />
 
 ## Contribute
 
