@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 _TTL_SECONDS = 300  # 5 minutes
 
 
+class ManifestUnavailable(Exception):
+    """A fresh manifest read failed. Raised only by ``get_manifest(fresh=True)``."""
+
+
 class ManifestCache:
     """In-process LRU-style cache for agent manifests."""
 
@@ -40,10 +44,25 @@ class ManifestCache:
             )
         return self._client
 
-    async def get_manifest(self, agent_id: str) -> dict[str, Any]:
-        """Return cached manifest or fetch from Registry."""
+    async def get_manifest(
+        self, agent_id: str, *, fresh: bool = False
+    ) -> dict[str, Any]:
+        """Return cached manifest or fetch from Registry.
+
+        ``fresh=True`` skips the TTL cache and reads the Registry now (story
+        1.7: a revoked connection stops on its next call, not five minutes
+        later). It is strict: any failure raises ``ManifestUnavailable``
+        instead of the empty manifest the cached path falls back to — that
+        fallback has no tags, so a connection would silently read as an
+        ordinary agent.
+        """
         if agent_id in self._pinned:
             return self._pinned[agent_id]
+
+        if fresh:
+            manifest = await self._fetch(agent_id, strict=True)
+            self._cache[agent_id] = (manifest, time.monotonic())
+            return manifest
 
         cached = self._cache.get(agent_id)
         if cached:
@@ -55,7 +74,7 @@ class ManifestCache:
         self._cache[agent_id] = (manifest, time.monotonic())
         return manifest
 
-    async def _fetch(self, agent_id: str) -> dict[str, Any]:
+    async def _fetch(self, agent_id: str, *, strict: bool = False) -> dict[str, Any]:
         client = self._get_client()
         try:
             resp = await client.get(f"/api/v1/agents/{agent_id}")
@@ -64,6 +83,8 @@ class ManifestCache:
             return self._normalise(raw)
         except Exception as exc:
             logger.warning("Failed to fetch manifest for %s: %s", agent_id, exc)
+            if strict:
+                raise ManifestUnavailable(agent_id) from exc
             return {"agent_id": agent_id, "capabilities": [], "security": {}}
 
     @staticmethod
@@ -84,11 +105,12 @@ class ManifestCache:
             for cap in data.get("capabilities", [])
         ]
 
-        return {
+        normalised = {
             # identity
             "agent_id": data.get("identity", {}).get("id", ""),
             "name": data.get("identity", {}).get("name", ""),
             "description": data.get("identity", {}).get("description", ""),
+            "tags": data.get("identity", {}).get("tags") or [],
             # health — pulled from metadata
             "health_status": metadata.get("health_status", ""),
             "health_endpoint": metadata.get("health_endpoint", ""),
@@ -99,6 +121,13 @@ class ManifestCache:
             "capabilities": capabilities,
             "payment": data.get("payment", {}),
         }
+        # Story 1.7: the Registry reports a deregistered agent with
+        # ``is_active: false``. Carried only when present, so a manifest from a
+        # Registry that predates the field keeps its old shape (and a
+        # connection read from one fails closed in PreFlight).
+        if "is_active" in metadata:
+            normalised["is_active"] = metadata["is_active"]
+        return normalised
 
     def invalidate(self, agent_id: str) -> None:
         self._cache.pop(agent_id, None)

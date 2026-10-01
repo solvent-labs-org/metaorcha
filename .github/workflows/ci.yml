@@ -577,10 +577,25 @@ jobs:
 
       - name: Test the ExecutionObserver seam (open/closed boundary)
         working-directory: services/superagent
+        # Dummy, non-secret values: Settings() refuses to import without them,
+        # and every file after the first three imports it. Port 1 connects
+        # nowhere; the vault key is all zero bytes.
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
+          VAULT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          PND_SERVICE_URL: http://127.0.0.1:1
+          OPENROUTER_API_KEY: test-not-a-key
+          REDIS_URL: redis://127.0.0.1:1/0
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
         run: |
           uv run pytest tests/unit/test_observers.py \
             tests/unit/test_step_events.py \
-            tests/unit/test_settlement_three_way.py --verbose
+            tests/unit/test_settlement_three_way.py \
+            tests/unit/test_canary.py \
+            tests/unit/test_connections.py \
+            tests/unit/test_scope_gate.py \
+            tests/unit/test_revoke_connection.py --verbose
 
   # ============================================================================
   # emerge-node — signed envelope helpers
@@ -739,7 +754,7 @@ jobs:
 
       - name: Run Gateway unit tests
         working-directory: services/gateway
-        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py --verbose
+        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py tests/unit/test_canary.py tests/unit/test_revoke_connection.py --verbose
 
   # ============================================================================
   # Frontend — lint, typecheck, build. Had no CI at all until 2026-08-25.

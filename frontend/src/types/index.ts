@@ -75,6 +75,13 @@ export interface HitlApprovalMetadata {
   risk_level: 'low' | 'medium' | 'high'
   agent_display_name: string
   capability_name: string
+  // Scope gate (story 1.5): a write or destructive call on a connection.
+  scope_class?: 'read' | 'write' | 'destructive' | null
+  connection_id?: string | null
+  connection_name?: string | null
+  target?: string | null
+  call_id?: string | null
+  capability_id?: string | null
 }
 
 export interface HitlClarificationMetadata {

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -59,6 +60,30 @@ def _parse_ts(raw: Any) -> datetime:
         return datetime.now(UTC)
 
 
+# AD-17: a call through an agent names its DID inside ``tool``. The capability
+# charset is the one the Registry enforces at registration (story 1.2), so the
+# first ``#`` is the only one.
+_AGENT_DID_PREFIX = "did:orcha:agent:"
+_CAPABILITY_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def step_tool(agent_id: Any, capability_id: Any, tool_name: str) -> str:
+    """The ``steps[].tool`` value for one call.
+
+    ``"<agent DID>#<capability>"`` for a call to a ``did:orcha:agent:*``;
+    the bare tool name for platform system tools and for any capability
+    outside the charset.
+    """
+    if (
+        isinstance(agent_id, str)
+        and agent_id.startswith(_AGENT_DID_PREFIX)
+        and isinstance(capability_id, str)
+        and _CAPABILITY_RE.fullmatch(capability_id)
+    ):
+        return f"{agent_id}#{capability_id}"
+    return tool_name
+
+
 @dataclass
 class _AccumulatedStep:
     call_id: str
@@ -73,6 +98,9 @@ class _AccumulatedStep:
     declared_acceptance: dict[str, Any] | None
     criteria_digest: str | None
     completed_at: datetime
+    # Story 1.5 / AD-21: ``{"result": "pass"|"warn", "detail": ...}`` when a
+    # human approved or declined this call at the scope gate.
+    scope_approval: dict[str, Any] | None = None
 
 
 class RunAttestationObserver:
@@ -151,26 +179,39 @@ class RunAttestationObserver:
             meta = record.metadata if isinstance(record.metadata, dict) else {}
             declared = meta.get("declared_acceptance")
             digest = meta.get("criteria_digest")
-            self._steps.setdefault(session_id, []).append(
-                _AccumulatedStep(
-                    call_id=record.call_id,
-                    tool=record.tool_name,
-                    args=dict(getattr(record, "args", None) or {}),
-                    output=record.content,
-                    success=bool(record.success),
-                    latency_ms=int(record.latency_ms),
-                    cdv_bp=cdv_bp,
-                    agent_id=record.agent_id,
-                    verdict=record.verdict
-                    if isinstance(record.verdict, dict)
-                    else None,
-                    declared_acceptance=declared
-                    if isinstance(declared, dict)
-                    else None,
-                    criteria_digest=digest if isinstance(digest, str) else None,
-                    completed_at=_parse_ts(record.completed_at),
-                )
+            approval = meta.get("scope_approval")
+            # AD-16: hash the raw, redacted pre-image; the display content is
+            # the fallback only where the producer could not build one.
+            preimage = getattr(record, "output_preimage", None)
+            step = _AccumulatedStep(
+                call_id=record.call_id,
+                tool=step_tool(
+                    record.agent_id,
+                    getattr(record, "capability_id", None),
+                    record.tool_name,
+                ),
+                args=dict(getattr(record, "args", None) or {}),
+                output=preimage if preimage is not None else record.content,
+                success=bool(record.success),
+                latency_ms=int(record.latency_ms),
+                cdv_bp=cdv_bp,
+                agent_id=record.agent_id,
+                verdict=record.verdict if isinstance(record.verdict, dict) else None,
+                declared_acceptance=declared if isinstance(declared, dict) else None,
+                criteria_digest=digest if isinstance(digest, str) else None,
+                completed_at=_parse_ts(record.completed_at),
+                scope_approval=approval if isinstance(approval, dict) else None,
             )
+            steps = self._steps.setdefault(session_id, [])
+            # RFC 0003: call_id is unique within the run. A retried call
+            # reports once per attempt under one call_id; the last attempt is
+            # the call's outcome and takes the first attempt's position.
+            for index, existing in enumerate(steps):
+                if existing.call_id == step.call_id:
+                    steps[index] = step
+                    break
+            else:
+                steps.append(step)
         except Exception:
             logger.exception(
                 "RunAttestationObserver: failed to accumulate call_id=%s",
@@ -194,7 +235,35 @@ class RunAttestationObserver:
         declared = self._declared_acceptance(steps)
         if declared is not None:
             verdicts.append(declared)
+        verdicts.extend(self._scope_approvals(steps))
         return verdicts
+
+    @staticmethod
+    def _scope_approvals(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """One ``scope_approval:<call_id>`` verdict per human decision (AD-21).
+
+        ``pass`` with the approver's DID in ``detail``; ``warn`` with
+        ``declined`` for a refusal — never ``fail``, so a declined call does
+        not refuse the run at the gate. Outside the verifier check order:
+        this is policy in the signed record, not a check on its bytes.
+        """
+        entries: list[dict[str, Any]] = []
+        for step in steps:
+            approval = step.scope_approval
+            if not approval:
+                continue
+            result = approval.get("result")
+            if result not in ("pass", "warn"):
+                continue
+            entry: dict[str, Any] = {
+                "check": f"scope_approval:{step.call_id}",
+                "result": result,
+            }
+            detail = approval.get("detail")
+            if detail:
+                entry["detail"] = str(detail)
+            entries.append(entry)
+        return entries
 
     @staticmethod
     def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
