@@ -89,6 +89,7 @@ class ManifestCache:
             "agent_id": data.get("identity", {}).get("id", ""),
             "name": data.get("identity", {}).get("name", ""),
             "description": data.get("identity", {}).get("description", ""),
+            "tags": data.get("identity", {}).get("tags") or [],
             # health — pulled from metadata
             "health_status": metadata.get("health_status", ""),
             "health_endpoint": metadata.get("health_endpoint", ""),
