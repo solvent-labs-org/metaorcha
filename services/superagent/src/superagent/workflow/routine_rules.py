@@ -17,11 +17,19 @@ Rules:
   ``destructive`` is rejected, and a capability the class rules do not
   recognise resolves to ``destructive``, so it is rejected on the same path.
 - ``criteria``: ``dict[str, bool]``, at most 8 keys, every key one the
-  SuperAgent evaluates (``SUPPORTED_CRITERIA``) — the chat path's rule.
+  SuperAgent evaluates on a routine (``ROUTINE_CRITERIA``): the chat path's
+  vocabulary plus the run-level ``counts_match`` (story 2.4).
 - ``criteria_operands``: keyed by declared criteria only; each a flat object of
   short printable-ASCII scalars, because operands are echoed into the
   criterion's verdict ``detail`` (AD-19) and the SDK verifier requires
   printable ASCII there.
+- ``counts_match`` operands: ``left`` and ``right`` (required when the
+  criterion is ``true``) are ``"<connection DID>#<capability>"`` — a
+  connection of this routine and a capability it exposes; ``left_path`` and
+  ``right_path`` (required with them) are RFC 6901 JSON Pointers into each
+  output; ``key`` is an optional label. A source must be one a firing can read
+  unattended: read-class, or a write the routine allows without asking. Every value is a string, and a check that compares a
+  source with itself is refused because it always passes.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..middleware.connections import is_connection
-from ..middleware.criteria import SUPPORTED_CRITERIA
+from ..middleware.criteria import COUNTS_MATCH_OPERANDS, ROUTINE_CRITERIA
 from ..middleware.scope_classes import (
     ScopeClass,
     is_recognised,
@@ -42,6 +50,9 @@ from ..middleware.scope_classes import (
 MAX_CRITERIA = 8
 MAX_OPERANDS = 8
 MAX_OPERAND_CHARS = 200
+
+# RFC 6901: "" is the whole document; each token is "/" then unescaped chars.
+_JSON_POINTER = re.compile(r"(/([^~/]|~[01])*)*")
 
 ManifestReader = Callable[[str], Awaitable[dict[str, Any]]]
 
@@ -69,7 +80,7 @@ def check_criteria(criteria: Any, operands: Any) -> None:
     if len(criteria) > MAX_CRITERIA:
         raise RoutineRejected("criteria", f"at most {MAX_CRITERIA} criteria")
     for key, value in criteria.items():
-        if key not in SUPPORTED_CRITERIA:
+        if key not in ROUTINE_CRITERIA:
             raise RoutineRejected("criteria", f"unsupported criterion: {key}")
         if not isinstance(value, bool):
             raise RoutineRejected("criteria", f"{key} must be true or false")
@@ -99,6 +110,85 @@ def check_criteria(criteria: Any, operands: Any) -> None:
                     "criteria_operands",
                     f"{key}.{name} must be a short printable-ASCII value",
                 )
+    _check_counts_match_shape(criteria, operands)
+
+
+def _counts_match_sources(operands: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """``(operand, did, capability)`` for each declared counts_match source."""
+    spec = operands.get("counts_match")
+    if not isinstance(spec, dict):
+        return []
+    sources = []
+    for side in ("left", "right"):
+        if isinstance(spec.get(side), str):
+            did, _, capability = spec[side].partition("#")
+            sources.append((spec[side], did, capability))
+    return sources
+
+
+def _check_counts_match_shape(
+    criteria: dict[str, Any], operands: dict[str, Any]
+) -> None:
+    spec = operands.get("counts_match")
+    if spec is None:
+        if criteria.get("counts_match") is True:
+            raise RoutineRejected(
+                "criteria_operands", "counts_match needs left and right sources"
+            )
+        return
+    for name, value in spec.items():
+        if name not in COUNTS_MATCH_OPERANDS:
+            raise RoutineRejected(
+                "criteria_operands",
+                f"counts_match.{name} is not an operand "
+                "(left, right, left_path, right_path, key)",
+            )
+        if not isinstance(value, str):
+            raise RoutineRejected(
+                "criteria_operands", f"counts_match.{name} must be a string"
+            )
+    if criteria.get("counts_match") is True and not (
+        spec.get("left") and spec.get("right")
+    ):
+        raise RoutineRejected(
+            "criteria_operands", "counts_match needs left and right sources"
+        )
+    # A path is required: a whole output that is a list of MCP content blocks
+    # would otherwise be counted by its blocks, not by its data.
+    if criteria.get("counts_match") is True and not (
+        spec.get("left_path") and spec.get("right_path")
+    ):
+        raise RoutineRejected(
+            "criteria_operands",
+            "counts_match needs left_path and right_path (e.g. /total_count)",
+        )
+    for side in ("left", "right"):
+        if side not in spec:
+            continue
+        did, sep, capability = spec[side].partition("#")
+        if (
+            not sep
+            or not did.startswith("did:orcha:agent:")
+            or not is_valid_capability_id(capability)
+        ):
+            raise RoutineRejected(
+                "criteria_operands",
+                f"counts_match.{side} must be <connection DID>#<capability>",
+            )
+    for path in ("left_path", "right_path"):
+        if path in spec and not (spec[path] and _JSON_POINTER.fullmatch(spec[path])):
+            raise RoutineRejected(
+                "criteria_operands",
+                f"counts_match.{path} must be a JSON Pointer (e.g. /total_count)",
+            )
+    if "left" in spec and (spec.get("left"), spec.get("left_path", "")) == (
+        spec.get("right"),
+        spec.get("right_path", ""),
+    ):
+        raise RoutineRejected(
+            "criteria_operands",
+            "counts_match compares a source with itself, so it always passes",
+        )
 
 
 def _capabilities(manifest: dict[str, Any]) -> set[str]:
@@ -180,6 +270,37 @@ async def check_routine(
                 "(a destructive call always waits for a person)",
             )
         classes[entry] = scope_class.label
+
+    for operand, did, capability in _counts_match_sources(criteria_operands):
+        if did not in manifests:
+            raise RoutineRejected(
+                "criteria_operands",
+                f"{operand} does not name one of this routine's connections",
+            )
+        manifest = manifests[did]
+        if capability not in _capabilities(manifest):
+            raise RoutineRejected(
+                "criteria_operands", f"{capability} is not a capability of {did}"
+            )
+        # A source the firing's scope gate would refuse or pause can never be
+        # read unattended, so its count would be unreadable on every firing.
+        declared = manifest.get("scope_classes")
+        scope_class = resolve_scope_class(
+            capability,
+            manifest_classes=declared if isinstance(declared, dict) else None,
+        )
+        if scope_class is ScopeClass.DESTRUCTIVE:
+            raise RoutineRejected(
+                "criteria_operands",
+                f"{capability} resolves to destructive, so a firing can never "
+                "read it unattended",
+            )
+        if scope_class is not ScopeClass.READ and operand not in classes:
+            raise RoutineRejected(
+                "criteria_operands",
+                f"{capability} is a {scope_class.label}: allow {operand} without "
+                "asking, or a firing can never read it",
+            )
     return classes
 
 

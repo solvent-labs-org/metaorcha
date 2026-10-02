@@ -6,8 +6,9 @@ any suspending call, and the gate must complete before the credit block.
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -129,7 +130,11 @@ def flow(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
 
     FakePrisma.instances = []
-    monkeypatch.setattr("src.generated_client.Prisma", FakePrisma, raising=True)
+    # CI has no generated Prisma client; settlement imports it at call time, so
+    # the test supplies the module itself (the real one is never needed here).
+    generated = ModuleType("src.generated_client")
+    generated.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "src.generated_client", generated)
     import redis.asyncio as aioredis
 
     monkeypatch.setattr(aioredis, "from_url", lambda *a, **k: FakeRedisCM(calls))
@@ -202,7 +207,7 @@ async def test_flag_on_run_id_gate_settles_then_credit(
             super().__init__()
             self.transaction = _SpyTable()
 
-    monkeypatch.setattr("src.generated_client.Prisma", _SpyPrisma)
+    monkeypatch.setattr(sys.modules["src.generated_client"], "Prisma", _SpyPrisma)
 
     await settle_invocation(run_id="run-a", **_kwargs())
 
