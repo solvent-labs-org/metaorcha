@@ -17,6 +17,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 
+from .office_db import FakeDB
+
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32-bytes-1234567")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
@@ -69,7 +71,8 @@ async def gw(monkeypatch):
     superagent.post = AsyncMock(
         return_value=Response(200, json={"classes": {f"{DID}#create_comment": "write"}})
     )
-    db = MagicMock()
+    db = FakeDB()
+    db.add_connection(DID, "user-001", "po_user-001")
     db.workflowtemplate.create = AsyncMock(side_effect=_record)
     app.state.superagent = superagent
     app.state.db = db

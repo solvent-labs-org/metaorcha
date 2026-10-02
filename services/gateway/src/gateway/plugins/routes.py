@@ -11,9 +11,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from common.utils.src.operator import STDIO_OPERATOR_ONLY, is_operator
 
-from ..auth.models import TokenPayload
 from ..config import settings
-from ..dependencies import require_member
+from ..offices.context import OfficeContext, require_member_office
 from .mcp_manifest import (
     AUTH_VAR_PATTERN,
     CONNECTION_TAG,
@@ -59,8 +58,9 @@ class ConnectMcpRequest(BaseModel):
 async def connect_mcp(
     body: ConnectMcpRequest,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_member)],
+    ctx: Annotated[OfficeContext, Depends(require_member_office)],
 ) -> Any:
+    payload = ctx.payload
     # AD-18: the whole connections feature sits behind one flag, off by default.
     if not settings.connections_enabled:
         raise HTTPException(
@@ -131,7 +131,24 @@ async def connect_mcp(
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     data = resp.json()
-    registered = (data.get("data") or {}).get("agent_id")
+    registered = (data.get("data") or {}).get("agent_id") or agent_id
+    # Story 2.0: the connection belongs to the office the request runs in.
+    # The Registry knows users, not offices, so the Gateway binds it here; if
+    # that fails, the connection is taken back rather than left in no office.
+    try:
+        await request.app.state.db.agent.update(
+            where={"id": registered}, data={"office_id": ctx.office_id}
+        )
+    except Exception:
+        logger.exception("mcp connect: office binding failed; removing the connection")
+        try:
+            await remove_connection(request, registered, payload.user_id)
+        except HTTPException:
+            logger.warning("mcp connect: cleanup after a failed office binding failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="the connection could not be added to this office; it was not kept",
+        ) from None
     if registered and registered != agent_id:
         # Both ids derive from the caller's name: strip line breaks before logging.
         logger.warning(
@@ -238,7 +255,7 @@ async def remove_connection(request: Request, agent_id: str, user_id: str) -> No
 async def revoke_connection(
     agent_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_member)],
+    ctx: Annotated[OfficeContext, Depends(require_member_office)],
 ) -> None:
     """Remove a whole connection: the caller's tokens, then the registration.
 
@@ -262,6 +279,78 @@ async def revoke_connection(
     Receipts already sealed are not touched: nothing here reads or writes an
     attestation, a transcript or an audit row.
     """
+    if not await owns_connection_here(request, agent_id, ctx):
+        raise _not_a_connection(agent_id)
     if not await is_connection_record(request, agent_id):
         raise _not_a_connection(agent_id)
-    await remove_connection(request, agent_id, payload.user_id)
+    await remove_connection(request, agent_id, ctx.user_id)
+
+
+async def owns_connection_here(
+    request: Request, agent_id: str, ctx: OfficeContext
+) -> bool:
+    """Whether ``agent_id`` is the caller's connection in the request's office.
+
+    Story 2.0: another office's connection, or another member's, reads as
+    absent (404). A connection with no office — one registered before offices
+    existed and missed by the backfill — still belongs to its owner, so they
+    can always take their token back.
+    """
+    if not _CONNECTION_DID.fullmatch(agent_id):
+        return False
+    found = await request.app.state.db.agent.find_first(
+        where={
+            "id": agent_id,
+            "user_id": ctx.user_id,
+            "OR": [{"office_id": ctx.office_id}, {"office_id": None}],
+        }
+    )
+    return found is not None
+
+
+async def remove_member_connections(
+    request: Request, office_id: str, user_id: str
+) -> int:
+    """Revoke every active connection ``user_id`` holds in ``office_id``.
+
+    Used when a member leaves or is removed (story 2.0, FR-33). Same order as
+    ``remove_connection`` — the member's vault rows first, so the next call
+    fails closed — but the soft delete is written here rather than through the
+    Registry's DELETE, which checks the *caller* owns the agent and so refuses
+    an office owner removing someone else. The write is the Registry's own
+    soft delete (``is_active = false``, nothing else), so old receipts still
+    resolve the DID (story 1.7). Raises 502 on the first failure; every step
+    is idempotent, so a retry converges.
+    """
+    db = request.app.state.db
+    rows = await db.agent.find_many(
+        where={
+            "office_id": office_id,
+            "user_id": user_id,
+            "is_active": True,
+            "tags": {"has": CONNECTION_TAG},
+        }
+    )
+    sa = request.app.state.superagent
+    for row in rows:
+        cred = await sa.delete(
+            f"/secrets/agent-env/{row.id}", params={"user_id": user_id}
+        )
+        if cred.status_code >= 400:
+            logger.warning("member removal: vault delete failed (%s)", cred.status_code)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="a connection's token could not be removed; the member was "
+                "not removed",
+            )
+        try:
+            await db.agent.update(where={"id": row.id}, data={"is_active": False})
+        except Exception:
+            logger.exception("member removal: soft delete failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="a connection could not be deregistered; the member was not "
+                "removed",
+            ) from None
+        await _sweep_session_credentials(request.app.state.redis, row.id)
+    return len(rows)

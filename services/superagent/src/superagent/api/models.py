@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class CreateSessionRequest(BaseModel):
     user_id: str
+    office_id: str | None = Field(
+        default=None,
+        description="Office the session belongs to (set by Gateway); fixed at creation.",
+    )
     title: str | None = Field(
         default=None,
         description="Display title; truncated first prompt from client.",
@@ -175,6 +179,7 @@ class ResumeRequest(BaseModel):
 class SessionDetailResponse(BaseModel):
     session_id: str
     user_id: str
+    office_id: str | None = None
 
 
 class SessionStatusResponse(BaseModel):

@@ -53,8 +53,57 @@ model User {
   agent_invocations     AgentInvocation[]
   transactions          Transaction[]
   artifacts             Artifact[]
+  office_memberships    OfficeMember[]
+  personal_office       Office?         @relation("PersonalOffice")
 
   @@map("users")
+}
+
+// ============================================================================
+// OFFICES — the tenant boundary (story 2.0, PRD FR-32/33/36)
+// ============================================================================
+// An office owns its members' connections, routines and sessions; nothing in
+// one office is visible to another. Every user has exactly one personal office
+// (id `po_<user id>`, created on first use or by the 2026-10-02 backfill) and
+// may belong to others. The office is NOT in the receipt: no envelope byte
+// changes (OQ-17).
+
+enum OfficeRole {
+  OWNER
+  MEMBER
+}
+
+model Office {
+  id                String   @id @default(cuid())
+  name              String
+  // Set only on a personal office: its one owner. Unique, so a user has at most
+  // one personal office even under concurrent first requests.
+  personal_owner_id String?  @unique
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  personal_owner     User?              @relation("PersonalOffice", fields: [personal_owner_id], references: [id], onDelete: Cascade)
+  members            OfficeMember[]
+  agents             Agent[]
+  workflow_templates WorkflowTemplate[]
+  sessions           ConversationSession[]
+
+  @@map("offices")
+}
+
+model OfficeMember {
+  id         String     @id @default(cuid())
+  office_id  String
+  user_id    String
+  role       OfficeRole @default(MEMBER)
+  created_at DateTime   @default(now())
+
+  office Office @relation(fields: [office_id], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([office_id, user_id])
+  @@index([user_id])
+  @@map("office_members")
 }
 
 model RefreshToken {
@@ -112,8 +161,13 @@ model Agent {
   updated_at DateTime @updatedAt
   is_active  Boolean  @default(true)
 
+  // Story 2.0: the office a connection belongs to, set by the Gateway when the
+  // connection is registered. NULL for catalogue and platform agents.
+  office_id String?
+
   // Relations
   user          User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  office        Office?         @relation(fields: [office_id], references: [id])
   transport     Transport?
   security      Security?
   payment       Payment?
@@ -124,6 +178,7 @@ model Agent {
 
   @@unique([user_id, name, version])
   @@index([user_id])
+  @@index([office_id])
   @@index([protocol_type])
   @@index([health_status])
   @@map("agents")
@@ -322,12 +377,17 @@ model WorkflowTemplate {
   // echoed into each criterion's verdict detail so the receipt carries them.
   criteria             Json      @default("{}")
   criteria_operands    Json      @default("{}")
+  // Story 2.0: the office the routine belongs to. NULL only for a row written
+  // by code that predates offices; office-scoped reads never return it.
+  office_id            String?
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt
 
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  office Office? @relation(fields: [office_id], references: [id])
 
   @@index([user_id])
+  @@index([office_id, user_id])
   @@index([next_run_at])
   @@map("workflow_templates")
 }
@@ -347,15 +407,21 @@ model ConversationSession {
   user_id                 String
   title                   String
   persisted_message_count Int      @default(0)
+  // Story 2.0: fixed when the session is created. NULL on a session created by
+  // a caller that names no office; the Gateway reads that as the owner's
+  // personal office.
+  office_id               String?
   created_at              DateTime @default(now())
   updated_at              DateTime @updatedAt
 
   user               User                     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  office             Office?                  @relation(fields: [office_id], references: [id])
   transcript_entries SessionTranscriptEntry[]
   artifacts          Artifact[]
 
   @@index([user_id])
   @@index([user_id, updated_at])
+  @@index([office_id, user_id])
   @@map("conversation_sessions")
 }
 

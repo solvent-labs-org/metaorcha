@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from .office_db import FakeDB
+
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32-bytes-1234567")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
@@ -50,9 +52,15 @@ async def client_with_mocks():
 
     redis = AsyncMock()
     redis.sismember = AsyncMock(return_value=False)
-    redis.get = AsyncMock(return_value="user-001")
+    # the session's owner, and (story 2.0) its office: the caller's personal one
+    redis.get = AsyncMock(
+        side_effect=lambda key: (
+            "po_user-001" if key.startswith("gateway:session-office:") else "user-001"
+        )
+    )
 
     app.state.redis = redis
+    app.state.db = FakeDB()
     app.state.superagent = AsyncMock()
 
     token, _ = create_access_token(user_id="user-001", email="test@example.com")
