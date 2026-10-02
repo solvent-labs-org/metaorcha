@@ -19,18 +19,23 @@ interface AuditGate {
   outcome: string
   failed_checks?: string[]
   envelope_digest?: string
+  /** False when the gate judged a run that charged nothing (verdict only, AD-12). */
+  charged?: boolean
 }
 
 /** The one place a check name is turned into a label — see frontend/TRUST-INDICATORS.md. */
 function GateIndicator({ gate }: { gate: AuditGate | null }) {
   if (!gate) return null
   if (gate.outcome === 'settled') {
+    const verdictOnly = gate.charged === false
     return (
       <span
         className="font-mono text-[10px] font-semibold text-semantic-success"
-        title="settle gate: every check passed (schema, steps_root, steps_merkle_root, signature)"
+        title={`settle gate: every check passed (schema, steps_root, steps_merkle_root, signature)${
+          verdictOnly ? ' — verdict only, nothing charged' : ''
+        }`}
       >
-        settled
+        {verdictOnly ? 'settled — verdict only' : 'settled'}
       </span>
     )
   }

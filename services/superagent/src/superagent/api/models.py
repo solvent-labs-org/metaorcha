@@ -78,6 +78,9 @@ class RunAuditGate(BaseModel):
     failed_checks: list[str]
     envelope_digest: str
     created_at: str
+    # False for a verdict-only evaluation (``call_id`` NULL, AD-12): the run
+    # was judged and nothing was charged. "settled" then moves no money.
+    charged: bool = True
 
 
 class RunAuditResponse(BaseModel):

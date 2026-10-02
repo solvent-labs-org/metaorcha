@@ -82,6 +82,7 @@ async def load_gate_outcome(session_id: str, db: Any = None) -> RunAuditGate | N
         failed_checks=checks,
         envelope_digest=str(getattr(row, "envelope_digest", "") or ""),
         created_at=created.isoformat() if isinstance(created, datetime) else "",
+        charged=getattr(row, "call_id", None) is not None,
     )
 
 
