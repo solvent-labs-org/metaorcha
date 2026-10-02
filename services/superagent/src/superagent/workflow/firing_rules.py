@@ -109,8 +109,8 @@ def outcome_of(events: Iterable[dict[str, Any]]) -> Outcome:
       ``paused``, with what it waits for;
     - an error event → ``error``, with its category;
     - a kill-switch stop → ``error``;
-    - ``done`` with a sealed ``run_id`` → ``attested_unsettled`` (the settle
-      gate's outcome refines this in story 2.3);
+    - ``done`` with a sealed ``run_id`` → ``attested_unsettled`` (``judged``
+      refines it by the settle gate's outcome, story 2.3);
     - ``done`` with no receipt → ``error`` (``no_receipt``).
     """
     interrupt: dict[str, Any] | None = None
@@ -141,6 +141,33 @@ def outcome_of(events: Iterable[dict[str, Any]]) -> Outcome:
             return Outcome(ATTESTED_UNSETTLED, None, run_id)
         return Outcome(ERROR, NO_RECEIPT)
     return Outcome(ERROR, "no_outcome: the run ended without finishing")
+
+
+def judged(outcome: Outcome, rows: Iterable[Any]) -> Outcome:
+    """Refine an attested firing by the settle gate's ledger rows (story 2.3).
+
+    ``rows`` are the run's ``attested_settlements`` rows, oldest first. The
+    gate judges every sealed run once, at its end (AD-12), so:
+
+    - a ``settled`` row → ``settled``;
+    - otherwise a first row ``refused`` → ``refused``, with the checks that
+      failed as the detail (``verdict_fail`` when the routine's own
+      criterion failed);
+    - no row → unchanged ``attested_unsettled``: the gate is off.
+
+    Anything but an attested firing is returned as it is.
+    """
+    if outcome.state != ATTESTED_UNSETTLED:
+        return outcome
+    rows = list(rows)
+    if any(getattr(row, "outcome", None) == "settled" for row in rows):
+        return Outcome(SETTLED, None, outcome.run_id)
+    if rows and getattr(rows[0], "outcome", None) == "refused":
+        raw = getattr(rows[0], "failed_checks", None)
+        raw = getattr(raw, "data", raw)
+        checks = [c for c in raw if isinstance(c, str)] if isinstance(raw, list) else []
+        return Outcome(REFUSED, ", ".join(checks) or None, outcome.run_id)
+    return outcome
 
 
 def _interrupt_detail(event: dict[str, Any]) -> str:

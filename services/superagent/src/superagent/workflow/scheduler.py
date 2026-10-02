@@ -21,7 +21,11 @@ Each tick, for every routine whose ``next_run_at`` is due:
    mark the row ``running``, and run the turn as the routine's owner.
 4. **Record how it ended** (``firing_rules.outcome_of``): ``paused`` on an
    approval card (resumed from the firing's session; ``record_resume``
-   updates the row), ``error``, or ``attested_unsettled`` with the run_id.
+   updates the row), ``error``, or the sealed run_id — and then the settle
+   gate's judgement of that run (story 2.3, AD-12): ``settled``, ``refused``
+   with the failed checks, or ``attested_unsettled`` when the gate is off.
+   The gate runs inside the turn, before its ``done`` event, so its row is
+   already written when the firing reads it.
 
 A crash after the claim skips that slot; it is never repeated. On start, a
 row left ``scheduled`` or ``running`` with no run_id is marked ``error`` with
@@ -282,7 +286,8 @@ class WorkflowScheduler:
         ):
             if isinstance(event, dict) and event.get("type") in rules.END_EVENTS:
                 events.append(event)
-        outcome = rules.outcome_of(events)
+        async with self._db() as db:
+            outcome = await _judged(db, rules.outcome_of(events))
         await self._set(
             firing.id, state=outcome.state, detail=outcome.detail, run_id=outcome.run_id
         )
@@ -325,6 +330,24 @@ class WorkflowScheduler:
             await db.routinefiring.update(where={"id": firing_id}, data=data)
 
 
+async def _judged(db: Any, outcome: rules.Outcome) -> rules.Outcome:
+    """The outcome refined by the gate's rows for its run. Never raises.
+
+    A failed read leaves the firing ``attested_unsettled``: the run is
+    sealed either way, and the ledger still holds the gate's row.
+    """
+    if outcome.state != rules.ATTESTED_UNSETTLED or not outcome.run_id:
+        return outcome
+    try:
+        rows = await db.attestedsettlement.find_many(
+            where={"run_id": outcome.run_id}, order={"created_at": "asc"}
+        )
+    except Exception:
+        logger.exception("routine firing: gate outcome not read (%s)", outcome.run_id)
+        return outcome
+    return rules.judged(outcome, rows)
+
+
 async def record_resume(
     session_id: str,
     events: list[dict[str, Any]],
@@ -343,7 +366,7 @@ async def record_resume(
             )
             if firing is None:
                 return
-            outcome = rules.outcome_of(events)
+            outcome = await _judged(conn, rules.outcome_of(events))
             await conn.routinefiring.update(
                 where={"id": firing.id},
                 data={
