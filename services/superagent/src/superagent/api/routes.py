@@ -302,6 +302,10 @@ async def resume_session(
     value.setdefault("authoriser_user_id", body.user_id)
 
     async def gen() -> AsyncIterator[str]:
+        from ..workflow.firing_rules import END_EVENTS
+        from ..workflow.scheduler import record_resume
+
+        ended: list[dict[str, Any]] = []
         try:
             async for event in runner.resume_from_interrupt(
                 session_id=session_id,
@@ -309,10 +313,16 @@ async def resume_session(
                 session_credentials=body.session_credentials,
                 user_id=body.user_id,
             ):
+                if isinstance(event, dict) and event.get("type") in END_EVENTS:
+                    ended.append(event)
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:
             logger.exception("resume_session SSE gen failed for session %s", session_id)
+            ended.append({"type": "error", "category": "internal"})
             yield f"data: {json.dumps({'type': 'error', 'error': 'Unexpected server error'})}\n\n"
+        # Story 2.2: a paused routine firing resumed from its session moves on
+        # to the state this turn ended in. A no-op for any other session.
+        await record_resume(session_id, ended)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

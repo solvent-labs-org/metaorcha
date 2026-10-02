@@ -36,6 +36,21 @@ class CreateRoutineRequest(BaseModel):
     timezone: str = Field(default="UTC", max_length=64)
 
 
+class FiringResponse(BaseModel):
+    """One claimed schedule slot (story 2.2, AD-22). ``state`` is the shared
+    vocabulary: scheduled, running, attested_unsettled, settled, refused,
+    paused, skipped, error. A paused firing's approval is in ``session_id``."""
+
+    id: str
+    slot: datetime
+    state: str
+    detail: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class WorkflowResponse(BaseModel):
     id: str
     name: str
@@ -55,3 +70,6 @@ class WorkflowResponse(BaseModel):
     scope_allow: list[str] = Field(default_factory=list)
     criteria: dict[str, Any] = Field(default_factory=dict)
     criteria_operands: dict[str, Any] = Field(default_factory=dict)
+    # Story 2.2: when the schedule next fires, and how the last firing ended.
+    next_run_at: datetime | None = None
+    last_firing: FiringResponse | None = None

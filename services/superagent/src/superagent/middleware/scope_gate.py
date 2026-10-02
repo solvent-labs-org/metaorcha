@@ -19,6 +19,18 @@ Decisions, in order:
 - A ``destructive`` capability pauses every time — no allow list, override
   or prior approval of a different call skips it.
 
+On a routine firing (story 2.2, AD-18/AD-19) nobody is present to approve,
+so the routine's own bounds replace the pause for everything but a
+destructive call:
+
+- a connection that is not one of the routine's is refused;
+- a ``write`` passes only when the routine allows ``<DID>#<capability>``,
+  and is otherwise refused with ``scope_not_allowed`` — never paused;
+- a ``destructive`` call still pauses the firing, and is never
+  auto-approved; the routine's owner decides it from the firing's session.
+
+A refusal is ``ScopeNotAllowed``, a hard failure: nothing is dispatched.
+
 A pause is ``ScopeApprovalRequired``, the resumable ``AuthInterruptRequired``
 pattern (not the decline-only ``PaymentInterrupt``): the node catches it,
 calls ``interrupt()`` with the ``HITL_APPROVAL`` event and, on resume, re-runs
@@ -41,6 +53,7 @@ from internal_commons.interrupts.types import InterruptType
 from .scope_classes import SYSTEM_TOOL_CLASSES, ScopeClass, resolve_scope_class
 
 SCOPE_DECLINED = "scope_declined"
+SCOPE_NOT_ALLOWED = "scope_not_allowed"
 SCOPE_APPROVAL_CHECK = "scope_approval"
 USER_DID_PREFIX = "did:orcha:user:"
 _TARGET_MAX_CHARS = 200
@@ -69,6 +82,20 @@ class ScopeApprovalRequired(Exception):
         super().__init__(event.message)
         self.event = event
         self.scope_class = scope_class
+
+
+class ScopeNotAllowed(Exception):
+    """A call a routine firing may not make. Hard: nothing is dispatched."""
+
+
+def _routine_allows(routine: dict[str, Any], agent_id: str, capability: str) -> bool:
+    allow = routine.get("scope_allow")
+    return isinstance(allow, list) and f"{agent_id}#{capability}" in allow
+
+
+def _routine_connections(routine: dict[str, Any]) -> list[Any]:
+    connections = routine.get("connections")
+    return connections if isinstance(connections, list) else []
 
 
 def approver_did(user_id: Any) -> str:
@@ -187,18 +214,29 @@ def scope_gate(
     override: Any = None,
     scope_approval: Any = None,
     connection_name: str = "",
+    routine: Any = None,
 ) -> ScopeClass:
     """Pass the call or raise ``ScopeApprovalRequired``. Returns the class.
 
     ``scope_approval`` is ``{"call_id", "approver"}`` from a resumed call; it
     passes only the ``call_id`` it names. Never returns for a destructive
     call without one.
+
+    ``routine`` is the firing's ``{connections, scope_allow, ...}`` when the
+    call is made by a routine firing; then a call outside the routine's
+    bounds raises ``ScopeNotAllowed`` instead of pausing (see module doc).
     """
     if agent_id == "_system":
         # Platform standing allow: acts on the platform's own session state.
         # Keyed on the site, not the name: a connection whose capability is
         # called ``save_artifact`` is still a connection.
         return SYSTEM_TOOL_CLASSES.get(capability_id, ScopeClass.WRITE)
+    firing = routine if isinstance(routine, dict) else None
+    if firing is not None and agent_id not in _routine_connections(firing):
+        raise ScopeNotAllowed(
+            f"{SCOPE_NOT_ALLOWED}: {agent_id} is not one of this routine's "
+            "connections; the call was not sent"
+        )
     scope_class = resolve_scope_class(
         capability_id,
         manifest_classes=_manifest_scope_classes(manifest),
@@ -212,6 +250,15 @@ def scope_gate(
         and scope_approval.get("approver")
     ):
         return scope_class
+    if firing is not None and scope_class is ScopeClass.WRITE:
+        # Nobody is present to approve: the routine's allows are the only
+        # allow list, and a write outside them is refused, not paused.
+        if _routine_allows(firing, agent_id, capability_id):
+            return scope_class
+        raise ScopeNotAllowed(
+            f"{SCOPE_NOT_ALLOWED}: {capability_id!r} is a write this routine does "
+            "not allow, and nobody is present to approve it; the call was not sent"
+        )
     if scope_class is ScopeClass.WRITE and _manifest_allows(manifest, capability_id):
         return scope_class
     name = connection_name or (
@@ -234,8 +281,10 @@ def scope_gate(
 __all__ = [
     "SCOPE_APPROVAL_CHECK",
     "SCOPE_DECLINED",
+    "SCOPE_NOT_ALLOWED",
     "USER_DID_PREFIX",
     "ScopeApprovalRequired",
+    "ScopeNotAllowed",
     "approval_for",
     "approver_did",
     "is_approved",

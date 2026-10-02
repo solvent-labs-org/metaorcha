@@ -55,6 +55,7 @@ model User {
   artifacts             Artifact[]
   office_memberships    OfficeMember[]
   personal_office       Office?         @relation("PersonalOffice")
+  routine_firings       RoutineFiring[]
 
   @@map("users")
 }
@@ -87,6 +88,7 @@ model Office {
   agents             Agent[]
   workflow_templates WorkflowTemplate[]
   sessions           ConversationSession[]
+  firings            RoutineFiring[]
 
   @@map("offices")
 }
@@ -383,13 +385,57 @@ model WorkflowTemplate {
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt
 
-  user   User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  office Office? @relation(fields: [office_id], references: [id])
+  user    User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  office  Office?         @relation(fields: [office_id], references: [id])
+  firings RoutineFiring[]
 
   @@index([user_id])
   @@index([office_id, user_id])
   @@index([next_run_at])
   @@map("workflow_templates")
+}
+
+// Story 2.2 (AD-19, AD-22): one row per claimed schedule slot, written before
+// the run exists. The state vocabulary is shared by every pane and export;
+// nothing else invents a state.
+enum FiringState {
+  scheduled
+  running
+  attested_unsettled
+  settled
+  refused
+  paused
+  skipped
+  error
+}
+
+model RoutineFiring {
+  id         String      @id @default(cuid())
+  routine_id String
+  // The routine's office and owner when the slot was claimed (FR-34): a
+  // firing runs as its owner, inside its office, from its first row.
+  office_id  String?
+  user_id    String
+  // The schedule slot this row claimed: the routine's next_run_at as read
+  // before the compare-and-set advanced it. At most one row per slot.
+  slot       DateTime
+  state      FiringState @default(scheduled)
+  // Why the row is in its state: a named error, the paused capability, ...
+  detail     String?     @db.Text
+  session_id String?     @unique
+  // RFC 0003 run_id, set once the run is sealed (NULL until then).
+  run_id     String?
+  created_at DateTime    @default(now())
+  updated_at DateTime    @updatedAt
+
+  routine WorkflowTemplate @relation(fields: [routine_id], references: [id], onDelete: Cascade)
+  office  Office?          @relation(fields: [office_id], references: [id])
+  user    User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([routine_id, slot])
+  @@index([routine_id, state])
+  @@index([office_id])
+  @@map("routine_firings")
 }
 
 // ============================================================================

@@ -107,6 +107,26 @@ class ExecutionMiddleware:
             call_id,
         )
 
+        # Step 1.5 (story 2.2): a routine firing calls only its routine's
+        # connections — refused before PaymentGuard or PreFlight could pause
+        # an unattended run on an agent the routine never named.
+        from .scope_gate import SCOPE_NOT_ALLOWED
+
+        routine = self._state.get("routine_context")
+        if isinstance(routine, dict) and agent_id not in (
+            routine.get("connections") or []
+        ):
+            return await self._refuse_for_routine(
+                f"Error: {SCOPE_NOT_ALLOWED}: {agent_id} is not one of this "
+                "routine's connections; the call was not sent",
+                agent_id=agent_id,
+                capability_id=capability_id,
+                protocol=protocol,
+                tool_name=tool_name,
+                args=args,
+                call_id=call_id,
+            )
+
         # Step 2: InputGuard
         schema = await self._get_capability_schema(agent_id, capability_id)
         try:
@@ -158,15 +178,30 @@ class ExecutionMiddleware:
 
         # Step 3.5: ScopeGate (AD-18). Connections only, and only with the
         # feature on: an agent registered any other way is dispatched exactly
-        # as before. Raises ScopeApprovalRequired → caught at node level.
-        scope_meta = self._scope_gate(
-            agent_id=agent_id,
-            capability_id=capability_id,
-            args=args,
-            call_id=call_id,
-            manifest=manifest,
-            scope_approval=scope_approval,
-        )
+        # as before. Raises ScopeApprovalRequired → caught at node level. On a
+        # routine firing, a call outside the routine's bounds is refused here
+        # (story 2.2): recorded as a failed step, never dispatched.
+        from .scope_gate import ScopeNotAllowed
+
+        try:
+            scope_meta = self._scope_gate(
+                agent_id=agent_id,
+                capability_id=capability_id,
+                args=args,
+                call_id=call_id,
+                manifest=manifest,
+                scope_approval=scope_approval,
+            )
+        except ScopeNotAllowed as exc:
+            return await self._refuse_for_routine(
+                f"Error: {exc}",
+                agent_id=agent_id,
+                capability_id=capability_id,
+                protocol=protocol,
+                tool_name=tool_name,
+                args=args,
+                call_id=call_id,
+            )
 
         # Step 4: Handler Dispatch
         _call_start = datetime.now(UTC)
@@ -392,9 +427,21 @@ class ExecutionMiddleware:
         agent that is not a connection, the gate is not invoked.
         """
         from .connections import connections_enabled, is_connection
-        from .scope_gate import scope_gate, scope_verdict
+        from .scope_gate import (
+            SCOPE_NOT_ALLOWED,
+            ScopeNotAllowed,
+            scope_gate,
+            scope_verdict,
+        )
 
         if not connections_enabled() or not is_connection(manifest):
+            if isinstance(self._state.get("routine_context"), dict):
+                # A firing runs on its routine's connections and the platform's
+                # own tools, nothing else (story 2.2).
+                raise ScopeNotAllowed(
+                    f"{SCOPE_NOT_ALLOWED}: {agent_id} is not one of this "
+                    "routine's connections; the call was not sent"
+                )
             return {}
         scope_gate(
             agent_id=agent_id,
@@ -405,6 +452,7 @@ class ExecutionMiddleware:
             manifest=manifest,
             scope_approval=scope_approval,
             connection_name=str(manifest.get("name") or ""),
+            routine=self._state.get("routine_context"),
         )
         if (
             isinstance(scope_approval, dict)
@@ -417,6 +465,31 @@ class ExecutionMiddleware:
             }
         return {}
 
+    async def _refuse_for_routine(
+        self,
+        refusal: str,
+        *,
+        agent_id: str,
+        capability_id: str,
+        protocol: str,
+        tool_name: str,
+        args: dict[str, Any],
+        call_id: str,
+    ) -> dict[str, Any]:
+        """A firing's call outside its routine: recorded, never dispatched."""
+        await self.emit_declined(
+            agent_id=agent_id,
+            capability_id=capability_id,
+            protocol=protocol,
+            tool_name=tool_name,
+            args=args,
+            call_id=call_id,
+            content=refusal,
+            verdict={"result": "warn", "detail": "scope_not_allowed"},
+        )
+        self._auto_update_checklist(tool_name, call_id, refusal, success=False)
+        return {"content": refusal}
+
     async def emit_declined(
         self,
         *,
@@ -427,12 +500,16 @@ class ExecutionMiddleware:
         args: dict[str, Any],
         call_id: str,
         content: str,
+        verdict: dict[str, str] | None = None,
     ) -> None:
         """Record a call the user declined at the approval card (AD-21).
 
         Nothing was dispatched, so there is no output to hash beyond the
         refusal text; the step is ``success: false`` and its verdict is
         ``scope_approval:<call_id> warn`` — never ``fail``. Never raises.
+
+        A routine firing's refusal (story 2.2) is recorded the same way, with
+        ``verdict`` ``{"result": "warn", "detail": "scope_not_allowed"}``.
         """
         from .scope_gate import scope_verdict
 
@@ -453,7 +530,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": content[:120]},
                 metadata={
                     "goal": self._session_goal(),
-                    "scope_approval": scope_verdict(approved=False),
+                    "scope_approval": verdict or scope_verdict(approved=False),
                 },
                 args=dict(args),
             )

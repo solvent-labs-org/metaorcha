@@ -137,12 +137,6 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.runner = SessionRunner(graph)
     logger.info("LangGraph graph compiled and runner initialised")
 
-    # 4. Workflow scheduler
-    from .workflow.scheduler import WorkflowScheduler
-
-    _scheduler = WorkflowScheduler()
-    await _scheduler.start()
-
     # 5. Execution observers (KYA) — each opt-in via its own feature flag.
     # set_observer holds exactly ONE observer, so installing each enabled
     # observer directly would be last-wins (e.g. RUN_ATTESTATION_ENABLED
@@ -234,6 +228,14 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
             "Composite observer installed: %s",
             ", ".join(type(o).__name__ for o in observers),
         )
+
+    # 6. Routine scheduler (story 2.2). Started after the observers, so the
+    # first firing is sealed like any chat turn; it fires through the same
+    # runner (NFR-7: there is no second runner).
+    from .workflow.scheduler import WorkflowScheduler
+
+    _scheduler = WorkflowScheduler(runner=app.state.runner)
+    await _scheduler.start()
 
     logger.info("SuperAgent ready on port %d", settings.port)
 

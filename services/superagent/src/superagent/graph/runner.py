@@ -520,6 +520,7 @@ class SessionRunner:
         model: str | None = None,
         custom_instructions: str | None = None,
         acceptance_criteria: dict[str, Any] | None = None,
+        routine_context: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:  # noqa: UP006
         """
         Execute one turn of the ReAct loop, yielding streaming events.
@@ -602,6 +603,9 @@ class SessionRunner:
             state_update["custom_instructions"] = custom_instructions
         # Per-turn: overwrite so a later turn without criteria is today's envelope.
         state_update["_declared_criteria"] = acceptance_criteria
+        # Story 2.2: a routine firing's bounds (the scope gate reads them);
+        # per-turn, so a chat turn in the firing's session is a chat turn.
+        state_update["routine_context"] = routine_context
 
         # AD-14 (story 1.6b): session credentials ride on the run config only
         # (SESSION_CREDENTIALS_CONFIG_KEY above) — never on graph state, which
