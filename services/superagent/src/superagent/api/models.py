@@ -51,8 +51,11 @@ class RunAuditStep(BaseModel):
     capability_id: str = ""
     protocol: str = ""
     internal_tool_name: str = ""
-    verified: bool = True
-    verdict_reason: str = "ok"
+    # None when the step carries no structural verdict (a blocked, unresolved
+    # or system call, or a row persisted before verdicts existed): unchecked,
+    # never counted as verified.
+    verified: bool | None = None
+    verdict_reason: str = ""
     base_fee: str | None = None
     total_cost_usd: str | None = None
 
@@ -61,17 +64,19 @@ class RunAuditSummary(BaseModel):
     total_steps: int
     steps_verified: int
     steps_failed: int
+    steps_unchecked: int = 0
     protocols: list[str]
     total_cost_usd: str
     duration_ms: int | None = None
 
 
 class RunAuditGate(BaseModel):
-    """Latest settle-gate outcome for the run (``attested_settlements``).
+    """The settle gate's deciding row for the session's latest sealed run.
 
-    Present only when a gate evaluated the run; the UI shows a gate-backed
-    indicator only then, and names the failed check from the gate vocabulary
-    (story 1.1, FR-14).
+    Keyed by that run's ``run_id`` (``attested_settlements``), never by the
+    session: a later, unjudged run never inherits an earlier run's outcome.
+    Present only when a gate evaluated that run; ``failed_checks`` are gate
+    ids (story 1.1, FR-14).
     """
 
     outcome: str  # settled | refused
@@ -83,6 +88,37 @@ class RunAuditGate(BaseModel):
     charged: bool = True
 
 
+class RunAuditSettlement(BaseModel):
+    """What a routine firing's sealed run amounts to in settlement (story 2.6).
+
+    Present only for a firing's session whose run sealed. ``state`` is the
+    firing row's, read and never recomputed (AD-22). With no gate decision
+    recorded, the block says so and carries no field that implies one.
+    """
+
+    run_id: str
+    state: str
+    label: str
+    gate_evaluated: bool
+    verdict_only: bool | None = None
+    failed_checks: list[str] | None = None  # gate ids, from the ledger row
+    failed_verdicts: list[dict[str, str]] | None = (
+        None  # the signed verdicts that failed
+    )
+    checks: str | None = None  # unchecked | checked | not_evaluated
+    checks_label: str | None = None
+    statement: str
+
+
+class RunAuditFiring(BaseModel):
+    """The routine firing this session belongs to, as its row records it."""
+
+    routine_id: str
+    state: str
+    label: str
+    detail: str | None = None
+
+
 class RunAuditResponse(BaseModel):
     session_id: str
     generated_at: str
@@ -90,7 +126,10 @@ class RunAuditResponse(BaseModel):
     summary: RunAuditSummary
     steps: list[RunAuditStep]
     note: str
+    run_id: str | None = None
     gate: RunAuditGate | None = None
+    settlement: RunAuditSettlement | None = None
+    firing: RunAuditFiring | None = None
 
 
 class ConversationSessionSummaryDTO(BaseModel):

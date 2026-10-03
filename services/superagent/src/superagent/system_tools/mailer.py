@@ -75,7 +75,7 @@ def _render_receipt(audit: RunAuditResponse) -> str:
         "Steps:",
     ]
     for step in audit.steps:
-        verdict = "verified" if step.verified else "failed"
+        verdict = {True: "verified", False: "failed"}.get(step.verified, "not checked")
         agent_tail = step.agent_id.rsplit(":", 1)[-1]
         line = (
             f"  {step.seq}. {agent_tail} · {step.protocol or '—'} · "
@@ -90,9 +90,16 @@ def _render_receipt(audit: RunAuditResponse) -> str:
         (
             f"Summary: {summary.total_steps} steps — "
             f"{summary.steps_verified} verified, {summary.steps_failed} failed"
+            + (
+                f", {summary.steps_unchecked} not checked"
+                if summary.steps_unchecked
+                else ""
+            )
         ),
         f"Total cost: ${summary.total_cost_usd}",
     ]
+    if audit.settlement is not None:
+        lines.append(f"Settlement: {audit.settlement.label}")
     if summary.duration_ms is not None:
         lines.append(f"Duration: {summary.duration_ms} ms")
     lines += ["", _REPO_LINE]
@@ -116,7 +123,7 @@ async def _send_email(api_key: str, to_email: str, body: str) -> None:
 
 async def _send_run_receipt(args: dict[str, Any], state: dict[str, Any]) -> str:
     """Email the session's run audit as a fixed-template plain-text receipt."""
-    from ..api.audit import build_run_audit
+    from ..api.audit import build_run_audit, load_settlement
     from ..persistence.transcript_store import load_transcript_rows
 
     to_email = str(args.get("to_email") or "").strip()
@@ -136,7 +143,8 @@ async def _send_run_receipt(args: dict[str, Any], state: dict[str, Any]) -> str:
         return "Error: receipt email limit reached (1/day)"
 
     rows = await load_transcript_rows(session_id)
-    body = _render_receipt(build_run_audit(session_id, rows))
+    evidence = await load_settlement(session_id)
+    body = _render_receipt(build_run_audit(session_id, rows, evidence=evidence))
 
     try:
         await _send_email(api_key, to_email, body)

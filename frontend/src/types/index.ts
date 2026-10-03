@@ -37,6 +37,93 @@ export interface SessionLogEntry {
   message: string
 }
 
+// ── Run audit (`GET /sessions/{id}/audit`, SuperAgent `api/models.py`) ─────────
+// The server drops null fields (`response_model_exclude_none`), so anything
+// nullable on the server is optional here. See frontend/TRUST-INDICATORS.md.
+
+export interface RunAuditStep {
+  seq: number
+  agent_id: string
+  capability_id?: string
+  protocol?: string
+  internal_tool_name?: string
+  /**
+   * Structural check (pipeline `_structural_verify`), not a gate check.
+   * Absent when the step carries no structural verdict: unchecked.
+   */
+  verified?: boolean
+  verdict_reason?: string
+  base_fee?: string
+  total_cost_usd?: string
+}
+
+export interface RunAuditSummary {
+  total_steps: number
+  /** Steps whose structural check passed; an unchecked step is never counted here. */
+  steps_verified: number
+  steps_failed: number
+  /** Steps with no structural verdict. */
+  steps_unchecked?: number
+  protocols: string[]
+  total_cost_usd: string
+  duration_ms?: number
+}
+
+/** The settle gate's deciding row for the session's latest sealed run (keyed by run). */
+export interface RunAuditGate {
+  outcome: string
+  failed_checks: string[]
+  envelope_digest: string
+  created_at: string
+  /** False when the gate judged a run that charged nothing (verdict only, AD-12). */
+  charged?: boolean
+}
+
+/**
+ * Story 2.6: what a routine firing's sealed run amounts to in settlement.
+ * Present only for a firing's session. Every field is server-built; the UI
+ * renders `label` and `statement` and derives no words from `state`.
+ */
+export interface RunAuditSettlement {
+  run_id: string
+  state: FiringState
+  /** e.g. "attested but unsettled", "settled — verdict only, nothing charged". */
+  label: string
+  gate_evaluated: boolean
+  verdict_only?: boolean
+  /** Gate ids from the deciding ledger row. */
+  failed_checks?: string[]
+  /** The signed `verdicts[]` entries that failed: `{check, detail?}`. */
+  failed_verdicts?: Array<Record<string, string>>
+  checks?: 'unchecked' | 'checked' | 'not_evaluated'
+  checks_label?: string
+  /** One sentence saying what was and was not decided for the run. */
+  statement: string
+}
+
+/** The routine firing this session belongs to, as its row records it. */
+export interface RunAuditFiring {
+  routine_id: string
+  state: FiringState
+  label: string
+  detail?: string
+}
+
+export interface RunAuditResponse {
+  session_id: string
+  generated_at: string
+  goal: string
+  summary: RunAuditSummary
+  steps: RunAuditStep[]
+  note: string
+  /** The session's latest sealed run: a firing's run, else the newest sealed envelope. */
+  run_id?: string
+  gate?: RunAuditGate
+  /** Firing sessions only. */
+  settlement?: RunAuditSettlement
+  firing?: RunAuditFiring
+}
+
 // ── Interrupt types (manually synced with internal_commons.interrupts) ─────────
 
 export type InterruptType =

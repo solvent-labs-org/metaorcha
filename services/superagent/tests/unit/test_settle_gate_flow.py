@@ -53,6 +53,42 @@ class FakeTable:
     async def find_first(self, where: dict[str, Any]) -> None:
         return None
 
+    async def find_many(
+        self, where: dict[str, Any], order: Any = None
+    ) -> list[SimpleNamespace]:
+        """Equality match, insertion order (= ``created_at`` ascending)."""
+        assert order in (None, {"created_at": "asc"})
+        return [
+            SimpleNamespace(**r)
+            for r in self.rows
+            if all(r.get(k) == v for k, v in where.items())
+        ]
+
+
+class FakeLookupTable(FakeTable):
+    """A table the export reads by key: routine firings, envelopes, routines."""
+
+    async def find_unique(self, where: dict[str, Any]) -> SimpleNamespace | None:
+        found = await self.find_many(where)
+        return found[0] if found else None
+
+    async def find_first(
+        self, where: dict[str, Any], order: Any = None
+    ) -> SimpleNamespace | None:
+        """Equality match plus Prisma's ``NOT``; ``created_at`` desc = newest first."""
+        exclude = where.get("NOT", [])
+        plain = {k: v for k, v in where.items() if k != "NOT"}
+        found = [
+            r
+            for r in await self.find_many(plain)
+            if not any(
+                all(getattr(r, k, None) == v for k, v in c.items()) for c in exclude
+            )
+        ]
+        if order == {"created_at": "desc"}:
+            found.reverse()
+        return found[0] if found else None
+
 
 class FakeTxClient:
     """The client ``FakePrisma.tx()`` yields: the same tables, a distinct object.
@@ -458,3 +494,117 @@ async def test_flag_off_credit_is_still_one_committed_transaction(
     assert prisma.transaction.rows[0]["status"] == "PENDING"
     assert prisma.agentinvocation.rows[0]["status"] == "SUCCESS"
     assert prisma.attestedsettlement.rows == []  # no gate, no audit row
+
+
+# ── Story 2.6: the export of a charged settle ───────────────────────────────
+
+
+async def test_a_charged_settle_exports_settled_and_not_verdict_only(
+    flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real gate settles a charged call; the export says so, not verdict-only.
+
+    A routine's MCP call is never charged today (AD-12), so no firing reaches
+    this path through the scheduler yet. The firing row here is written from
+    the scheduler's own rule (``firing_rules.judged``) over the ledger row the
+    real gate wrote — the state is derived, not assumed.
+    """
+    from superagent.api.audit import build_run_audit, load_settlement
+    from superagent.config import settings
+    from superagent.workflow import firing_rules as rules
+    from validator import signer
+    from validator.run_envelope import build_run_envelope, sign_run_envelope
+
+    from common.utils.src import firing_view
+
+    monkeypatch.setattr(settings, "settlement_require_attestation", True)
+    monkeypatch.setattr(settings, "run_attestation_charter_hash", CHARTER)
+    monkeypatch.delenv(signer.PRIVATE_KEY_ENV, raising=False)
+    signer._reset_signing_key_for_tests()
+
+    run_id = "run-charged"
+    envelope = sign_run_envelope(
+        build_run_envelope(
+            run_id=run_id,
+            agent_dids=["did:orcha:agent:kya-demo"],
+            charter_hash=CHARTER,
+            policy_version="p/1",
+            steps=[
+                {
+                    "call_id": "c1",
+                    "tool": "search_docs",
+                    "args": {"q": "x"},
+                    "output": "y",
+                    "success": True,
+                    "latency_ms": 10,
+                }
+            ],
+            verdicts=[],
+            started_at="2026-08-06T01:00:00Z",
+            finished_at="2026-08-06T01:00:01Z",
+            signer_did="did:orcha:system:validator",
+        )
+    )
+    attestations = [{"run_id": run_id, "session_id": "sess-1", "payload": envelope}]
+    firings: list[dict[str, Any]] = []
+    routines = [{"id": "wf-1", "criteria": {}}]
+
+    class _EvidencePrisma(FakePrisma):
+        """The flow fake plus the three tables the export reads."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.attestation = FakeLookupTable()
+            self.attestation.rows = attestations
+            self.routinefiring = FakeLookupTable()
+            self.routinefiring.rows = firings
+            self.workflowtemplate = FakeLookupTable()
+            self.workflowtemplate.rows = routines
+
+    monkeypatch.setattr(sys.modules["src.generated_client"], "Prisma", _EvidencePrisma)
+
+    await settle_invocation(run_id=run_id, **_kwargs())
+
+    prisma = FakePrisma.instances[-1]
+    assert prisma.tx_log == ["begin", "commit"]
+    assert prisma.transaction.rows[0]["status"] == "PENDING"  # the credit
+    (row,) = prisma.attestedsettlement.rows
+    assert (row["outcome"], row["settled_run_id"], row["call_id"]) == (
+        "settled",
+        run_id,
+        "c1",
+    )
+
+    judged = rules.judged(
+        rules.Outcome(rules.ATTESTED_UNSETTLED, None, run_id),
+        await prisma.attestedsettlement.find_many(where={"run_id": run_id}),
+        [],
+    )
+    assert judged.state == rules.SETTLED
+    firings.append(
+        {
+            "id": "f-1",
+            "routine_id": "wf-1",
+            "session_id": "sess-1",
+            "state": judged.state,
+            "detail": judged.detail,
+            "run_id": judged.run_id,
+        }
+    )
+
+    evidence = await load_settlement("sess-1", db=prisma)
+    body = build_run_audit("sess-1", [], evidence=evidence).model_dump(
+        exclude_none=True
+    )
+
+    settlement = body["settlement"]
+    assert settlement["label"] == "settled"
+    assert firing_view.VERDICT_ONLY not in settlement["label"]
+    assert settlement["verdict_only"] is False
+    assert settlement["gate_evaluated"] is True
+    assert settlement["failed_checks"] == []
+    assert settlement["statement"] == firing_view.STATEMENT_CHARGED
+    assert body["gate"]["charged"] is True
+    assert body["gate"]["outcome"] == "settled"
+    assert body["run_id"] == run_id
+    assert body["firing"]["state"] == "settled"

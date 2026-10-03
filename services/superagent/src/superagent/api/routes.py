@@ -170,13 +170,13 @@ async def get_run_audit(
         load_transcript_rows,
         verify_session_owner,
     )
-    from .audit import build_run_audit, load_gate_outcome
+    from .audit import build_run_audit, load_settlement
 
     if not await verify_session_owner(session_id, user_id):
         raise HTTPException(status_code=404, detail="Session not found")
     rows = await load_transcript_rows(session_id)
-    gate = await load_gate_outcome(session_id)
-    return build_run_audit(session_id, rows, gate=gate)
+    evidence = await load_settlement(session_id)
+    return build_run_audit(session_id, rows, evidence=evidence)
 
 
 def _attestation_response(run_id: str, envelope: dict[str, Any]) -> JSONResponse:
