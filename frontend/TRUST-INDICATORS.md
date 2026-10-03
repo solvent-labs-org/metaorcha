@@ -11,13 +11,19 @@ Two kinds of check exist today:
   `_structural_verify`: the tool's output is well-formed (canvas envelope shape,
   non-empty content). It gates nothing; it is a label on the step.
 - **Settle gate** — `pricing/settle_gate.py`, the only check that gates an outcome
-  (mock credit is written or refused). Its vocabulary, and the only names an
-  indicator may show: SDK verifier `schema`, `steps_root`, `steps_merkle_root`,
-  `signature`; gate-side `charter_hash`, `run_id_mismatch`, `missing_attestation`,
-  `verify_error`, `signer_did`, `agent_did`, `audit_write_error`, `already_settled`,
-  `credit_write_error`, `verdict_fail`. Reaches the UI as `gate` on
-  `GET /sessions/{id}/audit` (latest `attested_settlements` row for the session),
-  present only when a gate evaluated the run.
+  (mock credit is written or refused). Its vocabulary: SDK verifier `schema`,
+  `steps_root`, `steps_merkle_root`, `signature`; gate-side `charter_hash`,
+  `run_id_mismatch`, `missing_attestation`, `verify_error`, `signer_did`,
+  `agent_did`, `audit_write_error`, `already_settled`, `credit_write_error`,
+  `verdict_fail`. The only names an indicator may show are those gate ids, **or
+  the names of signed `verdicts[]` entries that failed** (`structural_verification`,
+  `declared_acceptance`, `counts_match`), which a routine firing's detail
+  substitutes for `verdict_fail` (story 2.5; the ledger keeps `verdict_fail`).
+  Reaches the UI as `gate` on `GET /sessions/{id}/audit` (latest
+  `attested_settlements` row for the session), present only when a gate
+  evaluated the run. The routines pane does not read that: it reads the firing
+  row and its run's ledger row (`attested_settlements` by `run_id`), through the
+  fields the Gateway computes on `last_firing`.
 
 | Indicator | Where | Backed by | State (2026-09-25) |
 |---|---|---|---|
@@ -28,6 +34,11 @@ Two kinds of check exist today:
 | Owl preview copy "green verified" | `pages/OwlPreview.tsx` | nothing | **relabelled** "green complete" |
 | Home tagline "verified multi-protocol run out" | `pages/Home.tsx` | nothing (attestation is flag-gated, the gate is flag-gated) | **relabelled** "recorded multi-protocol run out" |
 | Receipt download comment "the file is not marked verified" | `lib/downloadReceipt.ts` | — | honest as written; unchanged |
+| Routine firing state label "last: `<label>`" | `components/layout/RightPanel.tsx` `FiringLines` | the `routine_firings` row's `state` and `detail`, worded by the Gateway (`common/utils/src/firing_view.py` `state_label`) | **added in story 2.5** — replaces the pane's own state → words table. AD-22 vocabulary only (`scheduled`, `running`, `attested but unsettled`, `settled`, `refused`, `paused`, `skipped`, `error`); a refusal reads "refused — `<check>`" (a gate id or a failed verdict name) or "refused — check not recorded", never bare. Never "done", "success" or "verified". The note line under it is the row's detail (error/skipped/paused) or, for an unsettled run whose ledger read found no row, "no settlement decision is recorded for this run" |
+| Verdict-only qualifier " · verdict only, nothing charged" | `components/layout/RightPanel.tsx` `FiringLines` | the run's deciding ledger row (`attested_settlements`, any settled row else the oldest) with `call_id` NULL — AD-12 | **added in story 2.5** — shown only on a settled or refused firing; a charged row shows no qualifier. Absent when the ledger read failed |
+| Checks qualifier " · recorded, unchecked" / " · checked: `<criteria>`" / " · declared, not evaluated: `<criteria>`" | `components/layout/RightPanel.tsx` `FiringLines` | the routine's declared `criteria` (immutable after save) against the signed envelope's `verdicts[]` (`firing_view.checks_view`) | **added in story 2.5** — "checked" only where each declared criterion's verdict is present in the signed envelope and compared something (a `counts_match` verdict that compared nothing reads "declared, not evaluated"). No criteria → "recorded, unchecked". Absent when no envelope was read. Never "verified" |
+| Receipt control "Receipt" / "receipt in the owner's session" | `components/layout/RightPanel.tsx` `FiringLines` | an `attestations` row for the firing's `run_id` in the firing's own session (`receipt_available`); the viewer owning that session (`receipt_downloadable`) | **added in story 2.5** — the button saves the stored envelope bytes via `lib/downloadReceipt.ts`; a failed download shows its error inline. An office owner viewing a member's firing sees the static text, because the receipt route lets only the session owner through. Absent when no envelope is stored |
+| Workflows page "Last run" | `pages/Workflows.tsx` `WorkflowCard` | the last firing's server label (same as the pane) and its slot | **relabelled in story 2.5** — was the template's `updated_at`, which no run produced; now "`<label>` · `<relative slot time>`", or "—" with no firing. A `scheduled` template now reads the plain word "scheduled" (it was the "Running" badge) |
 
 Recorded, not changed here (outside the frontend; owned by story 3.2, export copy):
 

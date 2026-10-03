@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from common.utils.src import firing_view
+
 # AD-22: the one state vocabulary. Nothing else invents a state.
 SCHEDULED = "scheduled"
 RUNNING = "running"
@@ -145,7 +147,9 @@ def outcome_of(events: Iterable[dict[str, Any]]) -> Outcome:
     return Outcome(ERROR, "no_outcome: the run ended without finishing")
 
 
-def judged(outcome: Outcome, rows: Iterable[Any]) -> Outcome:
+def judged(
+    outcome: Outcome, rows: Iterable[Any], failing: Iterable[str] = ()
+) -> Outcome:
     """Refine an attested firing by the settle gate's ledger rows (story 2.3).
 
     ``rows`` are the run's ``attested_settlements`` rows, oldest first. The
@@ -153,21 +157,25 @@ def judged(outcome: Outcome, rows: Iterable[Any]) -> Outcome:
 
     - a ``settled`` row → ``settled``;
     - otherwise a first row ``refused`` → ``refused``, with the checks that
-      failed as the detail (``verdict_fail`` when the routine's own
-      criterion failed);
-    - no row → unchanged ``attested_unsettled``: the gate is off.
+      failed as the detail. The gate's ``verdict_fail`` is replaced by the
+      names of the signed verdicts that failed (``failing``, read from the
+      run's envelope — story 2.5), so the pane reads ``refused —
+      counts_match``; with none known it stays ``verdict_fail``;
+    - no row → unchanged ``attested_unsettled``: no gate decision is recorded
+      (the flag is off, the gate has not evaluated the run, or its row was
+      not read).
 
     Anything but an attested firing is returned as it is.
     """
     if outcome.state != ATTESTED_UNSETTLED:
         return outcome
-    rows = list(rows)
-    if any(getattr(row, "outcome", None) == "settled" for row in rows):
+    row = firing_view.deciding_row(rows)
+    if row is None:
+        return outcome
+    if getattr(row, "outcome", None) == "settled":
         return Outcome(SETTLED, None, outcome.run_id)
-    if rows and getattr(rows[0], "outcome", None) == "refused":
-        raw = getattr(rows[0], "failed_checks", None)
-        raw = getattr(raw, "data", raw)
-        checks = [c for c in raw if isinstance(c, str)] if isinstance(raw, list) else []
+    if getattr(row, "outcome", None) == "refused":
+        checks = firing_view.expand_checks(firing_view.gate_checks(row), failing)
         return Outcome(REFUSED, ", ".join(checks) or None, outcome.run_id)
     return outcome
 

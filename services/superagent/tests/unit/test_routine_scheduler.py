@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
+import sys
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +33,10 @@ _ids = itertools.count(1)
 
 def _matches(row: dict[str, Any], where: dict[str, Any]) -> bool:
     for key, want in where.items():
+        if key == "NOT":  # Prisma: the row matches none of these
+            if any(_matches(row, clause) for clause in want):
+                return False
+            continue
         have = row.get(key)
         if isinstance(want, dict):
             ((op, arg),) = want.items()
@@ -59,11 +64,14 @@ class Table:
         self, where: dict[str, Any], order: Any = None
     ) -> list[SimpleNamespace]:
         # Rows are kept in insertion order, which is created_at ascending.
-        assert order in (None, {"created_at": "asc"})
-        return [SimpleNamespace(**r) for r in self.rows if _matches(r, where)]
+        assert order in (None, {"created_at": "asc"}, {"created_at": "desc"})
+        found = [SimpleNamespace(**r) for r in self.rows if _matches(r, where)]
+        return found[::-1] if order == {"created_at": "desc"} else found
 
-    async def find_first(self, where: dict[str, Any]) -> SimpleNamespace | None:
-        found = await self.find_many(where)
+    async def find_first(
+        self, where: dict[str, Any], order: Any = None
+    ) -> SimpleNamespace | None:
+        found = await self.find_many(where, order)
         return found[0] if found else None
 
     async def find_unique(self, where: dict[str, Any]) -> SimpleNamespace | None:
@@ -190,6 +198,7 @@ def _scheduler(db: DB, runner: Runner | None = None, **kw: Any) -> WorkflowSched
         check_connection=kw.pop("check_connection", no_problem),
         create_session=create_session,
         flags=kw.pop("flags", lambda: (True, True)),
+        gate_on=kw.pop("gate_on", lambda: True),
         clock=lambda: NOW,
     )
 
@@ -589,24 +598,60 @@ def _gate_row(db: DB, run_id: str, outcome: str, checks: list[str]) -> None:
 
 
 @pytest.mark.parametrize(
-    ("rows", "expected"),
+    ("rows", "failing", "expected"),
     [
-        ([], (rules.ATTESTED_UNSETTLED, None)),
-        ([("settled", [])], (rules.SETTLED, None)),
-        ([("refused", ["verdict_fail"])], (rules.REFUSED, "verdict_fail")),
+        ([], (), (rules.ATTESTED_UNSETTLED, None)),
+        ([], ("counts_match",), (rules.ATTESTED_UNSETTLED, None)),
+        ([("settled", [])], (), (rules.SETTLED, None)),
+        ([("settled", [])], ("counts_match",), (rules.SETTLED, None)),
+        ([("refused", ["verdict_fail"])], (), (rules.REFUSED, "verdict_fail")),
+        # story 2.5: the gate's verdict_fail is named by the signed verdicts
+        (
+            [("refused", ["verdict_fail"])],
+            ("counts_match",),
+            (rules.REFUSED, "counts_match"),
+        ),
+        (
+            [("refused", ["verdict_fail", "signature"])],
+            ("structural_verification", "declared_acceptance"),
+            (rules.REFUSED, "structural_verification, declared_acceptance, signature"),
+        ),
         (
             [("refused", ["signer_did", "x"])],
+            ("counts_match",),
             (rules.REFUSED, "signer_did, x"),
         ),
+        (
+            [("refused", ["signer_did", "x"])],
+            (),
+            (rules.REFUSED, "signer_did, x"),
+        ),
+        ([("refused", [])], (), (rules.REFUSED, None)),
         # a replay of a settled run adds a refusal; the run stays settled
-        ([("settled", []), ("refused", ["already_settled"])], (rules.SETTLED, None)),
+        (
+            [("settled", []), ("refused", ["already_settled"])],
+            (),
+            (rules.SETTLED, None),
+        ),
         # a claim rolled back with its credit, then settled on retry
-        ([("refused", ["credit_write_error"]), ("settled", [])], (rules.SETTLED, None)),
+        (
+            [("refused", ["credit_write_error"]), ("settled", [])],
+            (),
+            (rules.SETTLED, None),
+        ),
+        # two refusals: the oldest decides
+        (
+            [("refused", ["verdict_fail"]), ("refused", ["already_settled"])],
+            ("counts_match",),
+            (rules.REFUSED, "counts_match"),
+        ),
     ],
 )
-def test_the_gate_decides_how_an_attested_firing_ends(rows, expected) -> None:
+def test_the_gate_decides_how_an_attested_firing_ends(rows, failing, expected) -> None:
     ledger = [SimpleNamespace(outcome=o, failed_checks=c) for o, c in rows]
-    got = rules.judged(rules.Outcome(rules.ATTESTED_UNSETTLED, None, "r1"), ledger)
+    got = rules.judged(
+        rules.Outcome(rules.ATTESTED_UNSETTLED, None, "r1"), ledger, failing
+    )
     assert (got.state, got.detail, got.run_id) == (*expected, "r1")
 
 
@@ -679,6 +724,397 @@ async def test_without_a_runner_the_scheduler_claims_nothing() -> None:
     scheduler = WorkflowScheduler(db=db.factory(), clock=lambda: NOW)
     assert await scheduler._tick() == []
     assert db.log == []
+
+
+# -- a refused firing names its check (story 2.5) ------------------------------
+
+PASS = {"check": "structural_verification", "result": "pass", "detail": "c1: ok"}
+COUNTS_FAIL = {
+    "check": "counts_match",
+    "result": "fail",
+    "detail": "left=11 right=10 key=open_issues",
+}
+
+
+def _seal(
+    db: DB, session_id: str | None, run_id: str | None, *verdicts: dict[str, Any]
+) -> None:
+    """A stored attestation: a run envelope, or a case attestation (run_id None)."""
+    db.attestation.rows.append(
+        {
+            "session_id": session_id,
+            "run_id": run_id,
+            "payload": {"run_id": run_id, "verdicts": list(verdicts or [PASS])},
+        }
+    )
+
+
+def _end(row: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return (row["state"], row["detail"], row["run_id"])
+
+
+async def test_a_refused_firing_names_the_failing_verdict_from_its_envelope() -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "refused", ["verdict_fail"])
+    _seal(db, "elsewhere", "run-1", PASS, COUNTS_FAIL)  # read by run_id
+    await _tick(_scheduler(db))
+    (firing,) = db.routinefiring.rows
+    assert _end(firing) == (rules.REFUSED, "counts_match", "run-1")
+    # the ledger keeps the gate's own id
+    assert db.attestedsettlement.rows[0]["failed_checks"] == ["verdict_fail"]
+
+
+async def test_an_envelope_with_no_failing_verdict_keeps_the_gates_id() -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "refused", ["verdict_fail"])
+    _seal(db, "elsewhere", "run-1", PASS)
+    await _tick(_scheduler(db))
+    assert _end(db.routinefiring.rows[0]) == (rules.REFUSED, "verdict_fail", "run-1")
+
+
+async def test_a_validator_import_failure_still_records_the_judgement(
+    monkeypatch,
+) -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "refused", ["verdict_fail"])
+    _seal(db, "elsewhere", "run-1", COUNTS_FAIL)
+    monkeypatch.setitem(sys.modules, "validator.run_envelope", None)
+    await _tick(_scheduler(db))
+    # the names are lost, never the judgement
+    assert _end(db.routinefiring.rows[0]) == (rules.REFUSED, "verdict_fail", "run-1")
+
+
+async def test_a_refusal_on_the_gates_own_checks_reads_no_envelope() -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "refused", ["signature"])
+
+    async def unread(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("no envelope read without verdict_fail")
+
+    db.attestation.find_unique = unread  # type: ignore[method-assign]
+    await _tick(_scheduler(db))
+    assert _end(db.routinefiring.rows[0]) == (rules.REFUSED, "signature", "run-1")
+
+
+# -- after a restart (AD-22, story 2.5) ----------------------------------------
+
+
+def _firing(
+    db: DB,
+    state: str,
+    session_id: str | None = "s-1",
+    run_id: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """A firing row the previous process left behind."""
+    row = {
+        "id": f"firing-{next(_ids)}",
+        "routine_id": "wf-1",
+        "slot": SLOT - timedelta(days=7),
+        "state": state,
+        "detail": detail,
+        "run_id": run_id,
+        "session_id": session_id,
+    }
+    db.routinefiring.rows.append(row)
+    return row
+
+
+async def test_a_running_firing_with_no_sealed_envelope_is_error_restart() -> None:
+    db = DB()
+    row = _firing(db, rules.RUNNING)
+    assert await _scheduler(db).sweep_restart() == 1
+    assert _end(row) == (rules.ERROR, rules.RESTART, None)
+
+
+@pytest.mark.parametrize("state", [rules.RUNNING, rules.PAUSED])
+@pytest.mark.parametrize(
+    ("gate", "expected"),
+    [
+        (("settled", []), (rules.SETTLED, None)),
+        (None, (rules.ATTESTED_UNSETTLED, None)),
+        (("refused", ["verdict_fail"]), (rules.REFUSED, "counts_match")),
+    ],
+)
+async def test_a_firing_whose_run_sealed_keeps_its_receipt_and_judgement(
+    state, gate, expected
+) -> None:
+    db = DB()
+    row = _firing(
+        db, state, detail="awaiting approval: x" if state == rules.PAUSED else None
+    )
+    refused = gate is not None and gate[0] == "refused"
+    _seal(db, "s-1", "run-7", *([COUNTS_FAIL] if refused else [PASS]))
+    if gate is not None:
+        _gate_row(db, "run-7", *gate)
+    assert await _scheduler(db).sweep_restart() == 1
+    assert _end(row) == (*expected, "run-7")
+
+
+async def test_the_newest_seal_in_the_session_is_the_firings_run() -> None:
+    db = DB()
+    row = _firing(db, rules.RUNNING)
+    _seal(db, "s-1", "run-a")
+    _seal(db, "s-1", None)  # a case attestation after it is not a seal
+    _seal(db, "s-1", "run-b")
+    _seal(db, "s-1", None)
+    await _scheduler(db).sweep_restart()
+    assert _end(row) == (rules.ATTESTED_UNSETTLED, None, "run-b")
+
+
+async def test_a_case_attestation_is_not_a_seal() -> None:
+    db = DB()
+    running = _firing(db, rules.RUNNING, "s-1")
+    paused = _firing(db, rules.PAUSED, "s-2", detail="awaiting approval: x")
+    _seal(db, "s-1", None)
+    _seal(db, "s-2", None)
+    await _scheduler(db).sweep_restart()
+    assert _end(running) == (rules.ERROR, rules.RESTART, None)
+    assert _end(paused) == (rules.PAUSED, "awaiting approval: x", None)
+
+
+async def test_the_sweep_leaves_unsealed_paused_and_finished_rows_alone() -> None:
+    db = DB()
+    _firing(db, rules.PAUSED, "s-p", detail="awaiting approval: delete_branch")
+    _firing(db, rules.SETTLED, "s-s", run_id="run-s")
+    _firing(db, rules.REFUSED, "s-f", run_id="run-f", detail="counts_match")
+    _firing(db, rules.ERROR, "s-e", detail=rules.INTERNAL)
+    _firing(db, rules.SKIPPED, None, detail=rules.OVERLAP)
+    _firing(db, rules.RUNNING, "s-r", run_id="run-r")  # its run_id is written
+    _firing(db, rules.ATTESTED_UNSETTLED, "s-u", run_id="run-u")  # no gate row
+    for session, run in (("s-s", "run-s"), ("s-f", "run-f"), ("s-r", "run-r")):
+        _seal(db, session, run)
+    _gate_row(db, "run-other", "settled", [])
+    before = [dict(r) for r in db.routinefiring.rows]
+    assert await _scheduler(db).sweep_restart() == 0
+    assert db.routinefiring.rows == before
+
+
+async def test_the_sweep_reconciles_an_attested_unsettled_row_with_a_gate_row() -> None:
+    db = DB()
+    refused = _firing(db, rules.ATTESTED_UNSETTLED, "s-1", run_id="r1")
+    settled = _firing(db, rules.ATTESTED_UNSETTLED, "s-2", run_id="r2")
+    no_row = _firing(db, rules.ATTESTED_UNSETTLED, "s-3", run_id="r3")
+    _seal(db, "s-1", "r1", COUNTS_FAIL)
+    _gate_row(db, "r1", "refused", ["verdict_fail"])
+    _gate_row(db, "r2", "settled", [])
+    assert await _scheduler(db).sweep_restart() == 2
+    assert _end(refused) == (rules.REFUSED, "counts_match", "r1")
+    assert _end(settled) == (rules.SETTLED, None, "r2")
+    # no gate decision is recorded for r3: it says so, still
+    assert _end(no_row) == (rules.ATTESTED_UNSETTLED, None, "r3")
+
+
+async def test_a_reconcile_failure_never_undoes_the_sweep() -> None:
+    db = DB()
+    running = _firing(db, rules.RUNNING, "s-1")
+    unsettled = _firing(db, rules.ATTESTED_UNSETTLED, "s-2", run_id="r2")
+    _gate_row(db, "r2", "settled", [])
+    real = db.attestedsettlement.find_many
+
+    async def down(where: dict[str, Any], order: Any = None) -> Any:
+        if isinstance(where.get("run_id"), dict):  # the reconcile's batched read
+            raise RuntimeError("database is down")
+        return await real(where, order)
+
+    db.attestedsettlement.find_many = down  # type: ignore[method-assign]
+    scheduler = _scheduler(db)
+    assert await scheduler.sweep_restart() == 1
+    assert _end(running) == (rules.ERROR, rules.RESTART, None)
+    assert _end(unsettled) == (rules.ATTESTED_UNSETTLED, None, "r2")
+    assert scheduler._sweep_pending is False
+
+
+async def test_the_sweep_never_overwrites_a_row_that_moved() -> None:
+    db = DB()
+    row = _firing(db, rules.RUNNING, "s-1")
+    _seal(db, "s-1", "run-1")
+    real = db.attestation.find_first
+
+    async def moved(where: dict[str, Any], order: Any = None) -> Any:
+        # the firing's own last write lands between the sweep's read and write
+        row.update(state=rules.SETTLED, run_id="run-1")
+        return await real(where, order)
+
+    db.attestation.find_first = moved  # type: ignore[method-assign]
+    assert await _scheduler(db).sweep_restart() == 0
+    assert _end(row) == (rules.SETTLED, None, "run-1")
+    assert db.log[-1] == "firing.update_many:0"
+
+
+async def test_one_failing_row_does_not_abort_the_sweep() -> None:
+    db = DB()
+    bad = _firing(db, rules.RUNNING, "s-bad")
+    ok = _firing(db, rules.RUNNING, "s-ok")
+    real = db.attestation.find_first
+    fault = {"on": True}
+
+    async def flaky(where: dict[str, Any], order: Any = None) -> Any:
+        if fault["on"] and where.get("session_id") == "s-bad":
+            raise RuntimeError("connection reset")
+        return await real(where, order)
+
+    db.attestation.find_first = flaky  # type: ignore[method-assign]
+    scheduler = _scheduler(db)
+    await scheduler._poll()
+    assert _end(ok) == (rules.ERROR, rules.RESTART, None)
+    assert _end(bad) == (rules.RUNNING, None, None)
+    assert scheduler._unswept == {bad["id"]}
+    assert scheduler._sweep_pending is False  # the sweep completed; slots claim
+
+    # The next pass retries only that id: never a full sweep, which could
+    # meet this process's own running firings.
+    wheres: list[dict[str, Any]] = []
+    real_firings = db.routinefiring.find_many
+
+    async def seen(where: dict[str, Any], order: Any = None) -> Any:
+        wheres.append(where)
+        return await real_firings(where, order)
+
+    db.routinefiring.find_many = seen  # type: ignore[method-assign]
+    fault["on"] = False
+    mark = len(db.log)
+    await scheduler._poll()
+    assert wheres == [
+        {
+            "state": {"in": [rules.RUNNING, rules.PAUSED]},
+            "run_id": None,
+            "id": {"in": [bad["id"]]},
+        }
+    ]
+    assert db.log[mark:] == ["firing.update_many:1"]  # no scheduled-row sweep
+    assert _end(bad) == (rules.ERROR, rules.RESTART, None)
+    assert scheduler._unswept == set()
+
+
+async def test_a_retried_id_that_moved_on_is_dropped() -> None:
+    db = DB()
+    row = _firing(db, rules.RUNNING, "s-1")
+    scheduler = _scheduler(db)
+    scheduler._sweep_pending = False
+    scheduler._unswept = {row["id"]}
+    row.update(state=rules.SETTLED, run_id="run-1")  # its owner's resume landed
+    await scheduler._poll()
+    assert scheduler._unswept == set()
+    assert _end(row) == (rules.SETTLED, None, "run-1")
+
+
+async def test_a_failed_sweep_claims_nothing_until_it_completes() -> None:
+    db = DB()
+    _seed(db)
+    real = db.routinefiring.find_many
+    calls = {"n": 0}
+
+    async def first_fails(where: dict[str, Any], order: Any = None) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is down")
+        return await real(where, order)
+
+    db.routinefiring.find_many = first_fails  # type: ignore[method-assign]
+    scheduler = _scheduler(db)
+    with pytest.raises(RuntimeError):
+        await scheduler._poll()  # the loop logs it and polls again
+    assert scheduler._sweep_pending is True
+    assert not [e for e in db.log if e.startswith(("firing.create", "routine."))]
+    assert db.workflowtemplate.rows[0]["next_run_at"] == SLOT  # not claimed
+
+    await scheduler._poll()
+    await asyncio.gather(*list(scheduler._firings))
+    assert scheduler._sweep_pending is False
+    assert db.log.count("firing.create:scheduled") == 1
+    (firing,) = db.routinefiring.rows
+    assert _end(firing) == (rules.ATTESTED_UNSETTLED, None, "run-1")
+
+
+async def test_the_restart_sweep_runs_before_the_first_claim() -> None:
+    db = DB()
+    _seed(db)
+    # the previous process's firing of this routine: left running, it would
+    # block the slot as overlapping
+    stale = _firing(db, rules.RUNNING, "s-old")
+    scheduler = _scheduler(db)
+    await scheduler.start()
+    try:
+        for _ in range(200):
+            if db.routinefiring.rows[-1]["state"] == rules.ATTESTED_UNSETTLED:
+                break
+            await asyncio.sleep(0)
+    finally:
+        await scheduler.stop()
+    assert db.log.index("firing.update_many:1") < db.log.index(
+        "firing.create:scheduled"
+    )
+    assert _end(stale) == (rules.ERROR, rules.RESTART, None)
+    fired = db.routinefiring.rows[-1]
+    assert _end(fired) == (rules.ATTESTED_UNSETTLED, None, "run-1")  # not skipped
+
+
+class SealingRunner(Runner):
+    """Seals ``run-1`` in the firing's session, as the run observer would."""
+
+    def __init__(self, db: DB) -> None:
+        super().__init__(log=db.log)
+        self.db = db
+
+    async def run_turn(self, **kwargs: Any):
+        _seal(self.db, kwargs["session_id"], "run-1")
+        async for event in super().run_turn(**kwargs):
+            yield event
+
+
+def _final_write_fails_once(scheduler: WorkflowScheduler) -> None:
+    real = scheduler._set
+    failed: list[dict[str, Any]] = []
+
+    async def _set(firing_id: str, **data: Any) -> None:
+        if "run_id" in data and not failed:  # the end-state write only
+            failed.append(data)
+            raise RuntimeError("connection reset")
+        await real(firing_id, **data)
+
+    scheduler._set = _set  # type: ignore[method-assign]
+
+
+@pytest.mark.parametrize(
+    ("gate", "expected"),
+    [
+        (("settled", []), (rules.SETTLED, None, "run-1")),
+        (None, (rules.ATTESTED_UNSETTLED, None, "run-1")),
+    ],
+)
+async def test_a_failed_final_write_after_a_seal_records_the_judgement_not_internal(
+    gate, expected
+) -> None:
+    db = DB()
+    _seed(db)
+    if gate is not None:
+        _gate_row(db, "run-1", *gate)
+    scheduler = _scheduler(db, SealingRunner(db))
+    _final_write_fails_once(scheduler)
+    await _tick(scheduler)
+    (firing,) = db.routinefiring.rows
+    assert _end(firing) == expected
+
+
+async def test_a_seal_lookup_failing_on_recovery_is_error_internal() -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "settled", [])
+
+    async def down(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("database is down")
+
+    db.attestation.find_first = down  # type: ignore[method-assign]
+    scheduler = _scheduler(db, SealingRunner(db))
+    _final_write_fails_once(scheduler)
+    await _tick(scheduler)
+    (firing,) = db.routinefiring.rows
+    assert _end(firing) == (rules.ERROR, rules.INTERNAL, None)
 
 
 # -- the seams: run_turn carries the bounds; a resume moves the row on --------
@@ -759,3 +1195,82 @@ def test_the_resume_route_hands_its_end_events_to_the_firing_row(monkeypatch) ->
     recorded.assert_awaited_once_with(
         "s-9", [{"type": "done", "session_id": "s-9", "run_id": "run-9"}]
     )
+
+
+# -- review fixes (2.5): gate off, a moved row, a resume racing the sweep ------
+
+
+async def test_with_the_gate_off_the_sweep_never_scans_for_a_reconcile() -> None:
+    """No gate row is written with the gate off: nothing can be reconciled."""
+    db = DB()
+    row = _firing(db, rules.ATTESTED_UNSETTLED, "s-1", run_id="r1")
+    _gate_row(db, "r1", "settled", [])  # e.g. written while the flag was on
+    reads: list[Any] = []
+    real = db.attestedsettlement.find_many
+
+    async def seen(where: dict[str, Any], order: Any = None) -> Any:
+        reads.append(where)
+        return await real(where, order)
+
+    db.attestedsettlement.find_many = seen  # type: ignore[method-assign]
+    assert await _scheduler(db, gate_on=lambda: False).sweep_restart() == 0
+    assert reads == []
+    assert _end(row) == (rules.ATTESTED_UNSETTLED, None, "r1")
+
+
+async def test_the_sweep_never_moves_a_row_whose_state_changed_with_no_run_id() -> None:
+    """The compare-and-set guards the state, not only run_id: a running row the
+    owner's resume moved to paused (run_id still NULL) is left as it is."""
+    db = DB()
+    row = _firing(db, rules.RUNNING, "s-1")
+    real = db.attestation.find_first
+
+    async def moved(where: dict[str, Any], order: Any = None) -> Any:
+        row.update(state=rules.PAUSED, detail="awaiting approval: x (approval)")
+        return await real(where, order)
+
+    db.attestation.find_first = moved  # type: ignore[method-assign]
+    assert await _scheduler(db).sweep_restart() == 0
+    assert _end(row) == (rules.PAUSED, "awaiting approval: x (approval)", None)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "checks", "expected"),
+    [
+        ("settled", [], (rules.SETTLED, None, "r1")),
+        ("refused", ["verdict_fail"], (rules.REFUSED, "counts_match", "r1")),
+    ],
+)
+async def test_a_resume_that_raced_the_sweep_still_takes_its_gate_judgement(
+    outcome: str, checks: list[str], expected: tuple[Any, ...]
+) -> None:
+    """The sweep took the resume's seal before the gate wrote its row: the
+    resume's own end re-judges that row, by run_id."""
+    db = DB()
+    row = _firing(db, rules.PAUSED, "s-1")
+    _seal(db, "s-1", "r1", COUNTS_FAIL)
+    await _scheduler(db).sweep_restart()
+    assert _end(row) == (rules.ATTESTED_UNSETTLED, None, "r1")
+
+    _gate_row(db, "r1", outcome, checks)  # the gate's row lands after the sweep
+    await record_resume("s-1", [{"type": "done", "run_id": "r1"}], db=db.factory())
+    assert _end(row) == expected
+
+
+async def test_a_resume_never_rejudges_an_unsettled_row_of_another_run() -> None:
+    db = DB()
+    row = _firing(db, rules.ATTESTED_UNSETTLED, "s-1", run_id="r1")
+    _gate_row(db, "r2", "settled", [])
+    await record_resume("s-1", [{"type": "done", "run_id": "r2"}], db=db.factory())
+    assert _end(row) == (rules.ATTESTED_UNSETTLED, None, "r1")
+
+
+async def test_an_envelope_that_failed_verification_names_no_verdict() -> None:
+    """Refused for its signature too: the envelope's verdicts are not read."""
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", "refused", ["signature", "verdict_fail"])
+    _seal(db, "elsewhere", "run-1", COUNTS_FAIL)
+    await _tick(_scheduler(db))
+    (firing,) = db.routinefiring.rows
+    assert _end(firing) == (rules.REFUSED, "signature, verdict_fail", "run-1")

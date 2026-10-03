@@ -19,6 +19,7 @@ AD-12); the scheduler then writes the gate's judgement onto the firing row.
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -42,6 +43,8 @@ from superagent.pricing.settle_gate import (
     SettlementGateObserver,
 )
 from superagent.workflow import firing_rules as rules
+
+from common.utils.src import firing_view
 
 from .test_routine_scheduler import DB, DID, _scheduler, _seed, _tick
 
@@ -185,10 +188,12 @@ async def test_a_firing_whose_criterion_fails_is_refused_and_still_verifies(
     # The refusal is the gate's policy, not a broken receipt.
     assert verify_run_attestation(envelope).valid is True
 
+    # The ledger keeps the gate's id; the firing names the signed verdict
+    # that failed (story 2.5).
     assert _ledger(world) == [("refused", None, None, [CHECK_VERDICT_FAIL])]
     assert (firing["state"], firing["detail"], firing["run_id"]) == (
         rules.REFUSED,
-        CHECK_VERDICT_FAIL,
+        "declared_acceptance",
         envelope["run_id"],
     )
 
@@ -212,3 +217,98 @@ async def test_the_same_run_re_entering_the_gate_claims_nothing_twice(world) -> 
         ("refused", None),
     ]
     assert firing["state"] == rules.SETTLED  # the row keeps the run's judgement
+
+
+async def test_a_routine_with_no_criteria_refused_by_a_structural_fail_names_it(
+    world,
+) -> None:
+    world.workflowtemplate.rows[0]["criteria"] = {}
+    firing, envelope = await _fire(world, "Error: upstream returned 502")
+
+    (structural,) = [
+        v for v in envelope["verdicts"] if v["check"] == "structural_verification"
+    ]
+    assert structural["result"] == "fail"
+    assert "declared_acceptance" not in [v["check"] for v in envelope["verdicts"]]
+    assert _ledger(world) == [("refused", None, None, [CHECK_VERDICT_FAIL])]
+    assert (firing["state"], firing["detail"]) == (
+        rules.REFUSED,
+        "structural_verification",
+    )
+    # Nothing was declared: the pane says so, never "checked".
+    assert firing_view.checks_view({}, envelope) == ("unchecked", "recorded, unchecked")
+
+
+# -- a restart (AD-22, story 2.5) ------------------------------------------------
+
+
+def _crashes_before_its_last_write(scheduler: Any, monkeypatch) -> None:
+    """The end-state write fails and the process dies before recovering."""
+    real = scheduler._set
+
+    async def _set(firing_id: str, **data: Any) -> None:
+        if "run_id" in data:  # the final write; the RUNNING write passes
+            raise RuntimeError("the process died")
+        await real(firing_id, **data)
+
+    async def dead(firing_id: str) -> None:
+        raise RuntimeError("the process died")
+
+    monkeypatch.setattr(scheduler, "_set", _set)
+    monkeypatch.setattr(scheduler, "_recover", dead)
+
+
+@pytest.mark.parametrize(
+    ("reply", "state", "detail"),
+    [
+        (CITED, rules.SETTLED, None),
+        (UNCITED, rules.REFUSED, "declared_acceptance"),
+    ],
+)
+async def test_a_firing_that_sealed_before_a_crash_is_judged_not_lost_on_restart(
+    world, monkeypatch, reply, state, detail
+) -> None:
+    crashed = _scheduler(world, PipelineRunner(reply))
+    _crashes_before_its_last_write(crashed, monkeypatch)
+    await _tick(crashed)
+
+    (firing,) = world.routinefiring.rows
+    (stored,) = world.attestation.rows
+    envelope = getattr(stored["payload"], "data", stored["payload"])
+    # The run sealed and the gate judged it, but the row never heard.
+    assert (firing["state"], firing["run_id"]) == (rules.RUNNING, None)
+    assert len(world.attestedsettlement.rows) == 1
+
+    await _scheduler(world).sweep_restart()
+
+    assert (firing["state"], firing["detail"], firing["run_id"]) == (
+        state,
+        detail,
+        envelope["run_id"],
+    )
+
+
+async def test_a_firing_lost_before_its_seal_is_error_restart_never_settled(
+    world, monkeypatch
+) -> None:
+    async def died(session_id: str) -> None:
+        raise RuntimeError("the process died before the run sealed")
+
+    # The step runs through the real pipeline; the run boundary never comes.
+    monkeypatch.setattr(sys.modules[__name__], "emit_run_complete", died)
+    crashed = _scheduler(world, PipelineRunner(CITED))
+    _crashes_before_its_last_write(crashed, monkeypatch)
+    await _tick(crashed)
+
+    (firing,) = world.routinefiring.rows
+    assert (firing["state"], firing["run_id"]) == (rules.RUNNING, None)
+    assert world.attestation.rows == []
+
+    await _scheduler(world).sweep_restart()
+
+    assert (firing["state"], firing["detail"], firing["run_id"]) == (
+        rules.ERROR,
+        rules.RESTART,
+        None,
+    )
+    assert world.attestedsettlement.rows == []

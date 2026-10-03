@@ -2,7 +2,8 @@
 
 Not a Prisma emulator: it supports exactly the query shapes the Gateway uses
 — equality, ``None``, ``{"in": [...]}``, ``{"has": x}`` and a top-level
-``"OR"`` — and the two ``include`` relations on ``officemember``. A query
+``"OR"``, ordered by one key — and the two ``include`` relations on
+``officemember``. A query
 shape it does not know raises, so a route that starts using one fails here
 instead of passing against a mock that accepts anything.
 """
@@ -209,6 +210,19 @@ class FakeDB:
             "routinefiring",
             unique=(("routine_id", "slot"),),
             defaults={"detail": None, "session_id": None, "run_id": None},
+        )
+        # Story 2.5: the routines pane reads stored envelopes and the
+        # settlement ledger (read-only; the Gateway never writes either).
+        self.attestation = Table(
+            self,
+            "attestation",
+            unique=(("run_id",),),
+            defaults={"run_id": None, "status": "pending"},
+        )
+        self.attestedsettlement = Table(
+            self,
+            "attestedsettlement",
+            defaults={"session_id": None, "call_id": None, "failed_checks": []},
         )
 
     # ── seeding helpers ────────────────────────────────────────────────────

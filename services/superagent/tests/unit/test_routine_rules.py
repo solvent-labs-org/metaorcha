@@ -9,6 +9,7 @@ the chat path's vocabulary; operands are short printable ASCII (AD-19).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -407,3 +408,56 @@ def test_route_refuses_a_counts_match_source_off_the_routine(client) -> None:
     detail = resp.json()["detail"]
     assert detail["field"] == "criteria_operands"
     assert NOTION in detail["reason"]
+
+
+# -- what a firing says (story 2.5) ---------------------------------------------
+
+_FORBIDDEN = re.compile(r"\b(done|success|verified)\b", re.IGNORECASE)
+
+
+def test_no_firing_detail_says_done_success_or_verified() -> None:
+    from superagent.workflow import firing_rules as rules
+
+    details = [
+        rules.OVERLAP,
+        rules.RESTART,
+        rules.OWNER_REMOVED,
+        rules.ATTESTATION_OFF,
+        rules.NO_RECEIPT,
+        rules.INVALID_SCHEDULE,
+        rules.CONNECTION_REVOKED.format(did=DID),
+        rules.INTERNAL,
+    ]
+    assert [d for d in details if _FORBIDDEN.search(d)] == []
+
+
+def test_the_firing_view_reads_the_gates_verdict_fail() -> None:
+    # The scheduler names a refused firing's check by replacing this id; it
+    # imports firing_view, never the gate module.
+    from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL
+
+    from common.utils.src import firing_view
+
+    assert firing_view.VERDICT_FAIL == CHECK_VERDICT_FAIL
+
+
+def test_the_pane_knows_every_routine_criterion() -> None:
+    # A new criterion must say which signed verdict proves it was evaluated.
+    from superagent.middleware.criteria import ROUTINE_CRITERIA
+
+    from common.utils.src import firing_view
+
+    assert set(firing_view.VERDICT_FOR_CRITERION) == set(ROUTINE_CRITERIA)
+
+
+def test_the_pane_reads_no_check_from_an_envelope_the_gate_could_not_verify() -> None:
+    """firing_view.UNTRUSTED_ENVELOPE_CHECKS is exactly the gate's verifier failures."""
+    from superagent.pricing import settle_gate
+
+    from common.utils.src import firing_view
+
+    assert (
+        set(settle_gate._VERIFIER_CHECK_ORDER)
+        | {settle_gate.CHECK_VERIFY_ERROR, settle_gate.CHECK_RUN_ID_MISMATCH}
+        == firing_view.UNTRUSTED_ENVELOPE_CHECKS
+    )
