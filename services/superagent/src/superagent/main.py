@@ -15,6 +15,7 @@ from common.utils.src.logging_config import setup_logging
 
 from .api.routes import router
 from .config import settings
+from .middleware.observers import ExecutionObserver
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,84 @@ _pnd_client: Any = None
 _scheduler: Any = None
 # AsyncRedisSaver.from_conn_string() is an async context manager — keep it open for app lifetime
 _redis_checkpointer_cm: Any = None
+
+
+def build_observers() -> list[ExecutionObserver]:
+    """The execution observers the flags enable, in dispatch order (boot step 5).
+
+    Empty with every flag off: the stock NoOpObserver stays, nothing is
+    sealed, nothing is gated, and the validator package is never imported
+    (story 3.4). Raises where the flags ask for a receipt or a gate that
+    cannot be produced — at boot, never at first seal.
+    """
+    observers: list[ExecutionObserver] = []
+
+    # Audit ledger observer (KY-A, WS7) — opt-in via AUDIT_LEDGER_ENABLED.
+    # Stock OSS keeps the NoOpObserver; the ledger observer fails closed and
+    # never affects the user-facing execution path.
+    if settings.audit_ledger_enabled:
+        from .middleware.audit_ledger import LedgerObserver
+
+        observers.append(LedgerObserver())
+        logger.info("Audit ledger observer enabled (AUDIT_LEDGER_ENABLED=true)")
+
+    if settings.cdv_verification_enabled:
+        from .verification.cdv_integration import build_cdv_observer
+
+        observers.append(build_cdv_observer())
+
+    # Run attestation observer (KYA, RFC 0003) — opt-in via
+    # RUN_ATTESTATION_ENABLED. Default off keeps stock OSS behaviour. The
+    # validator package is an optional workspace member; degrade gracefully
+    # (warning, stock observer) when it is not installed — same contract as
+    # sign_case_attestation.
+    if settings.run_attestation_enabled:
+        try:
+            from validator.run_observer import RunAttestationObserver
+            from validator.signer import require_signing_key_for_receipts
+        except ImportError:
+            if settings.settlement_require_attestation:
+                # Graceful degrade is fine for attestation alone, but with the
+                # gate flag on it becomes the silent free tier the boot guard
+                # exists to prevent — same failure, different cause (2.1 review).
+                raise RuntimeError(
+                    "SETTLEMENT_REQUIRE_ATTESTATION=true but the validator "
+                    "package is unavailable — no envelopes can be produced, so "
+                    "every charged call would defer forever and never be "
+                    "billed. Install the validator package or disable the gate."
+                ) from None
+            logger.warning(
+                "RUN_ATTESTATION_ENABLED=true but the validator package is "
+                "unavailable — run attestation disabled"
+            )
+        else:
+            # Fail at startup, not first seal: an ephemeral key is lost on
+            # restart and PLATFORM_SIGNER_DID will never match again.
+            require_signing_key_for_receipts()
+            attestation_observer = RunAttestationObserver(
+                charter_hash=settings.run_attestation_charter_hash
+            )
+            observers.append(attestation_observer)
+            logger.info(
+                "Run attestation observer enabled (RUN_ATTESTATION_ENABLED=true, "
+                "charter binding=%s)",
+                "active" if settings.run_attestation_charter_hash else "inactive",
+            )
+            # Attestation-gated settle (AD-1/AD-2) — the gate observer must fire
+            # AFTER the attestation observer seals the run (composite dispatch
+            # is in registration order), so it resolves the just-sealed run_id.
+            if settings.settlement_require_attestation:
+                from .pricing.settle_gate import SettlementGateObserver
+
+                observers.append(SettlementGateObserver(attestation_observer))
+                logger.info(
+                    "Settlement gate observer enabled "
+                    "(SETTLEMENT_REQUIRE_ATTESTATION=true)"
+                )
+
+    # (The SETTLEMENT_REQUIRE_ATTESTATION-without-RUN_ATTESTATION_ENABLED combo
+    # hard-fails at lifespan start via validate_gate_config — no warning here.)
+    return observers
 
 
 @asynccontextmanager
@@ -146,79 +225,9 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     # CompositeObserver instead. Order matters: CDVObserver must precede
     # RunAttestationObserver so metadata["cdv"] is populated before the
     # attestation observer accumulates the step.
-    from .middleware.observers import (
-        CompositeObserver,
-        ExecutionObserver,
-        set_observer,
-    )
+    from .middleware.observers import CompositeObserver, set_observer
 
-    observers: list[ExecutionObserver] = []
-
-    # Audit ledger observer (KY-A, WS7) — opt-in via AUDIT_LEDGER_ENABLED.
-    # Stock OSS keeps the NoOpObserver; the ledger observer fails closed and
-    # never affects the user-facing execution path.
-    if settings.audit_ledger_enabled:
-        from .middleware.audit_ledger import LedgerObserver
-
-        observers.append(LedgerObserver())
-        logger.info("Audit ledger observer enabled (AUDIT_LEDGER_ENABLED=true)")
-
-    if settings.cdv_verification_enabled:
-        from .verification.cdv_integration import build_cdv_observer
-
-        observers.append(build_cdv_observer())
-
-    # Run attestation observer (KYA, RFC 0003) — opt-in via
-    # RUN_ATTESTATION_ENABLED. Default off keeps stock OSS behaviour. The
-    # validator package is an optional workspace member; degrade gracefully
-    # (warning, stock observer) when it is not installed — same contract as
-    # sign_case_attestation.
-    if settings.run_attestation_enabled:
-        try:
-            from validator.run_observer import RunAttestationObserver
-            from validator.signer import require_signing_key_for_receipts
-        except ImportError:
-            if settings.settlement_require_attestation:
-                # Graceful degrade is fine for attestation alone, but with the
-                # gate flag on it becomes the silent free tier the boot guard
-                # exists to prevent — same failure, different cause (2.1 review).
-                raise RuntimeError(
-                    "SETTLEMENT_REQUIRE_ATTESTATION=true but the validator "
-                    "package is unavailable — no envelopes can be produced, so "
-                    "every charged call would defer forever and never be "
-                    "billed. Install the validator package or disable the gate."
-                ) from None
-            logger.warning(
-                "RUN_ATTESTATION_ENABLED=true but the validator package is "
-                "unavailable — run attestation disabled"
-            )
-        else:
-            # Fail at startup, not first seal: an ephemeral key is lost on
-            # restart and PLATFORM_SIGNER_DID will never match again.
-            require_signing_key_for_receipts()
-            attestation_observer = RunAttestationObserver(
-                charter_hash=settings.run_attestation_charter_hash
-            )
-            observers.append(attestation_observer)
-            logger.info(
-                "Run attestation observer enabled (RUN_ATTESTATION_ENABLED=true, "
-                "charter binding=%s)",
-                "active" if settings.run_attestation_charter_hash else "inactive",
-            )
-            # Attestation-gated settle (AD-1/AD-2) — the gate observer must fire
-            # AFTER the attestation observer seals the run (composite dispatch
-            # is in registration order), so it resolves the just-sealed run_id.
-            if settings.settlement_require_attestation:
-                from .pricing.settle_gate import SettlementGateObserver
-
-                observers.append(SettlementGateObserver(attestation_observer))
-                logger.info(
-                    "Settlement gate observer enabled "
-                    "(SETTLEMENT_REQUIRE_ATTESTATION=true)"
-                )
-
-    # (The SETTLEMENT_REQUIRE_ATTESTATION-without-RUN_ATTESTATION_ENABLED combo
-    # hard-fails at lifespan start via validate_gate_config — no warning here.)
+    observers = build_observers()
 
     if len(observers) == 1:
         set_observer(observers[0])
