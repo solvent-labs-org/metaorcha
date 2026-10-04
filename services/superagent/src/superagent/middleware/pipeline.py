@@ -283,19 +283,19 @@ class ExecutionMiddleware:
         declared_meta = self._criteria_meta()
         criteria = self._state.get("_declared_criteria")
         if isinstance(criteria, dict) and criteria:
-            from .criteria import evaluate_declared_criteria, step_criteria
+            from .criteria import step_criteria, step_declared_acceptance
 
             # A run-level criterion (counts_match) is judged at seal, so a
             # routine declaring only that signs no per-step acceptance.
             per_step = step_criteria(criteria)
             if per_step:
-                accepted, declared_reason = evaluate_declared_criteria(
-                    per_step, content_str
+                # FR-7: criteria read the agent's (redacted) bytes, not the
+                # card — the normalizer caps plain text at 280 characters,
+                # which cut a test runner's JSON mid-string on the 2026-09-21
+                # bed and turned `exit_code: 1` into "no exit code".
+                declared_meta["declared_acceptance"] = step_declared_acceptance(
+                    per_step, raw_output
                 )
-                declared_meta["declared_acceptance"] = {
-                    "result": "pass" if accepted else "fail",
-                    "detail": declared_reason,
-                }
 
         # Step 6: Checklist auto-update
         success = not (

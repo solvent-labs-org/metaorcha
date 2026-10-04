@@ -163,7 +163,7 @@ def test_criteria_and_operands_accepted() -> None:
     ("criteria", "operands", "field"),
     [
         (["citations_required"], {}, "criteria"),
-        ({"exit_zero": True}, {}, "criteria"),  # not built at this base
+        ({"exit_zero": True}, {}, "criteria"),  # chat-only (story 3.1)
         ({"citations_required": "yes"}, {}, "criteria"),
         ({f"c{i}": True for i in range(MAX_CRITERIA + 1)}, {}, "criteria"),
         ({}, [], "criteria_operands"),
@@ -195,6 +195,17 @@ def test_criteria_outside_the_rules_are_refused(criteria, operands, field) -> No
     with pytest.raises(RoutineRejected) as exc:
         check_criteria(criteria, operands)
     assert exc.value.field == field
+
+
+def test_a_chat_only_criterion_is_named_as_such_not_unsupported() -> None:
+    # exit_zero is accepted by both chat doors (story 3.1); a routine that
+    # declares it hears why it cannot, rather than "unsupported"
+    with pytest.raises(RoutineRejected) as exc:
+        check_criteria({"exit_zero": True}, {})
+    assert exc.value.reason == "exit_zero is chat-only for now (story 3.1)"
+    with pytest.raises(RoutineRejected) as exc:
+        check_criteria({"made_up": True}, {})
+    assert exc.value.reason == "unsupported criterion: made_up"
 
 
 # -- the route ----------------------------------------------------------------

@@ -397,6 +397,7 @@ async def test_per_step_criteria_are_judged_without_the_run_level_ones(
     assert step.metadata["declared_acceptance"] == {
         "result": "fail",
         "detail": "missing citations",
+        "criteria": {"citations_required": "fail"},
     }
 
 
