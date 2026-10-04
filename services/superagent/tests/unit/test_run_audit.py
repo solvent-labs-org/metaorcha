@@ -1,4 +1,4 @@
-"""Verified Runs: audit assembly + verdict transcript meta."""
+"""Run evidence: audit assembly + verdict transcript meta."""
 
 from __future__ import annotations
 
@@ -490,7 +490,7 @@ def test_an_unchecked_step_is_not_mailed_as_verified():
     )
     body = _render_receipt(audit)
     assert "not checked" in body
-    assert "0 verified, 0 failed, 1 not checked" in body
+    assert "0 structurally checked, 0 failed, 1 not checked" in body
 
 
 async def test_a_firing_session_that_went_on_as_chat_says_no_settlement():

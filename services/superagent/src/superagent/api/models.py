@@ -119,6 +119,22 @@ class RunAuditFiring(BaseModel):
     detail: str | None = None
 
 
+class RunAuditCoverage(BaseModel):
+    """What the export and its signed receipt cover (FR-8, story 3.2).
+
+    ``statement`` is the verifier's own coverage text
+    (``emerge.run_attestation.coverage_statement``), computed from the
+    envelope at export time and never stored; ``export`` says how this
+    export's step list relates to the signed receipt.
+    """
+
+    statement: str
+    run_id: str | None = None
+    receipt_steps: int | None = None
+    receipt_tools: list[str] = Field(default_factory=list)
+    export: str
+
+
 class RunAuditResponse(BaseModel):
     session_id: str
     generated_at: str
@@ -126,6 +142,7 @@ class RunAuditResponse(BaseModel):
     summary: RunAuditSummary
     steps: list[RunAuditStep]
     note: str
+    coverage: RunAuditCoverage
     run_id: str | None = None
     gate: RunAuditGate | None = None
     settlement: RunAuditSettlement | None = None

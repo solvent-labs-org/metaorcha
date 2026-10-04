@@ -109,6 +109,17 @@ export interface RunAuditFiring {
   detail?: string
 }
 
+/** What the export and its signed receipt cover (FR-8, story 3.2). Server-written; render as is. */
+export interface RunAuditCoverage {
+  /** The verifier's coverage statement, computed from the envelope at export time. */
+  statement: string
+  run_id?: string
+  receipt_steps?: number
+  receipt_tools: string[]
+  /** How this export's step list relates to the signed receipt. */
+  export: string
+}
+
 export interface RunAuditResponse {
   session_id: string
   generated_at: string
@@ -116,6 +127,7 @@ export interface RunAuditResponse {
   summary: RunAuditSummary
   steps: RunAuditStep[]
   note: string
+  coverage: RunAuditCoverage
   /** The session's latest sealed run: a firing's run, else the newest sealed envelope. */
   run_id?: string
   gate?: RunAuditGate

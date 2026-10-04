@@ -320,7 +320,7 @@ export function Chat() {
               onClick={handleDownloadAudit}
               disabled={store.messages.length === 0}
               aria-label="Download run audit"
-              title="Download per-run audit (Verified Runs evidence)"
+              title="Download the session's run evidence"
               className="flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface-overlay border border-surface-borderLight text-[12px] font-medium text-text-body hover:border-surface-muted disabled:opacity-50 transition-colors"
             >
               ⬇ Audit

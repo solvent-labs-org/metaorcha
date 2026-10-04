@@ -5,7 +5,7 @@ POST /sessions/{id}/message     → SSE stream
 POST /sessions/{id}/resume      → SSE stream
 PATCH /sessions/{id}/context      → merge lead_gen_options / email_campaign_context
 GET  /sessions/{id}/status      → { status, pending_interrupt }
-GET  /sessions/{id}/audit       → Verified Runs evidence package
+GET  /sessions/{id}/audit       → run evidence package
 GET  /sessions/{id}/attestation → latest RFC 0003 envelope (bytes only)
 GET  /runs/{run_id}/attestation → RFC 0003 envelope by run_id (bytes only)
 GET  /health                    → { status: "ok" }
