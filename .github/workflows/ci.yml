@@ -613,7 +613,8 @@ jobs:
             tests/unit/test_routine_counts_match.py \
             tests/unit/test_citation_verify.py \
             tests/unit/test_criterion_step_coverage.py \
-            tests/unit/test_export_coverage.py --verbose
+            tests/unit/test_export_coverage.py \
+            tests/unit/test_turn_model.py --verbose
 
   # ============================================================================
   # emerge-node — signed envelope helpers

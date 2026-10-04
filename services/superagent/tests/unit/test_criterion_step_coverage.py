@@ -254,7 +254,9 @@ class _FakePreFlight:
         return {"manifest": {"transport": {}}, "headers": {}, "resolved_env": None}
 
 
-async def _agent_step(state: dict[str, Any], raw: Any, *, call_id: str) -> dict:
+async def _agent_step(
+    state: dict[str, Any], raw: Any, *, call_id: str, dispatch: Any = None
+) -> dict:
     with (
         patch("superagent.middleware.pipeline.PreFlightManager", _FakePreFlight),
         patch(
@@ -264,7 +266,9 @@ async def _agent_step(state: dict[str, Any], raw: Any, *, call_id: str) -> dict:
         patch.object(
             ExecutionMiddleware, "_get_capability_schema", AsyncMock(return_value=None)
         ),
-        patch.object(ExecutionMiddleware, "_dispatch", AsyncMock(return_value=raw)),
+        patch.object(
+            ExecutionMiddleware, "_dispatch", dispatch or AsyncMock(return_value=raw)
+        ),
         # a free agent: no Prisma connect to the payment row
         patch.object(
             ExecutionMiddleware,
@@ -526,6 +530,7 @@ def sealed(monkeypatch):
         (envelope,) = attestation.envelopes.values()
         return envelope, list(db.attestedsettlement.rows)
 
+    seal.db = db  # the fake database, for exports read after sealing
     yield seal
     set_observer(NoOpObserver())
 

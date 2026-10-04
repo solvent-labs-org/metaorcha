@@ -143,6 +143,10 @@ class RunAuditResponse(BaseModel):
     steps: list[RunAuditStep]
     note: str
     coverage: RunAuditCoverage
+    # Story 3.3: the sealed run's signed ``model`` verdicts ("<route>/<model
+    # id>", first-use order); None when no receipt was read, [] when the
+    # receipt carries none (sealed before the verdict existed).
+    models: list[str] | None = None
     run_id: str | None = None
     gate: RunAuditGate | None = None
     settlement: RunAuditSettlement | None = None

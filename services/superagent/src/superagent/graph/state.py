@@ -148,6 +148,10 @@ class AgentState(dict):  # type: ignore[type-arg]
     # call outside them instead of pausing (nobody is present). Per-turn, like
     # the criteria: a later chat turn in the firing's session clears it.
     routine_context: dict[str, Any] | None
+    # Story 3.3 (FR-13, AD-21): "<route>/<model id>" of the turn's last LLM
+    # call (turn_model.turn_model). Stamped on every step, signed as the
+    # receipt's ``model`` verdict. Per-turn: cleared when a turn starts.
+    _turn_model: str | None
     # Active DAG plan (Slice 1) — plain JSON-safe dict built by
     # nodes/dag_plan.new_active_plan. None on the stock ReAct path.
     active_plan: dict[str, Any] | None
@@ -197,5 +201,6 @@ def default_state(session_id: str, user_id: str) -> dict[str, Any]:
         "_last_turn_tokens": 0,
         "_declared_criteria": None,
         "routine_context": None,
+        "_turn_model": None,
         "active_plan": None,
     }

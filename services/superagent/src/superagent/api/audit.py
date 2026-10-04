@@ -157,6 +157,28 @@ def coverage(
     )
 
 
+def run_models(envelope: Any, verified: bool | None = None) -> list[str] | None:
+    """The receipt's signed ``model`` verdicts' details, or None with no receipt.
+
+    None too for a stored envelope that does not verify: its verdicts are not
+    signed by anyone the export can name (``receipt_verifies``). With the
+    verifier not installed (None) they are read as stored.
+    """
+    if not isinstance(envelope, dict) or verified is False:
+        return None
+    verdicts = envelope.get("verdicts")
+    if not isinstance(verdicts, list):
+        return []
+    out: list[str] = []
+    for verdict in verdicts:
+        if not isinstance(verdict, dict) or verdict.get("check") != "model":
+            continue
+        detail = verdict.get("detail")
+        if isinstance(detail, str) and detail and detail not in out:
+            out.append(detail)
+    return out
+
+
 def _gate(row: Any) -> RunAuditGate | None:
     if row is None:
         return None
@@ -427,6 +449,7 @@ def build_run_audit(
             evidence.envelope if evidence else None,
             verified,
         ),
+        models=run_models(evidence.envelope, verified) if evidence else None,
         run_id=evidence.run_id if evidence else None,
         gate=evidence.gate if evidence else gate,
         settlement=evidence.settlement if evidence else None,

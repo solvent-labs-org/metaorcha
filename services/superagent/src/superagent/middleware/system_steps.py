@@ -93,6 +93,10 @@ async def attest_system_tool_step(
                     per_step, raw_result
                 )
 
+        model = state.get("_turn_model")
+        if isinstance(model, str) and model:
+            declared_meta["model"] = model  # AD-21, as on every agent step
+
         step = StepResult(
             call_id=call_id,
             agent_id=SYSTEM_TOOL_AGENT_DID,

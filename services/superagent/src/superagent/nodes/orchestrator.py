@@ -34,6 +34,7 @@ from ..runtime.session_cancel import (
 )
 from ..startup.platform_mcp_baseline import get_baseline_openai_tools
 from ..tool_call_parsing import normalize_stream_tool_calls
+from ..turn_model import TURN_MODEL_KEY, turn_model
 
 _NATIVE_CLIENT_HOST = "generativelanguage.googleapis.com"
 
@@ -780,8 +781,19 @@ async def orchestrator_llm_node(
 
     estimated_tokens = _estimate_tokens_lc(lc_messages)
 
+    # FR-13 / AD-21: the model that ran this call — the id the provider says
+    # it served, and where the request went — for the steps it requests (the
+    # receipt signs it) and for the turn's transcript row.
+    model_ran = turn_model(chat, accumulated)
+    if model_ran:
+        ai_message.response_metadata = {
+            **(ai_message.response_metadata or {}),
+            TURN_MODEL_KEY: model_ran,
+        }
+
     updates: dict[str, Any] = {
         "messages": [ai_message],
+        "_turn_model": model_ran,
         "estimated_token_count": estimated_tokens,
         # Actual output tokens for this turn — used by pipeline.py PaymentSettlement
         # to compute PLATFORM_TOKEN_RATE × completion_tokens cost.

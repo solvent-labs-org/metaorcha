@@ -317,7 +317,10 @@ async def resume_session(
                     ended.append(event)
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:
-            logger.exception("resume_session SSE gen failed for session %s", session_id)
+            logger.exception(
+                "resume_session SSE gen failed for session %s",
+                session_id.replace("\r", "\\r").replace("\n", "\\n"),  # path value
+            )
             ended.append({"type": "error", "category": "internal"})
             yield f"data: {json.dumps({'type': 'error', 'error': 'Unexpected server error'})}\n\n"
         # Story 2.2: a paused routine firing resumed from its session moves on

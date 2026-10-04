@@ -38,6 +38,9 @@ DEFAULT_SIGNER_DID = "did:orcha:system:validator"
 # judged on (story 3.1): declaring exit_zero and running nothing is a fail.
 NO_STEP_EXIT_CODE = "no step reported an exit code"
 NO_STEP_APPLICABLE = "no step was applicable to"
+# A ``model`` verdict's detail (story 3.3): printable ASCII, as every verdict
+# detail must be, and bounded like the producer's (turn_model._MAX_LEN).
+_MODEL_DETAIL_RE = re.compile(r"^[\x20-\x7e]{1,200}$")
 POLICY_VERSION_ENV = "RUN_ATTESTATION_POLICY_VERSION"
 DEFAULT_POLICY_VERSION = "run-attestation/1.0"
 # Persist ceiling on the SSE path (same idiom as anchor.py _TIMEOUT_SECONDS):
@@ -109,6 +112,9 @@ class _AccumulatedStep:
     # Story 2.4: ``{"counts_match": {operands}}`` on every step of a routine
     # firing that declared a run-level criterion; evaluated at seal.
     run_criteria: dict[str, Any] | None = None
+    # Story 3.3 / AD-21: "<route>/<model id>" of the LLM call that requested
+    # this step; signed once per distinct model as the ``model`` verdict.
+    model: str | None = None
     # False when ``output`` is the display copy, not the AD-16 pre-image.
     has_preimage: bool = True
 
@@ -191,6 +197,7 @@ class RunAttestationObserver:
             digest = meta.get("criteria_digest")
             approval = meta.get("scope_approval")
             run_criteria = meta.get("run_criteria")
+            model = meta.get("model")
             # AD-16: hash the raw, redacted pre-image; the display content is
             # the fallback only where the producer could not build one.
             preimage = getattr(record, "output_preimage", None)
@@ -213,6 +220,7 @@ class RunAttestationObserver:
                 completed_at=_parse_ts(record.completed_at),
                 scope_approval=approval if isinstance(approval, dict) else None,
                 run_criteria=run_criteria if isinstance(run_criteria, dict) else None,
+                model=model if isinstance(model, str) else None,
                 has_preimage=preimage is not None,
             )
             steps = self._steps.setdefault(session_id, [])
@@ -250,7 +258,24 @@ class RunAttestationObserver:
             verdicts.append(declared)
         verdicts.extend(self._run_criteria(steps))
         verdicts.extend(self._scope_approvals(steps))
+        verdicts.extend(self._models(steps))
         return verdicts
+
+    @staticmethod
+    def _models(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """The model that ran the turn (AD-21): one ``model`` verdict per model.
+
+        ``{check: "model", result: "pass", detail: "<route>/<model id>"}``, in
+        first-use order — one entry for an ordinary turn. ``pass`` records a
+        fact and never refuses: the gate reads only ``fail``. A value that is
+        not printable ASCII is left out rather than failing the seal.
+        """
+        seen: list[str] = []
+        for step in steps:
+            model = step.model
+            if model and _MODEL_DETAIL_RE.match(model) and model not in seen:
+                seen.append(model)
+        return [{"check": "model", "result": "pass", "detail": m} for m in seen]
 
     @staticmethod
     def _run_criteria(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
