@@ -1,8 +1,8 @@
-"""The local run journal and its declared-acceptance rules.
+"""The local run journal: files, steps, and sealing through ``emerge.criteria``.
 
-The rules here mirror the platform's (``middleware/criteria.py`` and
-``validator.run_observer._declared_acceptance``); the digest case is pinned to
-the value the platform put in a real SM-2 envelope on 2026-09-21.
+The criteria rules themselves are tested in ``test_criteria.py``; here the
+journal is checked to apply them (story 4.1, AD-20) and to make a receipt the
+one verifier accepts.
 """
 
 from __future__ import annotations
@@ -12,18 +12,15 @@ import stat
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from emerge.criteria import criteria_digest
 from emerge.journal import (
     JOURNAL_FORMAT,
     append_step,
-    compose_policy_version,
-    criteria_digest,
     declared_acceptance_verdict,
-    evaluate_step,
     journal_path,
     load_journal,
     new_journal,
     parse_criteria,
-    parse_exit_code,
     receipt_path,
     save_journal,
     seal_journal,
@@ -31,9 +28,10 @@ from emerge.journal import (
 from emerge.record import key_did
 from emerge.run_attestation import verify_run_attestation
 
-# sha256 of the canonical bytes of {"exit_zero": true}; the platform composed
-# exactly this into policy_version on the 2026-09-21 SM-2 walk.
+# the digest the platform composed into policy_version on the 2026-09-21 SM-2
+# walk (pinned in test_criteria.py); the journal must put the same bytes there
 EXIT_ZERO_DIGEST = "7ebe884e1812714ae129de1868289cea8317d555b25186ed62e53e20a8cb45c7"
+assert criteria_digest({"exit_zero": True}) == EXIT_ZERO_DIGEST
 
 
 def _step(call_id: str, output, *, success: bool = True) -> dict:
@@ -47,19 +45,7 @@ def _step(call_id: str, output, *, success: bool = True) -> dict:
     }
 
 
-# ── Criteria: digest, composition, parsing ───────────────────────────────────
-
-
-def test_criteria_digest_matches_the_platform_for_exit_zero():
-    assert criteria_digest({"exit_zero": True}) == EXIT_ZERO_DIGEST
-
-
-def test_policy_version_composes_exactly_like_the_platform():
-    assert (
-        compose_policy_version("local-session/1.0", EXIT_ZERO_DIGEST)
-        == f"local-session/1.0+criteria:{EXIT_ZERO_DIGEST}"
-    )
-    assert compose_policy_version("local-session/1.0", None) == "local-session/1.0"
+# ── Criteria: the journal's own parsing ──────────────────────────────────────
 
 
 def test_parse_criteria_accepts_supported_keys_and_rejects_others():
@@ -73,49 +59,7 @@ def test_parse_criteria_accepts_supported_keys_and_rejects_others():
         parse_criteria("exit_zero,no_such")
 
 
-@pytest.mark.parametrize(
-    ("output", "expected"),
-    [
-        ({"exit_code": 0}, 0),
-        ({"returncode": 3}, 3),
-        ({"exit": "2"}, 2),
-        ({"exit_code": True}, None),  # bool is not an exit code
-        ({"stdout": "hi"}, None),
-        ('{"exit_code": 1}', 1),  # a JSON string is decoded like raw_output
-        ("not json", None),
-        (None, None),
-        ([1], None),
-    ],
-)
-def test_parse_exit_code_reads_the_platform_keys_only(output, expected):
-    assert parse_exit_code(output) == expected
-
-
-# ── Per-step and run-level rules ─────────────────────────────────────────────
-
-
-def test_exit_zero_is_not_applicable_on_a_step_without_an_exit_code():
-    per = evaluate_step({"exit_zero": True}, {"stdout": "read a file"})
-    assert per == {
-        "exit_zero": {"result": "n/a", "detail": "no exit code in step output"}
-    }
-
-
-def test_exit_zero_fails_on_nonzero_and_passes_on_zero():
-    assert evaluate_step({"exit_zero": True}, {"exit_code": 3})["exit_zero"] == {
-        "result": "fail",
-        "detail": "nonzero exit: 3",
-    }
-    assert evaluate_step({"exit_zero": True}, {"exit_code": 0})["exit_zero"] == {
-        "result": "pass",
-        "detail": "ok",
-    }
-
-
-def test_unsupported_criterion_fails_closed_and_false_is_not_a_declaration():
-    per = evaluate_step({"exit_zero": False, "bogus": True}, {"exit_code": 0})
-    assert "exit_zero" not in per
-    assert per["bogus"]["result"] == "fail"
+# ── Run-level rule applied to journaled steps ────────────────────────────────
 
 
 def test_run_verdict_fails_when_any_applicable_step_failed():

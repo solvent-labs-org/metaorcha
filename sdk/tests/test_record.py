@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ from emerge.cli import main
 from emerge.record import (
     ALLOW_EPHEMERAL_KEY_ENV,
     KEY_PATH_ENV,
-    PRIVATE_KEY_ENV,
+    PLATFORM_KEY_ENV,
     EphemeralKeyRefused,
     build_run_envelope,
     key_did,
@@ -82,7 +83,7 @@ def example_run(generator) -> dict:
 @pytest.fixture
 def no_ambient_key(monkeypatch, tmp_path):
     """No env seed, no ephemeral opt-in, key path pointed at an absent file."""
-    monkeypatch.delenv(PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv(PLATFORM_KEY_ENV, raising=False)
     monkeypatch.delenv(ALLOW_EPHEMERAL_KEY_ENV, raising=False)
     monkeypatch.setenv(KEY_PATH_ENV, str(tmp_path / "absent" / "key"))
     return tmp_path
@@ -209,7 +210,7 @@ def test_empty_run_seals_and_verifies(example_run, example_key):
     assert verify_run_attestation(sealed).valid is True
 
 
-# ── Keys: env wins, then the file, then refusal ─────────────────────────────
+# ── Keys: the file, or refusal; the platform's variable is never read ─────────────────────────────
 
 
 def test_no_key_anywhere_is_refused(no_ambient_key):
@@ -217,21 +218,45 @@ def test_no_key_anywhere_is_refused(no_ambient_key):
         load_signing_key()
 
 
-def test_ephemeral_opt_in_is_honoured(no_ambient_key, monkeypatch):
+def test_ephemeral_opt_in_is_honoured_only_for_an_unkept_receipt(
+    no_ambient_key, monkeypatch
+):
     monkeypatch.setenv(ALLOW_EPHEMERAL_KEY_ENV, "1")
-    key = load_signing_key()
+    key = load_signing_key(kept=False)
     assert isinstance(key, Ed25519PrivateKey)
+    # a receipt that is kept never gets a key nobody keeps, opt-in or not
+    with pytest.raises(EphemeralKeyRefused, match="keygen"):
+        load_signing_key(kept=True)
+    with pytest.raises(EphemeralKeyRefused, match="keygen"):
+        load_signing_key()
 
 
-def test_env_seed_wins_over_the_key_file(no_ambient_key, monkeypatch, generator):
+def test_no_platform_variable_is_read_not_even_the_platforms_opt_in(
+    no_ambient_key, monkeypatch
+):
+    # the opt-in has its own ORCHA_ name: the validator's
+    # ATTESTATION_ALLOW_EPHEMERAL_KEY (set in any shell doing platform dev)
+    # must not switch the local producer onto a key nobody keeps
+    assert ALLOW_EPHEMERAL_KEY_ENV == "ORCHA_ALLOW_EPHEMERAL_KEY"
+    monkeypatch.setenv("ATTESTATION_ALLOW_EPHEMERAL_KEY", "1")
+    with pytest.raises(EphemeralKeyRefused, match="keygen"):
+        load_signing_key(kept=False)
+
+
+def test_the_platforms_key_variable_is_never_read(
+    no_ambient_key, monkeypatch, generator
+):
+    # AD-20: a plugin receipt is signed as its holder, never as the platform
+    monkeypatch.setenv(PLATFORM_KEY_ENV, generator.EXAMPLE_SEED_B64)
+    with pytest.raises(EphemeralKeyRefused, match="not read here"):
+        load_signing_key()
     path, file_key = write_key_file(no_ambient_key / "key")
-    monkeypatch.setenv(PRIVATE_KEY_ENV, generator.EXAMPLE_SEED_B64)
     loaded = load_signing_key(path)
-    assert public_key_b64_of(loaded) == generator.EXAMPLE_PUBLIC_KEY_B64
-    assert public_key_b64_of(loaded) != public_key_b64_of(file_key)
+    assert public_key_b64_of(loaded) == public_key_b64_of(file_key)
+    assert public_key_b64_of(loaded) != generator.EXAMPLE_PUBLIC_KEY_B64
 
 
-def test_key_file_is_used_when_env_is_unset(no_ambient_key):
+def test_key_file_is_used(no_ambient_key):
     path, file_key = write_key_file(no_ambient_key / "key")
     loaded = load_signing_key(path)
     assert public_key_b64_of(loaded) == public_key_b64_of(file_key)
@@ -249,10 +274,11 @@ def test_key_file_is_mode_0600_and_never_overwritten_silently(no_ambient_key):
 
 
 @pytest.mark.parametrize("bad", ["not base64!", base64.b64encode(b"short").decode()])
-def test_malformed_env_seed_is_a_clear_error(no_ambient_key, monkeypatch, bad):
-    monkeypatch.setenv(PRIVATE_KEY_ENV, bad)
-    with pytest.raises(ValueError, match=PRIVATE_KEY_ENV):
-        load_signing_key()
+def test_malformed_key_file_is_a_clear_error(no_ambient_key, bad):
+    path = no_ambient_key / "key"
+    path.write_text(bad + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=str(path)):
+        load_signing_key(path)
 
 
 # ── CLI: seal → verify round trip ────────────────────────────────────────────
@@ -313,11 +339,12 @@ def test_cli_seal_writes_stdout_by_default_and_reads_stdin(
 
 
 def test_cli_seal_with_the_example_seed_emits_the_golden_envelope(
-    no_ambient_key, example_run, generator, golden, monkeypatch, capsys
+    no_ambient_key, example_run, generator, golden, capsys
 ):
-    monkeypatch.setenv(PRIVATE_KEY_ENV, generator.EXAMPLE_SEED_B64)
+    key_path = no_ambient_key / "key"
+    key_path.write_text(generator.EXAMPLE_SEED_B64 + "\n", encoding="utf-8")
     run_path = _write(no_ambient_key, "run.json", example_run)
-    assert main(["record", "seal", str(run_path)]) == 0
+    assert main(["record", "seal", "--key", str(key_path), str(run_path)]) == 0
     assert json.loads(capsys.readouterr().out) == golden["valid"]
 
 
@@ -328,6 +355,42 @@ def test_cli_seal_refuses_without_a_key(no_ambient_key, example_run, capsys):
     assert rc == 2
     assert "no signing key" in err
     assert "orcha record keygen" in err
+
+
+def test_cli_seal_with_the_opt_in_prints_an_unkept_receipt_but_never_writes_one(
+    no_ambient_key, example_run, monkeypatch, capsys
+):
+    # NFR-6: the ephemeral opt-in reaches a receipt printed to a terminal,
+    # never one written with --out or redirected; the kept receipt is refused,
+    # no file appears, and the opt-in is not offered for it
+    monkeypatch.setenv(ALLOW_EPHEMERAL_KEY_ENV, "1")
+    run_path = _write(no_ambient_key, "run.json", example_run)
+    out = no_ambient_key / "receipt.json"
+    rc = main(["record", "seal", str(run_path), "--out", str(out)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert not out.exists()
+    assert "no signing key" in err
+    assert "ORCHA_ALLOW_EPHEMERAL_KEY" not in err
+
+    # stdout under pytest is captured, i.e. not a terminal: `seal > file` is kept
+    rc = main(["record", "seal", str(run_path)])
+    captured = capsys.readouterr()
+    assert rc == 2 and captured.out == ""
+    assert "ORCHA_ALLOW_EPHEMERAL_KEY" not in captured.err
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    rc = main(["record", "seal", str(run_path)])
+    captured = capsys.readouterr()
+    assert rc == 0
+    envelope = json.loads(captured.out)
+    assert verify_run_attestation(envelope).valid
+    assert "sealed run_id=" in captured.err
+
+    # and the opt-in is named only where it would apply: a terminal
+    monkeypatch.delenv(ALLOW_EPHEMERAL_KEY_ENV)
+    rc = main(["record", "seal", str(run_path)])
+    assert rc == 2 and "ORCHA_ALLOW_EPHEMERAL_KEY=1" in capsys.readouterr().err
 
 
 def test_cli_seal_rejects_a_bad_run(no_ambient_key, example_run, capsys):

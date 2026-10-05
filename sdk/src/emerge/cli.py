@@ -23,9 +23,11 @@ import logging
 import os
 import shlex
 import sys
+import textwrap
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .client import DEFAULT_REGISTRY_URL, RegistryError, register
@@ -43,6 +45,7 @@ from .record import (
 from .run_attestation import (
     AttestationVerdict,
     compute_envelope_digest,
+    coverage_statement,
     verify_run_attestation,
 )
 from .sdk import AgentSpec, clear_registry, registered_agents
@@ -296,11 +299,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     "signer_did": verdict.signer_did,
                     "step_count": verdict.step_count,
                     "checks": verdict.checks,
+                    "coverage": coverage_statement(envelope),
                 }
             )
         )
     else:
         _print_verdict(verdict)
+        _print_coverage(coverage_statement(envelope))
     return 0 if verdict.valid else 1
 
 
@@ -319,6 +324,15 @@ def _print_verdict(verdict: AttestationVerdict) -> None:
     print(f"  merkle_root: {_mark(verdict.checks['steps_merkle_root'])}")
     print(f"  signature:   {_mark(verdict.checks['signature'])}")
     print(f"Verdict: {verdict.verdict.upper()}")
+
+
+def _print_coverage(coverage: dict[str, Any]) -> None:
+    """FR-8: say what the record covers, so a partial record is not read as whole."""
+    print("Coverage:")
+    for line in textwrap.wrap(coverage["statement"], width=72):
+        print(f"  {line}")
+    if coverage["tools"]:
+        print(f"  tools in steps: {', '.join(coverage['tools'])}")
 
 
 def _read_json_object(source: str, what: str, prog: str) -> dict | None:
@@ -349,7 +363,10 @@ def cmd_record_seal(args: argparse.Namespace) -> int:
     if run is None:
         return 2
     try:
-        private_key = load_signing_key(args.key)
+        # a receipt written to a file is kept, and so is one redirected or
+        # piped from stdout: only a terminal is "printed, not kept"
+        kept = bool(args.out) or not sys.stdout.isatty()
+        private_key = load_signing_key(args.key, kept=kept)
     except (EphemeralKeyRefused, ValueError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
@@ -557,10 +574,12 @@ def build_parser() -> argparse.ArgumentParser:
             "steps (raw: call_id, tool, args, output, success, latency_ms,\n"
             "cdv_bp?), verdicts, started_at, finished_at, and optionally\n"
             "charter_hash and signer_did. Raw args/output are hashed; they\n"
-            "never enter the envelope. The signer key comes from\n"
-            "ATTESTATION_PRIVATE_KEY_B64 when set, else the key file\n"
-            "(--key, ORCHA_KEY_PATH, or ~/.orcha/key). With neither, sealing\n"
-            "is refused: a kept receipt is never signed by an ephemeral key.\n"
+            "never enter the envelope. The signer key is the key file\n"
+            "(--key, ORCHA_KEY_PATH, or ~/.orcha/key) and nothing else:\n"
+            "the platform's ATTESTATION_PRIVATE_KEY_B64 is never read, and\n"
+            "without a key file sealing is refused - a kept receipt (--out,\n"
+            "or stdout redirected) is never signed by an ephemeral key;\n"
+            "ORCHA_ALLOW_EPHEMERAL_KEY=1 allows one printed to a terminal.\n"
             "\n"
             "The sealed envelope is self-signed by that key: it proves who\n"
             "sealed it, that nothing changed after sealing, and what each\n"

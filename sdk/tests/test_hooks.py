@@ -15,7 +15,7 @@ import pytest
 from emerge.cli import main
 from emerge.hooks import claude_code_settings, claude_code_step, run_claude_code_hook
 from emerge.journal import journal_path, load_journal, receipt_path
-from emerge.record import ALLOW_EPHEMERAL_KEY_ENV, KEY_PATH_ENV, PRIVATE_KEY_ENV
+from emerge.record import ALLOW_EPHEMERAL_KEY_ENV, KEY_PATH_ENV, PLATFORM_KEY_ENV
 from emerge.run_attestation import verify_run_attestation
 
 SESSION = "4ed9bcbc-e726-407d-b67d-1dce2b6faade"
@@ -74,7 +74,7 @@ def _stop(cwd: str) -> dict:
 @pytest.fixture
 def key_file(monkeypatch, tmp_path):
     """A minted key at ORCHA_KEY_PATH; no env seed, no ephemeral opt-in."""
-    monkeypatch.delenv(PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv(PLATFORM_KEY_ENV, raising=False)
     monkeypatch.delenv(ALLOW_EPHEMERAL_KEY_ENV, raising=False)
     path = tmp_path / "keys" / "key"
     monkeypatch.setenv(KEY_PATH_ENV, str(path))
@@ -215,7 +215,7 @@ def test_a_redelivered_event_is_not_a_second_step(tmp_path, key_file):
 def test_missing_key_on_stop_is_a_non_blocking_one_and_keeps_the_journal(
     tmp_path, monkeypatch
 ):
-    monkeypatch.delenv(PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv(PLATFORM_KEY_ENV, raising=False)
     monkeypatch.delenv(ALLOW_EPHEMERAL_KEY_ENV, raising=False)
     monkeypatch.setenv(KEY_PATH_ENV, str(tmp_path / "absent"))
     cwd = str(tmp_path)
@@ -225,6 +225,17 @@ def test_missing_key_on_stop_is_a_non_blocking_one_and_keeps_the_journal(
     assert "not sealed" in err.getvalue()
     assert "orcha record keygen" in err.getvalue()
     assert journal_path(tmp_path, SESSION).exists()
+    assert not receipt_path(tmp_path, SESSION).exists()
+
+    # the hook writes the receipt, so it is kept: the ephemeral opt-in (and
+    # the platform's key variable, set or not) never seal it
+    monkeypatch.setenv(ALLOW_EPHEMERAL_KEY_ENV, "1")
+    monkeypatch.setenv(PLATFORM_KEY_ENV, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    err = io.StringIO()
+    assert run_claude_code_hook(_stop(cwd), err=err) == 1
+    assert "not sealed" in err.getvalue()
+    assert "is the platform's key and is not read here" in err.getvalue()
+    assert "ORCHA_ALLOW_EPHEMERAL_KEY" not in err.getvalue()
     assert not receipt_path(tmp_path, SESSION).exists()
 
 

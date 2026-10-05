@@ -21,13 +21,21 @@ Rules carried over unchanged (see the RFC and the verifier's docstring):
   integer in ``[0, 1000]``. DIDs follow the platform profile
   (``did:orcha:agent:*`` / ``did:orcha:system:*``).
 
-Key handling mirrors the platform's ``ATTESTATION_PRIVATE_KEY_B64`` semantics
-(a base64 32-byte Ed25519 seed). For the CLI the seed may instead live in a
-local key file (default ``~/.orcha/key``, mode ``0600``); the environment
-variable wins when set. A receipt that is kept must never be signed with an
-ephemeral key: with no seed in the environment and no key file, sealing is
-refused unless ``ATTESTATION_ALLOW_EPHEMERAL_KEY=1`` opts in for dev/test.
-Seeds are never printed or logged.
+This module is the single producer implementation (AD-20): the platform's
+validator builds and signs through :func:`build_run_envelope` and
+:func:`sign_run_envelope` with its own key, and ``orcha record`` through
+:func:`seal_run` with the developer's. Neither has a copy.
+
+The local key is a base64 32-byte Ed25519 seed in a key file (default
+``~/.orcha/key``, mode ``0600``). ``ATTESTATION_PRIVATE_KEY_B64`` is the
+platform's key and is never read here: a plugin receipt is signed by the key
+its holder keeps, never as the platform. No platform variable is read at all
+— a shell set up for platform development must not change what the local
+producer does, so the opt-in below has its own ``ORCHA_`` name. A receipt
+that is kept must never be signed with an ephemeral key: with no key file,
+sealing is refused; ``ORCHA_ALLOW_EPHEMERAL_KEY=1`` opts in for dev/test only
+where the receipt is not kept (printed to a terminal, not written or
+redirected). Seeds are never printed or logged.
 """
 
 from __future__ import annotations
@@ -52,8 +60,9 @@ from .run_attestation import (
     sha256_hex,
 )
 
-PRIVATE_KEY_ENV = "ATTESTATION_PRIVATE_KEY_B64"
-ALLOW_EPHEMERAL_KEY_ENV = "ATTESTATION_ALLOW_EPHEMERAL_KEY"
+# The platform's key variable. Named so the refusal can say it is not read.
+PLATFORM_KEY_ENV = "ATTESTATION_PRIVATE_KEY_B64"
+ALLOW_EPHEMERAL_KEY_ENV = "ORCHA_ALLOW_EPHEMERAL_KEY"
 KEY_PATH_ENV = "ORCHA_KEY_PATH"
 DEFAULT_KEY_PATH = Path("~/.orcha/key")
 
@@ -314,29 +323,39 @@ def resolve_key_path(key_path: str | os.PathLike[str] | None = None) -> Path:
 
 
 def load_signing_key(
-    key_path: str | os.PathLike[str] | None = None,
+    key_path: str | os.PathLike[str] | None = None, *, kept: bool = True
 ) -> Ed25519PrivateKey:
-    """Load the local signing key.
+    """Load the local signing key from the key file, and nothing else.
 
-    Order: ``ATTESTATION_PRIVATE_KEY_B64`` when set (same semantics as the
-    platform), else the key file. With neither, an ephemeral key is generated
-    only when ``ATTESTATION_ALLOW_EPHEMERAL_KEY=1``; otherwise
-    :class:`EphemeralKeyRefused` is raised, because a receipt sealed by a key
-    nobody keeps cannot be re-verified against that signer later.
+    ``ATTESTATION_PRIVATE_KEY_B64`` is never consulted (AD-20): the platform
+    signs as the platform, a local receipt as its holder. Without a key file,
+    :class:`EphemeralKeyRefused` is raised — a receipt sealed by a key nobody
+    keeps cannot be re-verified against that signer later. With *kept* False
+    (the receipt goes to a terminal, not to a file or a pipe) and
+    ``ORCHA_ALLOW_EPHEMERAL_KEY=1``, an ephemeral key is generated for
+    dev/test; a kept receipt never gets one, opt-in or not.
     """
-    raw = os.environ.get(PRIVATE_KEY_ENV, "").strip()
-    if raw:
-        return _seed_from_b64(raw, PRIVATE_KEY_ENV)
     path = resolve_key_path(key_path)
     if path.is_file():
         return _seed_from_b64(path.read_text(encoding="utf-8"), str(path))
-    if os.environ.get(ALLOW_EPHEMERAL_KEY_ENV, "").strip() == "1":
+    if not kept and os.environ.get(ALLOW_EPHEMERAL_KEY_ENV, "").strip() == "1":
         return Ed25519PrivateKey.generate()
+    hint = (
+        f" ({PLATFORM_KEY_ENV} is set but is the platform's key and is not read here)"
+        if os.environ.get(PLATFORM_KEY_ENV, "").strip()
+        else ""
+    )
     raise EphemeralKeyRefused(
-        f"no signing key: {PRIVATE_KEY_ENV} is unset and {path} does not exist. "
-        "A receipt you keep needs a persistent key — create one with "
-        "`orcha record keygen`, or set ATTESTATION_ALLOW_EPHEMERAL_KEY=1 "
-        "(dev/test only: the receipt will not verify against a key anyone holds)."
+        f"no signing key: {path} does not exist{hint}. "
+        "A receipt you keep needs a persistent key - create one with "
+        "`orcha record keygen`"
+        + (
+            ", or set ORCHA_ALLOW_EPHEMERAL_KEY=1 to print an unkept "
+            "receipt (dev/test only: it will not verify against a key anyone "
+            "holds)."
+            if not kept
+            else "."
+        )
     )
 
 
