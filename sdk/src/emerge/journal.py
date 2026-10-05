@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +48,7 @@ _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 def utc_now() -> str:
     """RFC 3339 UTC with the Z designator, second precision (the envelope rule)."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ── Criteria ─────────────────────────────────────────────────────────────────

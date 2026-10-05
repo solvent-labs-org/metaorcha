@@ -25,7 +25,7 @@ import shlex
 import sys
 import textwrap
 import threading
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -221,7 +221,7 @@ def _synthetic_attestation(*, validator_did: str) -> dict:
         "latency_ms": 42,
         "judge_score": score,
         "notes": "spike-heuristic (--once demo)",
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
