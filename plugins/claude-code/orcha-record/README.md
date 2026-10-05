@@ -10,11 +10,14 @@ You need [uv](https://docs.astral.sh/uv/). Everything below runs offline
 after the first `uvx` resolves the package.
 
 **1. Verify the golden pair** (two receipts from the spec's worked example —
-one intact, one with a step changed after sealing):
+one intact, one with a step changed after sealing; they are in this
+plugin's `examples/`, or fetch them):
 
 ```bash
-uvx --from 'orcha-sdk>=0.2.0' orcha verify examples/golden-valid.json      # Verdict: VALID
-uvx --from 'orcha-sdk>=0.2.0' orcha verify examples/golden-tampered.json   # Verdict: INVALID
+base=https://raw.githubusercontent.com/solvent-labs-org/metaorcha/main/plugins/claude-code/orcha-record/examples
+curl -fsSO "$base/golden-valid.json" && curl -fsSO "$base/golden-tampered.json"
+uvx --from 'orcha-sdk>=0.2.0' orcha verify golden-valid.json      # Verdict: VALID
+uvx --from 'orcha-sdk>=0.2.0' orcha verify golden-tampered.json   # Verdict: INVALID
 ```
 
 **2. Flip a byte** in `golden-valid.json` — change one character of a
@@ -29,12 +32,19 @@ never printed):
 uvx --from 'orcha-sdk>=0.2.0' orcha record keygen
 ```
 
-**4. Install the plugin** in Claude Code — from the Metaorcha marketplace
-once it is listed, or straight from a checkout:
+**4. Install the plugin** in Claude Code:
 
 ```
 /plugin marketplace add solvent-labs-org/metaorcha
-/plugin install orcha-record
+/plugin install orcha-record@metaorcha
+```
+
+Or, without the plugin, put the same three hooks in your project's
+`.claude/settings.json` yourself:
+
+```bash
+uv tool install 'orcha-sdk>=0.2.0'
+orcha record hook claude-code --print-settings   # merge the printed block into .claude/settings.json
 ```
 
 **5. Run a session.** Each tool call is appended to

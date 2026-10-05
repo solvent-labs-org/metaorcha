@@ -111,3 +111,20 @@ def test_readme_carries_the_honesty_lines_and_no_claims():
         assert later not in text, later
     for claim in ("first to ", "the only ", "nobody", "unlike ", "competitor"):
         assert claim not in text, claim
+
+
+def test_the_install_command_the_readme_gives_resolves_to_this_plugin():
+    # `/plugin install orcha-record@<marketplace>` works only if the repo root
+    # carries a marketplace of that name listing this directory
+    readme = (PLUGIN / "README.md").read_text()
+    market_path = REPO / ".claude-plugin" / "marketplace.json"
+    assert "/plugin marketplace add solvent-labs-org/metaorcha" in readme
+    assert market_path.is_file(), "README installs from a marketplace the repo lacks"
+    market = json.loads(market_path.read_text())
+    assert f"/plugin install orcha-record@{market['name']}" in readme
+    (entry,) = [p for p in market["plugins"] if p["name"] == "orcha-record"]
+    assert (REPO / entry["source"]).resolve() == PLUGIN.resolve()
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert entry["name"] == manifest["name"]
+    # the no-plugin path prints the same three events the plugin subscribes to
+    assert "orcha record hook claude-code --print-settings" in readme
