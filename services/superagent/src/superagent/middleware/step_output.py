@@ -15,11 +15,12 @@ headers must not put the token into the chat or the run audit (story 1.6b).
 
 from __future__ import annotations
 
-import functools
 import logging
 import re
 from collections.abc import Mapping
 from typing import Any
+
+from emerge.preimage import output_preimage, redact_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -172,38 +173,14 @@ def _redact_value(
     return sub(rendered) if pattern.search(rendered) else value
 
 
-@functools.cache
-def _warn_sdk_missing() -> None:
-    """Say once, and only where receipts are sealed, that AD-16 is inactive."""
-    try:
-        from ..config import settings  # noqa: PLC0415
-
-        attesting = bool(getattr(settings, "run_attestation_enabled", False))
-    except Exception:
-        attesting = False
-    if attesting:
-        logger.warning(
-            "RUN_ATTESTATION_ENABLED=true but emerge.preimage (orcha-sdk) is not "
-            "importable — receipts hash the display copy, not the raw output (AD-16)"
-        )
-
-
 def step_output_preimage(raw_output: Any, credentials: list[tuple[str, str]]) -> Any:
     """The redacted pre-image of *raw_output*, or None when it cannot be built.
 
-    None tells the run-attestation observer to fall back to the display
-    content. That happens only where the SDK is not installed (the SuperAgent
-    image ships without it, and without the validator that consumes this);
-    with run attestation on, that is logged once. Never raises.
+    ``emerge.preimage`` is the one implementation of the pre-image (AD-20) and
+    the SDK is a declared dependency of this service, so None here means the
+    value itself could not be rendered; the run-attestation observer then
+    falls back to the display content. Never raises.
     """
-    try:
-        from emerge.preimage import (  # noqa: PLC0415 — optional workspace package
-            output_preimage,
-            redact_credentials,
-        )
-    except ImportError:
-        _warn_sdk_missing()
-        return None
     try:
         return redact_credentials(output_preimage(raw_output), credentials)
     except Exception:

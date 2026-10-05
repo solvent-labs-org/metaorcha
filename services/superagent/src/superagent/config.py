@@ -121,9 +121,9 @@ class Settings(BaseSettings):
     @classmethod
     def _charter_hash_hex64(cls, value: str | None) -> str | None:
         # Re-declared locally — never import from the optional validator
-        # package at settings load (graceful-degrade contract). A mirrored copy
-        # of this rule lives in validator/run_envelope.py (_HEX64_RE) — keep
-        # the two in sync.
+        # package at settings load (graceful-degrade contract). The same rule
+        # is emerge.record._HEX64_RE / emerge.criteria._HEX64_RE in the SDK —
+        # keep them in sync.
         if value is None:
             return None
         stripped = value.strip()

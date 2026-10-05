@@ -9,8 +9,7 @@ propagates; an interrupt is neither.
 
 from __future__ import annotations
 
-import builtins
-import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -24,7 +23,6 @@ from superagent.middleware.observers import (
 from superagent.middleware.pipeline import ExecutionMiddleware
 from superagent.middleware.step_events import step_result_payload
 from superagent.middleware.step_output import (
-    _warn_sdk_missing,
     call_credentials,
     step_output_preimage,
 )
@@ -115,33 +113,41 @@ def test_preimage_is_the_raw_result_with_credentials_redacted() -> None:
     assert out == {"echo": "used [REDACTED:GITHUB_TOKEN]", "rows": [1, 2]}
 
 
-def test_preimage_is_none_without_the_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_import = builtins.__import__
+def test_the_preimage_is_the_sdks_and_the_sdk_is_not_optional() -> None:
+    # AD-20: one implementation. The service declares orcha-sdk, so the
+    # pre-image is never a fallback to the display copy for want of an import.
+    import importlib.metadata as md
+    import tomllib
 
-    def no_sdk(name, *args, **kwargs):
-        if name == "emerge.preimage":
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
+    from emerge.preimage import output_preimage
 
-    monkeypatch.setattr(builtins, "__import__", no_sdk)
-    assert step_output_preimage("anything", []) is None
+    service = Path(__file__).resolve().parents[2]
+    deps = tomllib.loads((service / "pyproject.toml").read_text())["project"][
+        "dependencies"
+    ]
+    assert "orcha-sdk" in deps
+    assert md.version("orcha-sdk")
+    raw = {"b": 1, "a": [{"x": 2}]}
+    assert step_output_preimage(raw, []) == output_preimage(raw)
+    # the SDK is an editable workspace member (a .pth into sdk/src), so the
+    # image must carry sdk/ to resolve the lock and again to import at runtime
+    dockerfile = (service / "Dockerfile").read_text()
+    assert "COPY sdk ./sdk" in dockerfile
+    assert "/app/sdk /app/sdk" in dockerfile
 
 
-def test_a_missing_sdk_is_reported_once_where_receipts_are_sealed(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    from superagent import config
+def test_the_preimage_is_total_on_an_agents_value() -> None:
+    # the SDK renders what it cannot read as the value's type name; nothing
+    # an agent returns can raise out of the step after dispatch
+    class Unrenderable:
+        def __str__(self) -> str:
+            raise RuntimeError("no")
 
-    monkeypatch.setattr(config.settings, "run_attestation_enabled", True)
-    _warn_sdk_missing.cache_clear()
-    with caplog.at_level(logging.WARNING):
-        _warn_sdk_missing()
-        _warn_sdk_missing()
-    _warn_sdk_missing.cache_clear()
-    assert [r.message for r in caplog.records].count(
-        "RUN_ATTESTATION_ENABLED=true but emerge.preimage (orcha-sdk) is not "
-        "importable — receipts hash the display copy, not the raw output (AD-16)"
-    ) == 1
+        def __repr__(self) -> str:
+            raise RuntimeError("no")
+
+    out = step_output_preimage(Unrenderable(), [])
+    assert isinstance(out, str) and out.endswith("Unrenderable")
 
 
 def test_kafka_payload_strips_the_preimage() -> None:

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeDB, _step_result
-from emerge.run_attestation import verify_run_attestation
-from validator.criteria import (
+from emerge.criteria import (
     compose_policy_version,
     criteria_digest,
     parse_policy_version,
 )
+from emerge.run_attestation import verify_run_attestation
 from validator.run_envelope import verify_run_envelope
 from validator.run_observer import DEFAULT_POLICY_VERSION, RunAttestationObserver
 

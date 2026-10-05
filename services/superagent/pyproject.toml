@@ -35,6 +35,9 @@ dependencies = [
   "common-utils",
   "emerge-tools",
   "internal-commons",
+  # the one producer implementation of the record (AD-20): criteria digest
+  # and evaluation, output pre-image; the validator signs through it
+  "orcha-sdk",
 ]
 
 [tool.uv.sources]
@@ -43,6 +46,7 @@ common-pricing = {workspace = true}
 common-utils = {workspace = true}
 emerge-tools = {workspace = true}
 internal-commons = {workspace = true}
+orcha-sdk = {workspace = true}
 
 [build-system]
 requires = ["hatchling"]
