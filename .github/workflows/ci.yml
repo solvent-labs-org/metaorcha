@@ -579,8 +579,12 @@ jobs:
         working-directory: services/superagent
         # Dummy, non-secret values: Settings() refuses to import without them,
         # and every file after the first three imports it. Port 1 connects
-        # nowhere; the vault key is all zero bytes.
+        # nowhere; the vault key is all zero bytes. test_revoke_connection
+        # seals a receipt with validator, which imports emerge_node: both are
+        # workspace members the root sync does not put on the path (same
+        # shape as the attestation-playground job).
         env:
+          PYTHONPATH: .:${{ github.workspace }}/services/validator/src:${{ github.workspace }}/node/src
           DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
           VAULT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           PND_SERVICE_URL: http://127.0.0.1:1

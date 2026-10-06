@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import sys
 import types
 from typing import Any
@@ -493,6 +494,26 @@ async def test_a_missing_row_is_zero_and_a_database_error_propagates(
         await VaultClient().delete_agent_env(USER, SSE_DID, "GH_TOKEN")
     with pytest.raises(RuntimeError, match="database is down"):
         await VaultClient().delete_all_agent_env(USER, SSE_DID)
+
+
+async def test_a_failed_delete_logs_the_request_ids_on_one_line(
+    monkeypatch, caplog
+) -> None:
+    # user and agent ids come from the request: a line break in either must
+    # not start a second, forged log line
+    table = _FakeUserSecret([])
+    table.fail = True
+    _prisma(monkeypatch, table)
+    with (
+        caplog.at_level(logging.ERROR, logger="superagent.vault.client"),
+        pytest.raises(RuntimeError, match="database is down"),
+    ):
+        await VaultClient().delete_all_agent_env("user-1\nERROR forged", SSE_DID)
+    (message,) = [
+        r.getMessage() for r in caplog.records if r.name == "superagent.vault.client"
+    ]
+    assert "\n" not in message and "\r" not in message
+    assert "user-1\\nERROR forged" in message
 
 
 # -- AC3: a receipt sealed before the revoke --------------------------------

@@ -238,7 +238,12 @@ class VaultClient:
             finally:
                 await db.disconnect()
         except Exception:
-            logger.exception("deleting user secrets failed for %s", label)
+            # the label carries request values (user and agent ids): escape
+            # line breaks so it cannot forge a log line
+            logger.exception(
+                "deleting user secrets failed for %s",
+                label.replace("\r", "\\r").replace("\n", "\\n"),
+            )
             raise
 
     async def list_agent_env_status(

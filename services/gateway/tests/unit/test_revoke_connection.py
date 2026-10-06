@@ -236,14 +236,12 @@ async def test_the_agent_library_delete_of_any_other_agent_is_unchanged(gw) -> N
     ac, headers, registry, superagent, _, _ = gw
     registry.request = AsyncMock(return_value=Response(200, json={"status": "ok"}))
     registry.get.return_value = _manifest(["mcp"])  # a DID, not a connection
-    assert (
-        await ac.delete(f"/api/v1/dev/agents/{DID}", headers=headers)
-    ).status_code == 200
+    resp = await ac.delete(f"/api/v1/dev/agents/{DID}", headers=headers)
+    assert resp.status_code == 200
     registry.get.reset_mock()
     # an id that is not a connection DID is proxied without a Registry read
-    assert (
-        await ac.delete("/api/v1/dev/agents/rulebook-rag", headers=headers)
-    ).status_code == 200
+    resp = await ac.delete("/api/v1/dev/agents/rulebook-rag", headers=headers)
+    assert resp.status_code == 200
     registry.get.assert_not_awaited()
     superagent.delete.assert_not_awaited()
     assert [c.args[:2] for c in registry.request.await_args_list] == [
