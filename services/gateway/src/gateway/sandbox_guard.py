@@ -102,6 +102,10 @@ class SandboxGuardMiddleware(BaseHTTPMiddleware):
                             exc_info=True,
                         )
             except (ValueError, jwt.PyJWTError):
+                # A token this guard cannot read is not a guest's: no guest cap
+                # applies, and the daily cap below still counts the request.
+                # Rejecting it is the route's auth dependency's job, not this
+                # middleware's.
                 pass
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
