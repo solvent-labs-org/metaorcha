@@ -38,7 +38,39 @@ ignoreUntil = 2027-02-01
 # NLTK <=3.10.3 has no fixed release for GHSA-8mgp-746c-j5xp. Metaorcha uses
 # only fixed-language tokenization and English stopwords; re-review immediately
 # if NLTK usage expands.
+#
+# Renewed 2026-10-06 (the first entry lapsed 2026-10-01 and the scan went red on
+# every PR). Re-checked, not carried over: osv.dev still lists 3.10.3 as the last
+# affected release with no fix, and the advisory names only model-artifact APIs
+# (TransitionParser.train/parse, AveragedPerceptron.save/load,
+# PerceptronTagger.save_to_json, save_maxent_params). The only NLTK caller is
+# services/planning-discovery/.../resolution/keyword_extractor.py, and it calls
+# nltk.data.find, nltk.download (punkt, punkt_tab, stopwords), word_tokenize and
+# stopwords — none of them.
 [[IgnoredVulns]]
 id = "GHSA-8mgp-746c-j5xp"
 reason = "NLTK is used only for fixed-language tokenization and English stopwords; Metaorcha does not call the affected model-artifact APIs, pass caller-controlled filenames into NLTK, or rely on NLTK pathsec as a containment boundary. No patched release exists; remove this exception when NLTK 3.10.4 is published or when NLTK is replaced. Re-review immediately if NLTK usage expands."
-ignoreUntil = 2026-10-01
+ignoreUntil = 2026-11-15
+
+# python-jose <=3.5.0 has no fixed release for GHSA-3qf3-8w2g-rqmx (an incomplete
+# fix for CVE-2024-33663): HMAC initialisation accepts a DER-encoded public key,
+# so an attacker holding the service's PUBLIC key can forge HS256 tokens WHEN the
+# service verifies with that public key and does not restrict the algorithm.
+#
+# Neither precondition holds here. Checked 2026-10-06 by reading every call, not
+# assumed from the default: the Gateway has one jose decode,
+# services/gateway/src/gateway/auth/jwt.py `decode_access_token`, which passes
+# `algorithms=[settings.jwt_algorithm]` (HS256: config.py default and every
+# env/compose file, as listed for ecdsa above) and the symmetric
+# `settings.jwt_secret_key`. There is no public key to abuse, and the algorithm
+# is restricted. sandbox_guard.py imports only JWTError and decodes through
+# decode_access_token. Nothing else in services/ imports jose.
+#
+# Same premise as the ecdsa entry: the moment JWT_ALGORITHM is set to an
+# RS*/ES*/PS* value, remove this entry rather than renew it. The exit is the one
+# already scheduled above, replacing python-jose with pyjwt (in the lock at
+# 2.15.1 via mcp); this date makes it a deadline.
+[[IgnoredVulns]]
+id = "GHSA-3qf3-8w2g-rqmx"
+reason = "No fixed python-jose release. The attack needs verification with an asymmetric public key and an unrestricted algorithm list; the Gateway's only decode passes algorithms=[HS256] and a symmetric secret (checked at every call site 2026-10-06). Replace python-jose with pyjwt before this date; remove at once if JWT_ALGORITHM ever becomes RS*/ES*/PS*."
+ignoreUntil = 2026-11-15
