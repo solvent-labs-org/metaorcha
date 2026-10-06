@@ -28,6 +28,7 @@ from ..middleware.oauth_grants import (
     store_grants_for_strategy,
 )
 from ..middleware.preflight import AuthInterruptRequired, PreFlightError
+from ..middleware.system_steps import attest_system_tool_step
 from ..persistence.transcript_store import TRANSCRIPT_TOOL_META_KEY
 from ..pnd.candidate_compat import (
     cand_agent_id,
@@ -468,6 +469,7 @@ async def execute_agent_calls_node(
                 },
                 pending_events,
             )
+            _sys_start = datetime.now(UTC)
             try:
                 result = await SYSTEM_TOOL_REGISTRY.call(tool_name, args, state)
                 if (
@@ -537,6 +539,15 @@ async def execute_agent_calls_node(
                     "content_preview": content[:300],
                 },
                 pending_events,
+            )
+            await attest_system_tool_step(
+                call_id=call_id,
+                tool_name=tool_name,
+                args=args,
+                content=content,
+                success=_result_status(content) == "success",
+                latency_ms=int((datetime.now(UTC) - _sys_start).total_seconds() * 1000),
+                state=state,
             )
             continue
 
