@@ -1,0 +1,38 @@
+schema_version: '1.0'
+identity:
+  id: did:orcha:agent:test-runner
+  name: Test Runner
+  version: 0.1.0
+  description: Runs one allow-listed test command (default `pytest -q`) in a fixed
+    repository and returns the exit code, the output tail and the duration as JSON.
+    The task text does not choose the command.
+  tags:
+  - tests
+  - ci
+  - exit-code
+  - a2a
+protocol:
+  type: a2a
+  version: '1.0'
+  transport:
+    type: http
+    endpoint: http://localhost:8903
+health_endpoint: http://localhost:8903/health
+security:
+  transport_layer:
+    type: none
+  auth_strategies: []
+skills:
+- id: run_tests
+  name: Run tests
+  description: Run the configured test command and report {exit_code, stdout_tail,
+    duration_ms}.
+  tags:
+  - tests
+  - exit-code
+  examples:
+  - run the test suite
+  - run the tests and report the exit code
+payment:
+  enabled: true
+  base_fee: '0.01'

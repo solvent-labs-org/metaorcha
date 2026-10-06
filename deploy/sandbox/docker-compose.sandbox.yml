@@ -231,6 +231,19 @@ services:
       - gws-tokens:/app/data
     networks: [sandbox-net]
 
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: agents/test-runner-agent/Dockerfile
+    container_name: sandbox-test-runner
+    environment:
+      # `passing` → a recorded, settled run; `failing` → a refused settle
+      # (CHECK_VERDICT_FAIL on a declared exit_zero). Set in .env.sandbox.
+      TEST_RUNNER_REPO: ${TEST_RUNNER_REPO:-/app/fixtures/passing}
+      TEST_RUNNER_CMD: pytest -q
+      EMERGE_ADVERTISE_HOST: test-runner
+    networks: [sandbox-net]
+
   # ── Reverse Proxy ────────────────────────────────────────────────────────────
 
   nginx:
