@@ -517,6 +517,17 @@ class SettlementGateObserver:
     def __init__(self, attestation_observer: Any) -> None:
         self._attestation_observer = attestation_observer
 
+    async def on_step_complete(self, record: Any) -> None:
+        """Run-boundary observer: nothing to do per step.
+
+        ``ExecutionObserver`` requires this hook and ``CompositeObserver``
+        dispatches every step to every child, so without it each step logged
+        an ``AttributeError`` (seen on the 2026-09-20 local bed: one traceback
+        per tool call, harmless because the composite continues, but noise on
+        every attested run).
+        """
+        return
+
     async def on_run_complete(self, session_id: str) -> None:
         try:
             from ..config import settings  # noqa: PLC0415
