@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import UTC, datetime
 
-from jose import JWTError
+import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -101,7 +101,7 @@ class SandboxGuardMiddleware(BaseHTTPMiddleware):
                             "SandboxGuard: guest limit check failed — bypassing",
                             exc_info=True,
                         )
-            except (ValueError, JWTError):
+            except (ValueError, jwt.PyJWTError):
                 pass
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
