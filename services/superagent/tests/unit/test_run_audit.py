@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -222,3 +223,18 @@ async def test_load_gate_outcome_none_when_no_row_or_on_error():
 
     assert await load_gate_outcome("sess-1", _FakeDb(row=None)) is None
     assert await load_gate_outcome("sess-1", _FakeDb(exc=RuntimeError("db"))) is None
+
+
+async def test_load_gate_outcome_logs_a_request_id_on_one_line(caplog):
+    # the id comes from the request path; a line break in it must not start
+    # a second, forged log line
+    from superagent.api.audit import load_gate_outcome
+
+    forged = "sess-1\nWARNING forged\r"
+    with caplog.at_level(logging.WARNING, logger="superagent.api.audit"):
+        assert await load_gate_outcome(forged, _FakeDb(exc=RuntimeError("db"))) is None
+    (message,) = [
+        r.getMessage() for r in caplog.records if r.name == "superagent.api.audit"
+    ]
+    assert "\n" not in message and "\r" not in message
+    assert message.endswith("sess-1\\nWARNING forged\\r")

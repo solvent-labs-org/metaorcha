@@ -57,7 +57,12 @@ async def load_gate_outcome(session_id: str, db: Any = None) -> RunAuditGate | N
             order={"created_at": "desc"},
         )
     except Exception:  # noqa: BLE001 — degrade, never block the audit
-        logger.warning("audit: gate outcome lookup failed for %s", session_id)
+        # the id arrives in the request path: escape line breaks so it cannot
+        # forge a log line
+        logger.warning(
+            "audit: gate outcome lookup failed for %s",
+            session_id.replace("\r", "\\r").replace("\n", "\\n"),
+        )
         return None
     finally:
         if owns_db and client is not None:
