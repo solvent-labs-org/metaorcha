@@ -11,9 +11,9 @@ were meaningless across restarts, which is exactly when durability matters.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -27,12 +27,27 @@ _DB_PATH = os.getenv("GWS_TOKEN_DB", "data/tokens.db")
 _lock = threading.Lock()
 
 
-def log_ref(secret: str) -> str:
-    """What logs show in place of a credential: a 12-hex-digit digest.
+# Aliases handed out by log_ref(), one per credential, for this process only.
+_log_refs: dict[str, str] = {}
+_log_refs_lock = threading.Lock()
+_LOG_REFS_MAX = 4096
 
-    A token key counts: it addresses the OAuth tokens stored for a session.
+
+def log_ref(secret: str) -> str:
+    """What logs show in place of a credential: a random 12-hex-digit alias.
+
+    The alias is the same for the same value for the life of the process, so
+    log lines still correlate, but nothing in it is derived from the value: a
+    log line cannot be checked against a guess. A token key counts: it
+    addresses the OAuth tokens stored for a session.
     """
-    return hashlib.sha256(secret.encode()).hexdigest()[:12]
+    with _log_refs_lock:
+        ref = _log_refs.get(secret)
+        if ref is None:
+            if len(_log_refs) >= _LOG_REFS_MAX:
+                _log_refs.clear()  # bounded; earlier aliases simply stop matching
+            ref = _log_refs[secret] = secrets.token_hex(6)
+        return ref
 
 
 @dataclass
@@ -61,7 +76,9 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def put_tokens(key: str, access_token: str, refresh_token: str | None, expires_in: int | None) -> None:
+def put_tokens(
+    key: str, access_token: str, refresh_token: str | None, expires_in: int | None
+) -> None:
     exp: float | None = None
     if expires_in is not None:
         exp = time.time() + float(expires_in)
@@ -98,7 +115,11 @@ def get_tokens(key: str) -> GoogleTokens | None:
             "SELECT access_token, refresh_token, expires_at FROM google_tokens WHERE token_key = ?",
             (key,),
         ).fetchone()
-    tok = GoogleTokens(access_token=row[0], refresh_token=row[1], expires_at=row[2]) if row else None
+    tok = (
+        GoogleTokens(access_token=row[0], refresh_token=row[1], expires_at=row[2])
+        if row
+        else None
+    )
     logger.info("oauth_tokens_get key=%s hit=%s", log_ref(key), tok is not None)
     return tok
 

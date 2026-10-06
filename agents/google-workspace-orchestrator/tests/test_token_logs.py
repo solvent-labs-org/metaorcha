@@ -1,4 +1,4 @@
-"""Logs name a token key or a bearer only by digest, never by value.
+"""Logs name a token key or a bearer only by a random alias, never by value.
 
 The token key addresses the OAuth tokens stored for a session, so logs treat it
 as a credential.
@@ -19,7 +19,7 @@ KEY = "0b6f0e0a-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
 BEARER = "access-token-value-do-not-log"
 
 
-def test_log_ref_is_a_short_stable_digest() -> None:
+def test_log_ref_is_a_short_stable_alias() -> None:
     assert log_ref(KEY) == log_ref(KEY)
     assert len(log_ref(KEY)) == 12
     assert int(log_ref(KEY), 16) >= 0
@@ -27,7 +27,23 @@ def test_log_ref_is_a_short_stable_digest() -> None:
     assert KEY[:8] not in log_ref(KEY)
 
 
-def test_the_token_store_logs_the_digest_not_the_key(
+def test_log_ref_is_not_derived_from_the_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a fresh process hands the same value a different alias: nothing in a log
+    # line can be checked against a guessed key
+    first = log_ref(KEY)
+    monkeypatch.setattr(token_store, "_log_refs", {})
+    assert log_ref(KEY) != first
+
+
+def test_log_ref_stays_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(token_store, "_log_refs", {})
+    monkeypatch.setattr(token_store, "_LOG_REFS_MAX", 3)
+    for i in range(10):
+        log_ref(f"key-{i}")
+    assert len(token_store._log_refs) <= 3
+
+
+def test_the_token_store_logs_the_alias_not_the_key(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(token_store, "_DB_PATH", str(tmp_path / "tokens.db"))
@@ -59,7 +75,7 @@ class _Client:
         )
 
 
-def test_an_mcp_post_logs_the_bearer_digest_not_its_prefix(
+def test_an_mcp_post_logs_the_bearer_alias_not_its_prefix(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(mcp_client.httpx, "AsyncClient", _Client)
