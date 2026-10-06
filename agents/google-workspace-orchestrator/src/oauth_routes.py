@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from .config import settings
-from .token_store import put_tokens
+from .token_store import log_ref, put_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +85,16 @@ async def oauth_callback(
     # Never log token material — key + shape only.
     logger.info(
         "token_exchange_ok key=%s has_refresh=%s expires_in=%s scope=%s",
-        token_key,
+        log_ref(token_key),
         bool(refresh),
         expires_in,
         data.get("scope", "")[:120],
     )
     put_tokens(token_key, access_token=access, refresh_token=refresh, expires_in=expires_in)
     logger.info(
-        "oauth_tokens_stored session_id=%s agent_id=%s key=%s has_refresh=%s expires_in=%s",
-        session_id or "",
+        "oauth_tokens_stored key=%s agent_id=%s has_refresh=%s expires_in=%s",
+        log_ref(token_key),
         agent_id or "",
-        token_key,
         bool(refresh),
         expires_in,
     )

@@ -11,6 +11,7 @@ were meaningless across restarts, which is exactly when durability matters.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 _DB_PATH = os.getenv("GWS_TOKEN_DB", "data/tokens.db")
 
 _lock = threading.Lock()
+
+
+def log_ref(secret: str) -> str:
+    """What logs show in place of a credential: a 12-hex-digit digest.
+
+    A token key counts: it addresses the OAuth tokens stored for a session.
+    """
+    return hashlib.sha256(secret.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -76,7 +85,7 @@ def put_tokens(key: str, access_token: str, refresh_token: str | None, expires_i
         )
     logger.info(
         "oauth_tokens_put key=%s has_refresh=%s expires_in=%s db=%s",
-        key,
+        log_ref(key),
         bool(refresh_token),
         expires_in,
         _DB_PATH,
@@ -90,7 +99,7 @@ def get_tokens(key: str) -> GoogleTokens | None:
             (key,),
         ).fetchone()
     tok = GoogleTokens(access_token=row[0], refresh_token=row[1], expires_at=row[2]) if row else None
-    logger.info("oauth_tokens_get key=%s hit=%s", key, tok is not None)
+    logger.info("oauth_tokens_get key=%s hit=%s", log_ref(key), tok is not None)
     return tok
 
 
