@@ -78,6 +78,43 @@ _VERDICT_RESULTS = frozenset({"pass", "fail", "warn"})
 _SIGNER_FIELDS = frozenset({"did", "public_key_b64"})
 
 
+# What a receipt covers and what it does not (FR-8, story 3.2). Export text:
+# computed from the envelope by whoever reads it — this verifier's CLI, a
+# platform's evidence export — never stored in the envelope and never emitted
+# by a producer. Producer-neutral: true of a bot receipt and a plugin receipt.
+COVERAGE_STATEMENT = (
+    "Of the work done, this receipt commits to the tool calls listed in its "
+    "steps, in order, and to the verdicts signed beside them (such as which "
+    "model ran); it commits to nothing else. Model (LLM) calls are not steps, "
+    "and neither is any work the producer did not record as a tool call, such "
+    "as planning. A call refused before it ran may appear as a failed step or "
+    "not at all. That something is absent from the steps does not show that "
+    "it did not happen."
+)
+
+
+def coverage_statement(envelope: Any) -> dict[str, Any]:
+    """What *envelope* covers: ``{"statement", "steps", "tools"}``. Never raises.
+
+    ``steps`` is the number of step records (None when the envelope has no
+    readable ``steps`` list); ``tools`` lists each distinct ``tool`` in first
+    appearance order. The statement does not depend on whether the envelope
+    verifies — read it beside :func:`verify_run_attestation`'s verdict.
+    """
+    steps = envelope.get("steps") if isinstance(envelope, dict) else None
+    tools: list[str] = []
+    if isinstance(steps, list):
+        for step in steps:
+            tool = step.get("tool") if isinstance(step, dict) else None
+            if isinstance(tool, str) and tool not in tools:
+                tools.append(tool)
+    return {
+        "statement": COVERAGE_STATEMENT,
+        "steps": len(steps) if isinstance(steps, list) else None,
+        "tools": tools,
+    }
+
+
 @dataclass(frozen=True)
 class AttestationVerdict:
     """Structured result of an offline run attestation verification."""
