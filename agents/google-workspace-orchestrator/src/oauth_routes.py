@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -11,6 +12,11 @@ from .config import settings
 from .token_store import put_tokens
 
 logger = logging.getLogger(__name__)
+
+# A session id is one URL path segment (sessions are UUIDs). The state
+# arrives on the callback's query string, so anything else is refused before it
+# reaches the resume URL.
+_SESSION_ID = r"[A-Za-z0-9_-]{1,128}"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,9 +34,9 @@ def _parse_state(state: str) -> tuple[str | None, str | None]:
         return None, None
     session_id = parts[0]
     agent_id = ":".join(parts[1:-1])
-    if not session_id or not agent_id:
-        return None, None
-    return session_id, agent_id
+    if agent_id and re.fullmatch(_SESSION_ID, session_id):
+        return session_id, agent_id
+    return None, None
 
 
 @router.get("/callback")
