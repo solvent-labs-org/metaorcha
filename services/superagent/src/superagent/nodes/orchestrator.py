@@ -17,6 +17,7 @@ import logging
 import re
 import re as _re
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -32,6 +33,14 @@ from ..runtime.session_cancel import (
 )
 from ..startup.platform_mcp_baseline import get_baseline_openai_tools
 from ..tool_call_parsing import normalize_stream_tool_calls
+
+_NATIVE_CLIENT_HOST = "generativelanguage.googleapis.com"
+
+
+def _host_is(url: str, host: str) -> bool:
+    """True when ``url``'s host is exactly ``host``, not when it merely contains it."""
+    return (urlparse(url).hostname or "") == host
+
 
 # ── Module-level LLM client singletons ────────────────────────────────────────
 # Created once at import time; avoids TCP reconnect overhead on every turn.
@@ -73,9 +82,8 @@ def _make_chat_llm(
         logger.info(
             "orchestrator: BYOK active model=%s base=%s", byok_model, byok_base_url
         )
-        if (
-            byok_model.startswith("gemini-")
-            and "generativelanguage.googleapis.com" in byok_base_url
+        if byok_model.startswith("gemini-") and _host_is(
+            byok_base_url, _NATIVE_CLIENT_HOST
         ):
             from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -102,8 +110,8 @@ def _make_chat_llm(
     if model_override:
         use_native_gemini = model.startswith("gemini-")
     else:
-        use_native_gemini = "generativelanguage.googleapis.com" in (
-            settings.openrouter_base_url or ""
+        use_native_gemini = _host_is(
+            settings.openrouter_base_url or "", _NATIVE_CLIENT_HOST
         )
     if use_native_gemini:
         from langchain_google_genai import ChatGoogleGenerativeAI
