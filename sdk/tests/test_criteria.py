@@ -11,6 +11,7 @@ import json
 
 import pytest
 from emerge.criteria import (
+    _EVALUATORS,
     CRITERIA_UNEVALUABLE,
     MISSING_CITATIONS,
     NO_EXIT_CODE,
@@ -186,13 +187,12 @@ def test_an_output_that_cannot_be_read_is_a_signed_fail_not_n_a(monkeypatch):
         "citations_required": unevaluable
     }
     assert criteria_units(_Unrenderable()) == []  # the reader itself never raises
-    # and an evaluator that faults on readable bytes is signed the same way
-    import emerge.criteria as criteria_module
 
+    # and an evaluator that faults on readable bytes is signed the same way
     def _boom(_units):
         raise RuntimeError("evaluator fault")
 
-    monkeypatch.setitem(criteria_module._EVALUATORS, "exit_zero", _boom)
+    monkeypatch.setitem(_EVALUATORS, "exit_zero", _boom)
     assert evaluate_criteria({"exit_zero": True}, {"exit_code": 0}) == {
         "exit_zero": unevaluable
     }
