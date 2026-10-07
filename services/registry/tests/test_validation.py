@@ -293,3 +293,36 @@ class TestValidationService:
         assert is_valid is False
         assert error is not None
         assert error.field == "identity.version"
+
+
+class TestCapabilityIdCharset:
+    """AD-17: a capability id is one half of a recorded step's ``tool`` string."""
+
+    @staticmethod
+    def _cap(cap_id):
+        from services.registry.src.adapters.base import CapabilityData
+
+        return CapabilityData(type="tool", id=cap_id, name=cap_id, description="")
+
+    def test_valid_ids_pass(self):
+        caps = [self._cap(c) for c in ("search_repos", "notion-fetch", "a.b:c", "X1")]
+        ok, error = ValidationService.validate_capability_ids(caps)
+        assert ok is True
+        assert error is None
+
+    def test_hash_is_rejected_with_named_error(self):
+        ok, error = ValidationService.validate_capability_ids([self._cap("did#cap")])
+        assert ok is False
+        assert error is not None
+        assert error.field == "capabilities.id"
+        assert "did#cap" in error.reason
+
+    def test_whitespace_and_non_ascii_are_rejected(self):
+        for bad in ("with space", "ünïcode", "a/b", ""):
+            ok, _ = ValidationService.validate_capability_ids([self._cap(bad)])
+            assert ok is False, bad
+
+    def test_malformed_capability_object_never_raises(self):
+        ok, error = ValidationService.validate_capability_ids([object(), None])
+        assert ok is False
+        assert error is not None
