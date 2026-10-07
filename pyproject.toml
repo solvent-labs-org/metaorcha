@@ -68,6 +68,11 @@ exclude = [
 ]
 line-length = 88
 target-version = "py312"
+# The SDK is published for Python >= 3.10 (sdk/pyproject.toml `requires-python`).
+# Linted as py312, pyupgrade rewrites it into 3.11+ forms (UP017: `timezone.utc`
+# -> `datetime.UTC`, absent on 3.10 — it broke `import emerge.cli` there from
+# 0.1.1 to 0.1.3). The SDK is linted against its own floor.
+per-file-target-version = { "sdk/**/*.py" = "py310" }
 
 [tool.ruff.lint]
 ignore = [
