@@ -1,44 +1,24 @@
 # OSV-Scanner ignore list — root uv.lock.
 #
-# `ecdsa` is pulled in transitively by python-jose (JWT). The Minerva timing
-# attack (GHSA-wj6h-64fc-37mp / PYSEC-2026-1325) is unfixed upstream as of
-# 0.19.2 (latest); the project has stated it will not patch. `ecdsa` is a base
-# dependency of python-jose rather than part of the `[cryptography]` extra, so
-# it cannot be dropped by trimming extras — only by replacing the library.
-#
-# The exposure is not "low", it is structurally absent. The vulnerability is in
-# ECDSA signing and verification; this system performs neither. Every JWT it
-# issues or checks is HS256 — symmetric HMAC-SHA256, which never enters `ecdsa`.
-# Verified 2026-08-30 by reading every place the algorithm is set, not assumed
-# from the default alone:
-#
-#   services/gateway/src/gateway/config.py:28   jwt_algorithm: str = "HS256"
-#   services/gateway/.env.example:17            JWT_ALGORITHM=HS256
-#   deploy/sandbox/.env.sandbox.example:64      JWT_ALGORITHM=HS256
-#   deploy/docker-compose.dev.yml:294           JWT_ALGORITHM: HS256
-#   five gateway test bootstraps                setdefault("JWT_ALGORITHM", "HS256")
-#
-# and no ES256/ES384/ES512/RS256/PS256 appears anywhere under services/ or
-# deploy/. That premise is a default, not an invariant: the moment any
-# deployment sets JWT_ALGORITHM to an ES* value this entry stops being true and
-# must be removed rather than renewed.
-#
-# The date is a forcing function, not an estimate. The intended exit is to
-# replace python-jose with a maintained JWT library (pyjwt, joserfc, authlib);
-# the usage is three call sites and an exception type. It is scheduled after the
-# registry gains its own token verification so the swap is one change across
-# both services instead of two conflicting ones.
+# python-jose left the lock on 2026-10-06 (the Gateway signs and verifies with
+# pyjwt), and ecdsa and rsa went with it, so their entries (GHSA-3qf3-8w2g-rqmx,
+# GHSA-wj6h-64fc-37mp) were removed rather than left to expire.
 #
 # Add entries only with a reason and an ignoreUntil date.
-[[IgnoredVulns]]
-id = "GHSA-wj6h-64fc-37mp"
-reason = "Transitive via python-jose; no upstream fix (won't-patch), and ecdsa is a base dependency rather than an extra. HS256 everywhere — verified across the code default, four env/compose files and five test bootstraps — so the ECDSA code path is never entered. Replacement with a maintained JWT library is tracked and scheduled."
-ignoreUntil = 2027-02-01
 
 # NLTK <=3.10.3 has no fixed release for GHSA-8mgp-746c-j5xp. Metaorcha uses
 # only fixed-language tokenization and English stopwords; re-review immediately
 # if NLTK usage expands.
+#
+# Renewed 2026-10-06 (the first entry lapsed 2026-10-01 and the scan went red on
+# every PR). Re-checked, not carried over: osv.dev still lists 3.10.3 as the last
+# affected release with no fix, and the advisory names only model-artifact APIs
+# (TransitionParser.train/parse, AveragedPerceptron.save/load,
+# PerceptronTagger.save_to_json, save_maxent_params). The only NLTK caller is
+# services/planning-discovery/.../resolution/keyword_extractor.py, and it calls
+# nltk.data.find, nltk.download (punkt, punkt_tab, stopwords), word_tokenize and
+# stopwords — none of them.
 [[IgnoredVulns]]
 id = "GHSA-8mgp-746c-j5xp"
 reason = "NLTK is used only for fixed-language tokenization and English stopwords; Metaorcha does not call the affected model-artifact APIs, pass caller-controlled filenames into NLTK, or rely on NLTK pathsec as a containment boundary. No patched release exists; remove this exception when NLTK 3.10.4 is published or when NLTK is replaced. Re-review immediately if NLTK usage expands."
-ignoreUntil = 2026-10-01
+ignoreUntil = 2026-11-15

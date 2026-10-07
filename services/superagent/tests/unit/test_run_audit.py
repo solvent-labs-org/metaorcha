@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -155,3 +156,85 @@ def test_transcript_meta_key_round_trip():
     meta = _tool_transcript_meta(agent_id="a", verified=True, verdict_reason="ok")
     additional_kwargs = {TRANSCRIPT_TOOL_META_KEY: meta}
     assert additional_kwargs[TRANSCRIPT_TOOL_META_KEY]["verified"] is True
+
+
+# ── gate outcome (story 1.1, FR-14) ───────────────────────────────────────────
+
+
+def test_audit_gate_is_absent_unless_a_gate_evaluated_the_run():
+    audit = build_run_audit("s1", [_row("USER", "goal")])
+    assert audit.gate is None
+    assert "gate" not in audit.model_dump(exclude_none=True)
+
+
+def test_audit_gate_passes_through_named_checks():
+    from superagent.api.models import RunAuditGate
+
+    gate = RunAuditGate(
+        outcome="refused",
+        failed_checks=["signature"],
+        envelope_digest="ab" * 32,
+        created_at="2026-09-25T00:00:00+00:00",
+    )
+    audit = build_run_audit("s1", [_row("USER", "goal")], gate=gate)
+    assert audit.gate is not None
+    assert audit.gate.outcome == "refused"
+    assert audit.gate.failed_checks == ["signature"]
+
+
+class _FakeSettlements:
+    def __init__(self, row=None, exc=None):
+        self.row, self.exc, self.calls = row, exc, []
+
+    async def find_first(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.exc:
+            raise self.exc
+        return self.row
+
+
+class _FakeDb:
+    def __init__(self, row=None, exc=None):
+        self.attestedsettlement = _FakeSettlements(row, exc)
+
+
+async def test_load_gate_outcome_reads_latest_row_for_session():
+    from superagent.api.audit import load_gate_outcome
+
+    row = SimpleNamespace(
+        outcome="refused",
+        failed_checks=["steps_root", 7, None],
+        envelope_digest="cd" * 32,
+        created_at=datetime(2026, 9, 25, tzinfo=UTC),
+    )
+    db = _FakeDb(row=row)
+    gate = await load_gate_outcome("sess-1", db)
+    assert gate is not None
+    assert gate.outcome == "refused"
+    assert gate.failed_checks == ["steps_root"]  # non-strings dropped
+    assert gate.created_at.startswith("2026-09-25")
+    where = db.attestedsettlement.calls[0]["where"]
+    assert where == {"session_id": "sess-1"}
+    assert db.attestedsettlement.calls[0]["order"] == {"created_at": "desc"}
+
+
+async def test_load_gate_outcome_none_when_no_row_or_on_error():
+    from superagent.api.audit import load_gate_outcome
+
+    assert await load_gate_outcome("sess-1", _FakeDb(row=None)) is None
+    assert await load_gate_outcome("sess-1", _FakeDb(exc=RuntimeError("db"))) is None
+
+
+async def test_load_gate_outcome_logs_a_request_id_on_one_line(caplog):
+    # the id comes from the request path; a line break in it must not start
+    # a second, forged log line
+    from superagent.api.audit import load_gate_outcome
+
+    forged = "sess-1\nWARNING forged\r"
+    with caplog.at_level(logging.WARNING, logger="superagent.api.audit"):
+        assert await load_gate_outcome(forged, _FakeDb(exc=RuntimeError("db"))) is None
+    (message,) = [
+        r.getMessage() for r in caplog.records if r.name == "superagent.api.audit"
+    ]
+    assert "\n" not in message and "\r" not in message
+    assert message.endswith("sess-1\\nWARNING forged\\r")
