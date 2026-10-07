@@ -9,8 +9,41 @@ import type { TranscriptEntryDTO } from '../../types/transcript'
 
 interface AuditStep {
   internal_tool_name?: string
+  /** Structural check (pipeline `_structural_verify`) — not a gate check. */
   verified?: boolean
   verdict_reason?: string
+}
+
+/** Latest settle-gate outcome for the run; absent when no gate evaluated it. */
+interface AuditGate {
+  outcome: string
+  failed_checks?: string[]
+  envelope_digest?: string
+}
+
+/** The one place a check name is turned into a label — see frontend/TRUST-INDICATORS.md. */
+function GateIndicator({ gate }: { gate: AuditGate | null }) {
+  if (!gate) return null
+  if (gate.outcome === 'settled') {
+    return (
+      <span
+        className="font-mono text-[10px] font-semibold text-semantic-success"
+        title="settle gate: every check passed (schema, steps_root, steps_merkle_root, signature)"
+      >
+        settled
+      </span>
+    )
+  }
+  const checks = gate.failed_checks ?? []
+  const named = checks[0] ?? 'unknown'
+  return (
+    <span
+      className="font-mono text-[10px] font-semibold text-semantic-error"
+      title={`settle gate refused: ${checks.join(', ') || 'no check named'}`}
+    >
+      refused — {named}
+    </span>
+  )
 }
 
 /** Per-step run inspector for the active session (developer mode). */
@@ -44,6 +77,8 @@ export function RunTab() {
     return map
   }, [audit])
 
+  const gate = (audit as { gate?: AuditGate | null } | undefined)?.gate ?? null
+
   const steps = useMemo(() => {
     const entries = transcript?.entries ?? []
     return entries
@@ -71,6 +106,7 @@ export function RunTab() {
         <p className="text-[10px] font-semibold text-text-disabled tracking-caps uppercase">
           Run Inspector
         </p>
+        <GateIndicator gate={gate} />
         <button
           onClick={handleDownloadAudit}
           className="h-6 px-2 rounded-sm border border-surface-borderLight bg-surface-overlay font-mono text-[10px] text-text-body hover:border-surface-muted transition-colors"
@@ -130,7 +166,9 @@ function RunStepRow({
   const name = entry.tool_name ?? 'tool'
 
   const failed = entry.tool_status === 'error' || verdict?.verified === false
-  const verified = !failed && (verdict?.verified === true || entry.tool_status === 'success')
+  // A step that merely succeeded is not "verified" — only the structural
+  // check is a check, and it gates nothing (FR-14; frontend/TRUST-INDICATORS.md).
+  const structurallyChecked = !failed && verdict?.verified === true
   const ms = durationMs(entry, next)
 
   return (
@@ -145,7 +183,7 @@ function RunStepRow({
         <span
           className={cn(
             'shrink-0 size-1.5 rounded-full',
-            failed ? 'bg-semantic-error' : verified ? 'bg-semantic-success' : 'bg-surface-muted',
+            failed ? 'bg-semantic-error' : structurallyChecked ? 'bg-blue-400' : 'bg-surface-muted',
           )}
           aria-hidden
         />
@@ -160,12 +198,12 @@ function RunStepRow({
           >
             failed
           </span>
-        ) : verified ? (
+        ) : structurallyChecked ? (
           <span
-            className="shrink-0 font-mono text-[10px] font-semibold text-semantic-success"
-            title={verdict?.verdict_reason ?? 'ok'}
+            className="shrink-0 font-mono text-[10px] font-semibold text-blue-400"
+            title={`structural check passed — not a gate check (${verdict?.verdict_reason ?? 'ok'})`}
           >
-            verified
+            structurally checked
           </span>
         ) : null}
         {ms !== null && (

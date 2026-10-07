@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from gateway.plugins.mcp_manifest import agent_did_from_name, build_mcp_emerge_yaml
+from gateway.plugins.mcp_manifest import (
+    CONNECTION_TAG,
+    agent_did_from_name,
+    build_mcp_emerge_yaml,
+    mint_connection_did,
+)
 
 
 def test_did_slug():
@@ -55,3 +60,23 @@ def test_auth_var_must_be_an_env_var_name():
         name="x", transport="sse", endpoint="https://e.com", auth_var="_A1_TOKEN"
     )
     assert "token_vault_ref: _A1_TOKEN" in text
+
+
+def test_minted_did_is_unique_per_registration():
+    first, second = mint_connection_did("My Weather"), mint_connection_did("My Weather")
+    assert first != second
+    assert first.startswith("did:orcha:agent:my-weather-")
+    assert mint_connection_did("My Weather", "abcd1234") == (
+        "did:orcha:agent:my-weather-abcd1234"
+    )
+
+
+def test_yaml_pins_the_given_did_and_carries_the_connection_tag():
+    text = build_mcp_emerge_yaml(
+        name="Docs MCP",
+        transport="sse",
+        endpoint="https://example.com/mcp",
+        did="did:orcha:agent:docs-mcp-abcd1234",
+    )
+    assert 'id: "did:orcha:agent:docs-mcp-abcd1234"' in text
+    assert f"    - {CONNECTION_TAG}\n" in text

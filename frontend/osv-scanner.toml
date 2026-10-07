@@ -1,8 +1,29 @@
 # OSV-Scanner ignore list — frontend/package-lock.json.
 #
-# Empty. GHSA-qwww-vcr4-c8h2 (react-router RSC/server-action) was ignored here
+# GHSA-qwww-vcr4-c8h2 (react-router RSC/server-action) was ignored here
 # until 2026-11-01; the first real osv-scanner run on 2026-08-25 reported it as
 # an UNUSED ignore, so the advisory no longer applies to this lockfile and the
 # entry was removed rather than left to expire silently.
 #
 # Add entries only with a reason and an ignoreUntil date.
+
+# Both entries below are build-time packages (dev: true in package-lock.json):
+# they run in Vite/Tailwind/ESLint on this repository's own files and are not in
+# the bundle a browser downloads. Checked 2026-10-06.
+
+# braces <=3.0.3: stack exhaustion on deeply nested brace patterns. No fixed
+# release. Reached only via chokidar and micromatch (file watching and globbing
+# in the build), whose patterns come from this repo's config files.
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "Build-time only (dev dependency via chokidar/micromatch); patterns are this repo's own globs, never user input; not shipped to browsers. No fixed release of braces."
+ignoreUntil = 2026-12-01
+
+# postcss-selector-parser <7.1.6: quadratic parsing of flat selectors (CPU).
+# Fixed only in 7.x, but tailwindcss 3.4 and postcss-nested require ^6, so it
+# cannot be bumped without leaving Tailwind 3. It parses this repo's own CSS at
+# build time.
+[[IgnoredVulns]]
+id = "GHSA-rj75-hqrm-r3gf"
+reason = "Build-time only (dev dependency via tailwindcss 3.4 / postcss-nested, which require ^6; the fix is 7.1.6); parses this repo's own stylesheets; not shipped to browsers. Exit: Tailwind 4, or a 6.x backport."
+ignoreUntil = 2026-12-01
