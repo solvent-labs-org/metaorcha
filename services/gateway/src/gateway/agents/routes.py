@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from ..auth.models import TokenPayload
 from ..dependencies import require_auth
+from ..plugins.routes import is_connection_record, remove_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/dev/agents", tags=["dev-agents"])
@@ -79,4 +80,10 @@ async def delete_agent(
     request: Request,
     payload: Annotated[TokenPayload, Depends(require_auth)],
 ) -> Response:
+    # Story 1.7: a connection removed from the Agent Library takes the
+    # caller's token with it, exactly as the connections door does. Any
+    # other agent is proxied as before.
+    if await is_connection_record(request, agent_id):
+        await remove_connection(request, agent_id, payload.user_id)
+        return Response(status_code=204)
     return await _proxy(request, "DELETE", f"/api/v1/agents/{agent_id}")

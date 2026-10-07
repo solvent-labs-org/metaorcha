@@ -12,11 +12,12 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from ..config import settings
+from ..graph.state import session_credentials_from_config
 from .input_guard import InputGuard, InputGuardError
 from .observers import StepResult, emit_step_complete
 from .output_normalizer import OutputNormalizer
 from .preflight import PreFlightManager
-from .step_output import call_credentials, step_output_preimage
+from .step_output import call_credentials, redact_output, step_output_preimage
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,18 @@ def _is_control_flow(exc: BaseException) -> bool:
 
         from ..pricing.guard import PaymentInterrupt
         from .preflight import AuthInterruptRequired
+        from .scope_gate import ScopeApprovalRequired
     except Exception:
         return True
-    return isinstance(exc, (AuthInterruptRequired, PaymentInterrupt, GraphInterrupt))
+    return isinstance(
+        exc,
+        (
+            AuthInterruptRequired,
+            ScopeApprovalRequired,
+            PaymentInterrupt,
+            GraphInterrupt,
+        ),
+    )
 
 
 def _structural_verify(content: str, has_canvas: bool) -> tuple[bool, str]:
@@ -56,6 +66,9 @@ class ExecutionMiddleware:
     2.5 PaymentGuard — credit check + Redis soft reserve (A2A/ACP only)
     3. PreFlight — manifest fetch, health, auth cascade
        Raises AuthInterruptRequired (soft) or PreFlightError (hard) — not returned.
+    3.5 ScopeGate (connections only, AD-18) — a write with no declared allow
+       and every destructive call raise ScopeApprovalRequired (soft) before
+       any request reaches the platform.
     4. Handler Dispatch — MCPHandler | A2AHandler | ACPHandler
     5. OutputNormalizer — text vs artifact
     6. Checklist auto-update
@@ -74,8 +87,14 @@ class ExecutionMiddleware:
         args: dict[str, Any],
         call_id: str,
         config: RunnableConfig | None = None,
+        scope_approval: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run the pipeline and return {"content": str, "artifact": ...}."""
+        """Run the pipeline and return {"content": str, "artifact": ...}.
+
+        ``scope_approval`` is ``{"call_id", "approver"}`` from a resumed
+        approval card: the gate passes that one call, and the step records
+        the approver (AD-21).
+        """
         from ..vault.client import VaultClient
 
         vault = VaultClient()
@@ -117,15 +136,9 @@ class ExecutionMiddleware:
         # Raises PreFlightError (hard) → caught at node level, yields error ToolMessage
         logger.info("Pipeline step 3: PreFlight | agent=%s", agent_id)
         preflight = PreFlightManager(vault)
-        session_credentials: dict[str, dict[str, str]] = dict(
-            self._state.get("_session_credentials") or {}
-        )
-        if not session_credentials and config:
-            configurable = config.get("configurable", {})
-            if isinstance(configurable, dict):
-                cfg_creds = configurable.get("session_credentials") or {}
-                if isinstance(cfg_creds, dict):
-                    session_credentials = cfg_creds
+        # AD-14: session-scoped credentials ride on the run config, never on
+        # graph state (state is checkpointed; the config key is not).
+        session_credentials = session_credentials_from_config(config)
         result = await preflight.run(
             agent_id=agent_id,
             user_id=self._state.get("user_id", ""),
@@ -141,6 +154,18 @@ class ExecutionMiddleware:
         # output before its hash is taken.
         credentials = call_credentials(
             manifest, result.get("resolved_env"), auth_headers
+        )
+
+        # Step 3.5: ScopeGate (AD-18). Connections only, and only with the
+        # feature on: an agent registered any other way is dispatched exactly
+        # as before. Raises ScopeApprovalRequired → caught at node level.
+        scope_meta = self._scope_gate(
+            agent_id=agent_id,
+            capability_id=capability_id,
+            args=args,
+            call_id=call_id,
+            manifest=manifest,
+            scope_approval=scope_approval,
         )
 
         # Step 4: Handler Dispatch
@@ -177,11 +202,17 @@ class ExecutionMiddleware:
                     base_fee=base_fee,
                     credentials=credentials,
                     started=_call_start,
+                    scope_meta=scope_meta,
                 )
             raise
         # AD-16: the step commits to the raw result, not the display copy the
         # normalizer builds next.
         output_preimage = step_output_preimage(raw_output, credentials)
+        # AD-14 / story 1.6b: the display copy is redacted too, before the
+        # normalizer, the criteria step, the checklist, the ToolMessage and
+        # the SSE stream see it — an agent echoing its request headers must
+        # not put the token into the chat, the transcript or the run audit.
+        raw_output = redact_output(raw_output, credentials)
 
         # Step 5: OutputNormalizer (async — may upload to S3 for file outputs)
         agent_name = str(manifest.get("name") or "").strip()
@@ -194,6 +225,11 @@ class ExecutionMiddleware:
             user_id=self._state.get("user_id", ""),
             agent_name=agent_name,
         )
+        # The normalizer may synthesise text from the raw value (canvas
+        # summaries, str() of unknown shapes): redact what it produced as well.
+        for key in ("content", "ui_manifest"):
+            if key in normalised:
+                normalised[key] = redact_output(normalised[key], credentials)
         content = normalised.get("content", "")
         content_str = content if isinstance(content, str) else str(content)
         logger.info(
@@ -250,7 +286,7 @@ class ExecutionMiddleware:
                 latency_ms=_latency_ms,
                 base_fee=str(base_fee),
                 verdict={"verified": verified, "reason": verdict_reason},
-                metadata={"goal": self._session_goal(), **declared_meta},
+                metadata={"goal": self._session_goal(), **declared_meta, **scope_meta},
                 args=dict(args),
             )
         )
@@ -304,6 +340,7 @@ class ExecutionMiddleware:
         base_fee: Decimal,
         credentials: list[tuple[str, str]],
         started: datetime,
+        scope_meta: dict[str, Any] | None = None,
     ) -> None:
         """Record a call whose dispatch raised as a ``success: false`` step.
 
@@ -330,11 +367,98 @@ class ExecutionMiddleware:
                 latency_ms=int((datetime.now(UTC) - started).total_seconds() * 1000),
                 base_fee=str(base_fee),
                 verdict={"verified": False, "reason": error_text[:120]},
-                metadata={"goal": self._session_goal()},
+                metadata={"goal": self._session_goal(), **(scope_meta or {})},
                 args=dict(args),
             )
         except Exception:
             logger.exception("failed-dispatch step not recorded | call_id=%s", call_id)
+            return
+        await emit_step_complete(record)
+
+    def _scope_gate(
+        self,
+        *,
+        agent_id: str,
+        capability_id: str,
+        args: dict[str, Any],
+        call_id: str,
+        manifest: dict[str, Any],
+        scope_approval: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """The pipeline's dispatch-site call of ``scope_gate`` (AD-18).
+
+        Returns the ``scope_approval`` step metadata when this call carries
+        an approval, else ``{}``. With CONNECTIONS_ENABLED off, or for an
+        agent that is not a connection, the gate is not invoked.
+        """
+        from .connections import connections_enabled, is_connection
+        from .scope_gate import scope_gate, scope_verdict
+
+        if not connections_enabled() or not is_connection(manifest):
+            return {}
+        scope_gate(
+            agent_id=agent_id,
+            capability_id=capability_id,
+            args=args,
+            call_id=call_id,
+            session_id=str(self._state.get("session_id") or ""),
+            manifest=manifest,
+            scope_approval=scope_approval,
+            connection_name=str(manifest.get("name") or ""),
+        )
+        if (
+            isinstance(scope_approval, dict)
+            and scope_approval.get("call_id") == call_id
+        ):
+            return {
+                "scope_approval": scope_verdict(
+                    approved=True, approver=str(scope_approval.get("approver") or "")
+                )
+            }
+        return {}
+
+    async def emit_declined(
+        self,
+        *,
+        agent_id: str,
+        capability_id: str,
+        protocol: str,
+        tool_name: str,
+        args: dict[str, Any],
+        call_id: str,
+        content: str,
+    ) -> None:
+        """Record a call the user declined at the approval card (AD-21).
+
+        Nothing was dispatched, so there is no output to hash beyond the
+        refusal text; the step is ``success: false`` and its verdict is
+        ``scope_approval:<call_id> warn`` — never ``fail``. Never raises.
+        """
+        from .scope_gate import scope_verdict
+
+        try:
+            record = StepResult(
+                call_id=call_id,
+                agent_id=agent_id,
+                capability_id=capability_id,
+                protocol=protocol,
+                tool_name=tool_name,
+                success=False,
+                content=content,
+                output_preimage=step_output_preimage(content, []),
+                user_id=self._state.get("user_id", ""),
+                session_id=self._state.get("session_id", ""),
+                latency_ms=0,
+                base_fee="0",
+                verdict={"verified": False, "reason": content[:120]},
+                metadata={
+                    "goal": self._session_goal(),
+                    "scope_approval": scope_verdict(approved=False),
+                },
+                args=dict(args),
+            )
+        except Exception:
+            logger.exception("declined step not recorded | call_id=%s", call_id)
             return
         await emit_step_complete(record)
 

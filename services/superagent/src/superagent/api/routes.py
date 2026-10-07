@@ -297,6 +297,7 @@ async def resume_session(
                 session_id=session_id,
                 value=value,
                 session_credentials=body.session_credentials,
+                user_id=body.user_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:
@@ -436,3 +437,22 @@ async def delete_agent_env(
 
     vault = VaultClient()
     await vault.delete_agent_env(user_id, agent_id, var_name)
+
+
+@router.delete("/secrets/agent-env/{agent_id}")
+async def delete_all_agent_env(agent_id: str, user_id: str) -> dict[str, int]:
+    """
+    Delete every stored credential this user holds for one agent.
+
+    Removing a whole connection (story 1.7): only rows keyed
+    ``agent:<agent_id>:env:*`` under ``user_id`` — no other agent's, no other
+    user's, and never a bare legacy row. A database error is a 500, never a
+    silent success.
+
+    Query params:
+        user_id — the user whose vault entries to delete
+    """
+    from ..vault.client import VaultClient
+
+    vault = VaultClient()
+    return {"deleted": await vault.delete_all_agent_env(user_id, agent_id)}

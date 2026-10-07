@@ -28,6 +28,12 @@ from ..middleware.oauth_grants import (
     store_grants_for_strategy,
 )
 from ..middleware.preflight import AuthInterruptRequired, PreFlightError
+from ..middleware.scope_gate import (
+    SCOPE_DECLINED,
+    ScopeApprovalRequired,
+    approval_for,
+    is_approved,
+)
 from ..persistence.transcript_store import TRANSCRIPT_TOOL_META_KEY
 from ..pnd.candidate_compat import (
     cand_agent_id,
@@ -198,6 +204,30 @@ async def _emit_invocation(
         )
 
 
+def _system_tool_scope_gate(
+    state: dict[str, Any], tool_name: str, args: dict[str, Any], call_id: str
+) -> None:
+    """The system-tool dispatch site's call of ``scope_gate`` (AD-18).
+
+    Platform system tools are classed read or write and act on the
+    platform's own state, so the gate passes them under the platform's
+    standing allow; the call is here so that every dispatch site goes
+    through the one gate. Not invoked with CONNECTIONS_ENABLED off.
+    """
+    from ..middleware.connections import connections_enabled
+    from ..middleware.scope_gate import scope_gate
+
+    if not connections_enabled():
+        return
+    scope_gate(
+        agent_id="_system",
+        capability_id=tool_name,
+        args=args,
+        call_id=call_id,
+        session_id=str(state.get("session_id") or ""),
+    )
+
+
 def _result_status(content: str) -> str:
     if content.startswith("Error:") or content.startswith("Input error:"):
         return "error"
@@ -287,6 +317,7 @@ async def _execute_with_retry(
     config: RunnableConfig,
     pending_events: list[dict[str, Any]],
     max_retries: int,
+    scope_approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run ``middleware.execute()`` with a bounded retry on transient failures.
 
@@ -315,8 +346,14 @@ async def _execute_with_retry(
                 args=args,
                 call_id=call_id,
                 config=config,
+                scope_approval=scope_approval,
             )
-        except (AuthInterruptRequired, PaymentInterrupt, GraphInterrupt):
+        except (
+            AuthInterruptRequired,
+            ScopeApprovalRequired,
+            PaymentInterrupt,
+            GraphInterrupt,
+        ):
             raise  # control-flow interrupts are never retried
         except Exception as exc:
             cls = _classify_stream_error(exc)
@@ -469,6 +506,7 @@ async def execute_agent_calls_node(
                 pending_events,
             )
             try:
+                _system_tool_scope_gate(state, tool_name, args, call_id)
                 result = await SYSTEM_TOOL_REGISTRY.call(tool_name, args, state)
                 if (
                     tool_name == "save_artifact"
@@ -816,6 +854,69 @@ async def execute_agent_calls_node(
                 except Exception as retry_exc:
                     logger.exception("Agent call %r failed on resume retry", tool_name)
                     content = f"Error: {retry_exc}"
+        except ScopeApprovalRequired as exc:
+            # Story 1.5 (AD-18): a write with no declared allow, or any
+            # destructive call, waits for a human. Same resumable pattern as
+            # the auth interrupt: first pass raises GraphInterrupt, the
+            # re-execution after resume gets the card's answer.
+            logger.info(
+                "execute_agent_calls: scope approval required | agent=%s "
+                "capability=%s class=%s — suspending",
+                agent_id,
+                capability_id,
+                exc.scope_class.label,
+            )
+            resume_value = interrupt(exc.event.model_dump())
+            if is_approved(resume_value):
+                # The approver is the JWT-verified user the Gateway stamped on
+                # the resume payload; the receipt names them (AD-21).
+                approval = approval_for(call_id, resume_value, state.get("user_id"))
+                try:
+                    result2 = await _execute_with_retry(
+                        ExecutionMiddleware(state=state),
+                        agent_id=agent_id,
+                        capability_id=capability_id,
+                        protocol=protocol,
+                        tool_name=tool_name,
+                        args=args,
+                        call_id=call_id,
+                        config=config,
+                        pending_events=pending_events,
+                        max_retries=_verify_max_retries,
+                        scope_approval=approval,
+                    )
+                    content = result2.get("content", "")
+                    _call_base_fee = result2.get("base_fee", "0")
+                    _call_total_cost = result2.get("total_cost_usd", _call_base_fee)
+                    _verified = result2.get("verified", True)
+                    _verdict_reason = result2.get("verdict_reason", "ok")
+                except ScopeApprovalRequired:
+                    content = (
+                        f"Error: approval for {capability_id!r} did not cover "
+                        "the call after user interaction"
+                    )
+                except PreFlightError as pfe:
+                    content = f"Error: {pfe}"
+                except Exception as retry_exc:
+                    logger.exception("Agent call %r failed after approval", tool_name)
+                    content = f"Error: {retry_exc}"
+            else:
+                # Declined: nothing is dispatched; the step is recorded with a
+                # ``warn`` verdict so the receipt says so without refusing
+                # the run (AD-21).
+                content = (
+                    f"Error: {SCOPE_DECLINED}: the user declined "
+                    f"{capability_id!r} on {display_name}"
+                )
+                await ExecutionMiddleware(state=state).emit_declined(
+                    agent_id=agent_id,
+                    capability_id=capability_id,
+                    protocol=protocol,
+                    tool_name=tool_name,
+                    args=args,
+                    call_id=call_id,
+                    content=content,
+                )
         except PaymentInterrupt as exc:
             logger.info(
                 "execute_agent_calls: payment interrupt for agent=%s reason=%s",

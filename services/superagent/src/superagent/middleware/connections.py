@@ -9,6 +9,9 @@ agent registered any other way behaves exactly as before:
 - A connection whose token strategy finds no credential fails with
   ``credential_missing`` before any request reaches the platform — no health
   probe, no auth interrupt. The user adds the token from the connect form.
+- A removed connection (story 1.7) fails with ``connection_revoked``, and one
+  whose Registry record cannot be read now fails with
+  ``connection_unavailable`` — both before any request (AD-6).
 """
 
 from __future__ import annotations
@@ -21,6 +24,10 @@ CONNECTIONS_DISABLED = (
     "deployment (CONNECTIONS_ENABLED)"
 )
 CREDENTIAL_MISSING = "credential_missing"
+CONNECTION_REVOKED = (
+    "connection_revoked: this connection was removed; connect the tool again to use it"
+)
+CONNECTION_UNAVAILABLE = "connection_unavailable"
 
 
 def is_connection(manifest: Any) -> bool:
@@ -38,4 +45,11 @@ def credential_missing(var: str) -> str:
     return (
         f"{CREDENTIAL_MISSING}: this connection needs {var}; "
         "add it from the connect form"
+    )
+
+
+def connection_unavailable(reason: str) -> str:
+    return (
+        f"{CONNECTION_UNAVAILABLE}: {reason}; the call was not sent "
+        "(a connection is only called on a current Registry record)"
     )

@@ -71,6 +71,12 @@ export function HitlApprovalModal({
   const capabilityName = meta.capability_name ?? null
   const riskStyle = RISK_STYLES[riskLevel] ?? RISK_STYLES.medium
   const hasDrafts = drafts.length > 0
+  // Scope gate (story 1.5): the card names the connection, the capability
+  // and the target; a destructive call says so in as many words.
+  const scopeClass = meta.scope_class ?? null
+  const connectionName = meta.connection_name ?? null
+  const target = meta.target ?? null
+  const isScopeGate = scopeClass !== null
 
   const updateDraft = (idx: number, field: 'subject' | 'body', value: string) => {
     setDrafts((prev) => prev.map((d, i) => (i === idx ? { ...d, [field]: value } : d)))
@@ -150,6 +156,33 @@ export function HitlApprovalModal({
             {capabilityName && !hasDrafts && (
               <p className="text-caption text-text-secondary">
                 <span className="font-medium">Capability:</span> {capabilityName}
+              </p>
+            )}
+            {isScopeGate && (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-caption text-text-secondary">
+                {connectionName && (
+                  <>
+                    <dt className="font-medium">Connection</dt>
+                    <dd className="truncate">{connectionName}</dd>
+                  </>
+                )}
+                {target && (
+                  <>
+                    <dt className="font-medium">Target</dt>
+                    <dd className="break-all font-mono">{target}</dd>
+                  </>
+                )}
+                <dt className="font-medium">Action</dt>
+                <dd>
+                  {scopeClass === 'destructive'
+                    ? 'Destructive — deletes or changes something that cannot be undone from here'
+                    : 'Write — changes something on your platform'}
+                </dd>
+              </dl>
+            )}
+            {isScopeGate && (
+              <p className="text-caption text-text-secondary">
+                Your decision is recorded in the run receipt under your identity.
               </p>
             )}
 

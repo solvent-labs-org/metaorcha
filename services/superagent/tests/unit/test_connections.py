@@ -48,6 +48,7 @@ def _manifest(*, tags: list[str], strategies: list[dict]) -> dict:
     return {
         "agent_id": DID,
         "tags": tags,
+        "is_active": True,
         "transport": {"type": "sse", "endpoint": "https://example.com/mcp"},
         "security": {"auth_strategies": strategies},
         "capabilities": [],
