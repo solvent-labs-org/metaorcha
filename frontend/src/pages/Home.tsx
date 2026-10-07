@@ -164,7 +164,7 @@ export function Home() {
           The open harness for agent orchestration.
         </h1>
         <p className="font-mono text-[13px] text-text-secondary text-center max-w-[640px] mb-6">
-          one goal in → verified multi-protocol run out → live dashboard, not a chat reply
+          one goal in → recorded multi-protocol run out → live dashboard, not a chat reply
         </p>
         <p className="text-body-lg text-text-secondary text-center max-w-[600px] mb-8">
           Type a goal. Orcha discovers the right agents, composes them across MCP, A2A, and COMPUTER_USE,
