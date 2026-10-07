@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,9 +52,14 @@ class RegistrationService:
         self,
         emerge_yaml_content: str,
         user_id: str,
+        harvest_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Register a new agent.
+
+        ``harvest_headers`` authenticate the capability harvest of an MCP
+        server that lists its tools only to a token holder. They are used for
+        that one harvest and never stored.
 
         Process:
         1. Parse and validate emerge.yaml
@@ -97,7 +103,7 @@ class RegistrationService:
             await self._verify_health_endpoint(emerge_config.health_endpoint)
 
         harvest_result = await self._harvest_capabilities(
-            emerge_config, emerge_yaml_content
+            emerge_config, emerge_yaml_content, harvest_headers
         )
         self._assert_capability_ids(harvest_result)
         print(
@@ -120,6 +126,7 @@ class RegistrationService:
         agent_id: str,
         emerge_yaml_content: str,
         user_id: str,
+        harvest_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Update an existing agent.
@@ -155,7 +162,7 @@ class RegistrationService:
 
         version_changed = existing_agent.version != emerge_config.identity.version
         harvest_result = await self._harvest_capabilities(
-            emerge_config, emerge_yaml_content
+            emerge_config, emerge_yaml_content, harvest_headers
         )
         self._assert_capability_ids(harvest_result)
 
@@ -269,7 +276,10 @@ class RegistrationService:
     # -------------------------------------------------------------------------
 
     async def _harvest_capabilities(
-        self, config: EmergeConfig, raw_yaml_content: str = ""
+        self,
+        config: EmergeConfig,
+        raw_yaml_content: str = "",
+        headers: Mapping[str, str] | None = None,
     ) -> HarvestResult:
         """Select adapter by protocol and harvest capabilities.
 
@@ -296,6 +306,7 @@ class RegistrationService:
                 transport_type=transport_type,
                 timeout=settings.adapter_timeout,
                 max_retries=settings.adapter_max_retries,
+                headers=headers,
             )
             return await adapter.harvest()
 

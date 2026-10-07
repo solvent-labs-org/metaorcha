@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = "test"
     aws_region: str = "us-east-1"
 
+    # CONNECTIONS_ENABLED — user connections (a tool server plus the user's own
+    # token, registered from the chat). Off by default: the connect route
+    # refuses, and SuperAgent refuses to call a connection (spine AD-18). Must
+    # match SuperAgent's setting of the same name.
+    connections_enabled: bool = False
+
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     @property

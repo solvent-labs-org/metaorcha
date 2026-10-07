@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     # unchanged by this flag.
     settlement_require_attestation: bool = False
 
+    # CONNECTIONS_ENABLED — user connections (a tool server registered from the
+    # chat with the user's own token; manifests tagged ``connection``). Off by
+    # default: a call to a connection is refused before any request (spine
+    # AD-18). Must match the Gateway's setting of the same name.
+    connections_enabled: bool = False
+
     # Bound a single agent step's text output before it re-enters the
     # orchestrator context. Protects rate-limited tiers (per-minute token
     # ceilings) from unbounded scrape/crawl outputs. 0 disables truncation.

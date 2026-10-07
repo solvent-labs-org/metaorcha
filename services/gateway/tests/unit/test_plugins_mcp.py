@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest_asyncio
@@ -17,9 +18,14 @@ os.environ.setdefault("REGISTRY_URL", "http://127.0.0.1:8003")
 
 
 @pytest_asyncio.fixture
-async def client_with_mocks():
+async def client_with_mocks(monkeypatch):
     from gateway.auth.jwt import create_access_token
+    from gateway.config import settings
     from gateway.main import app
+
+    # Story 1.3: connections sit behind CONNECTIONS_ENABLED (default off);
+    # these tests exercise the route with the feature on.
+    monkeypatch.setattr(settings, "connections_enabled", True)
 
     redis = AsyncMock()
     redis.sismember = AsyncMock(return_value=False)
@@ -91,13 +97,39 @@ async def test_connect_mcp_stores_credential_then_registers(client_with_mocks):
     assert resp.status_code == 201
     superagent.post.assert_awaited_once()
     _, kwargs = superagent.post.await_args
-    assert kwargs["json"]["agent_id"] == "did:orcha:agent:docs-mcp"
+    # One DID per registration (AD-15): the name's slug plus a minted suffix,
+    # the same DID in the vault key and in the manifest.
+    did = kwargs["json"]["agent_id"]
+    assert re.fullmatch(r"did:orcha:agent:docs-mcp-[0-9a-f]{8}", did)
     assert kwargs["json"]["credentials"] == {"MCP_TOKEN": "not-a-real-token"}
     registry.post.assert_awaited_once()
     # the secret never reaches the manifest
     files = registry.post.await_args.kwargs["files"]
     assert b"not-a-real-token" not in files["emerge_yaml"][1]
     assert b"token_vault_ref: MCP_TOKEN" in files["emerge_yaml"][1]
+    assert f'id: "{did}"'.encode() in files["emerge_yaml"][1]
+
+
+async def test_the_token_goes_to_the_registry_for_the_harvest_only(
+    client_with_mocks,
+):
+    # A server that lists its tools only to a token holder cannot be
+    # registered without it; the Registry gets it in its own header, apart
+    # from the caller's JWT, never in the manifest.
+    ac, registry, headers, _ = client_with_mocks
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_MCP_WITH_AUTH)
+    assert resp.status_code == 201
+    sent = registry.post.await_args.kwargs["headers"]
+    assert sent["X-Harvest-Authorization"] == "Bearer not-a-real-token"
+    assert sent["authorization"] == headers["Authorization"]
+
+
+async def test_no_token_sends_no_harvest_header(client_with_mocks):
+    ac, registry, headers, _ = client_with_mocks
+    open_mcp = {k: v for k, v in _MCP_WITH_AUTH.items() if not k.startswith("auth_")}
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=open_mcp)
+    assert resp.status_code == 201
+    assert "X-Harvest-Authorization" not in registry.post.await_args.kwargs["headers"]
 
 
 async def test_vault_write_failure_is_not_a_201(client_with_mocks):
@@ -187,3 +219,56 @@ async def test_sse_is_not_operator_gated(client_with_mocks, monkeypatch):
     )
     assert resp.status_code == 201
     registry.post.assert_awaited_once()
+
+
+# -- story 1.3 ---------------------------------------------------------------
+
+
+async def test_connect_is_refused_while_connections_are_off(
+    client_with_mocks, monkeypatch
+):
+    from gateway.config import settings
+
+    ac, registry, headers, superagent = client_with_mocks
+    monkeypatch.setattr(settings, "connections_enabled", False)
+    resp = await ac.post("/api/v1/plugins/mcp", headers=headers, json=_MCP_WITH_AUTH)
+    assert resp.status_code == 403
+    assert resp.json()["detail"].startswith("connections_disabled")
+    superagent.post.assert_not_awaited()
+    registry.post.assert_not_awaited()
+
+
+async def test_a_guest_cannot_store_a_credential(client_with_mocks):
+    from gateway.auth.jwt import create_access_token
+
+    ac, registry, _, superagent = client_with_mocks
+    token, _ = create_access_token(
+        user_id="guest-001", email="guest@example.com", guest=True
+    )
+    resp = await ac.post(
+        "/api/v1/plugins/mcp",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_MCP_WITH_AUTH,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"].startswith("require_member")
+    superagent.post.assert_not_awaited()
+    registry.post.assert_not_awaited()
+
+
+async def test_the_same_name_twice_is_two_connections(client_with_mocks):
+    ac, _, headers, superagent = client_with_mocks
+    for _ in range(2):
+        resp = await ac.post(
+            "/api/v1/plugins/mcp", headers=headers, json=_MCP_WITH_AUTH
+        )
+        assert resp.status_code == 201
+    dids = [c.kwargs["json"]["agent_id"] for c in superagent.post.await_args_list]
+    assert len(set(dids)) == 2
+
+
+async def test_a_connection_manifest_is_tagged(client_with_mocks):
+    ac, registry, headers, _ = client_with_mocks
+    await ac.post("/api/v1/plugins/mcp", headers=headers, json=_MCP_WITH_AUTH)
+    yaml_bytes = registry.post.await_args.kwargs["files"]["emerge_yaml"][1]
+    assert b"    - connection\n" in yaml_bytes
