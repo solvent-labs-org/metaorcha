@@ -62,6 +62,20 @@ class RunAuditSummary(BaseModel):
     duration_ms: int | None = None
 
 
+class RunAuditGate(BaseModel):
+    """Latest settle-gate outcome for the run (``attested_settlements``).
+
+    Present only when a gate evaluated the run; the UI shows a gate-backed
+    indicator only then, and names the failed check from the gate vocabulary
+    (story 1.1, FR-14).
+    """
+
+    outcome: str  # settled | refused
+    failed_checks: list[str]
+    envelope_digest: str
+    created_at: str
+
+
 class RunAuditResponse(BaseModel):
     session_id: str
     generated_at: str
@@ -69,6 +83,7 @@ class RunAuditResponse(BaseModel):
     summary: RunAuditSummary
     steps: list[RunAuditStep]
     note: str
+    gate: RunAuditGate | None = None
 
 
 class ConversationSessionSummaryDTO(BaseModel):

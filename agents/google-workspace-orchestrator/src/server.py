@@ -20,7 +20,7 @@ from .config import mcp_http_url, settings
 from .mcp_client import WorkspaceMCPClient
 from .oauth_routes import router as oauth_router
 from .orchestrator import run_workspace_task
-from .token_store import get_tokens, put_tokens
+from .token_store import get_tokens, log_ref, put_tokens
 
 structlog.configure(
     processors=[
@@ -247,7 +247,7 @@ async def _try_refresh(key: str) -> str | None:
     if not tok or not tok.refresh_token:
         return None
     if not settings.google_oauth_client_id or not settings.google_oauth_client_secret:
-        logger.warning("oauth_refresh_skipped key=%s reason=no_client_credentials", key)
+        logger.warning("oauth_refresh_skipped key=%s reason=no_client_credentials", log_ref(key))
         return None
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -264,7 +264,7 @@ async def _try_refresh(key: str) -> str | None:
         if resp.status_code != 200:
             logger.warning(
                 "oauth_refresh_failed key=%s status=%d body=%s",
-                key,
+                log_ref(key),
                 resp.status_code,
                 resp.text[:300],
             )
@@ -274,13 +274,13 @@ async def _try_refresh(key: str) -> str | None:
         if not new_access:
             return None
         put_tokens(key, new_access, tok.refresh_token, data.get("expires_in"))
-        logger.info("oauth_token_refreshed key=%s", key)
+        logger.info("oauth_token_refreshed key=%s", log_ref(key))
         # Reset the MCP session so the next call re-initializes with the new token.
         if _mcp_client is not None:
             _mcp_client._reset_session()
         return new_access
     except Exception as exc:
-        logger.warning("oauth_refresh_error key=%s error=%s", key, exc)
+        logger.warning("oauth_refresh_error key=%s error=%s", log_ref(key), exc)
         return None
 
 
@@ -292,16 +292,16 @@ async def _bearer_for_session(request: Request, params: dict[str, Any]) -> str |
     key = _session_key(params)
     tok = get_tokens(key)
     if not tok:
-        logger.warning("oauth_bearer_missing key=%s", key)
+        logger.warning("oauth_bearer_missing key=%s", log_ref(key))
         return None
     if tok.is_expired():
-        logger.info("oauth_token_expired key=%s refreshing=true", key)
+        logger.info("oauth_token_expired key=%s refreshing=true", log_ref(key))
         refreshed = await _try_refresh(key)
         if refreshed:
             return refreshed
-        logger.warning("oauth_token_expired_unrefreshable key=%s", key)
+        logger.warning("oauth_token_expired_unrefreshable key=%s", log_ref(key))
         return None
-    logger.info("oauth_bearer_source source=token_store key=%s", key)
+    logger.info("oauth_bearer_source source=token_store key=%s", log_ref(key))
     return tok.access_token
 
 
