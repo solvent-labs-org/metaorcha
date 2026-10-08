@@ -330,20 +330,30 @@ class ExecutionMiddleware:
         # Only runs for charged agents (A2A/ACP with base_fee > 0).
         if protocol not in ("MCP",) and base_fee > 0:
             elapsed_ms = int((datetime.now(UTC) - _call_start).total_seconds() * 1000)
-            from ..pricing.settlement import settle_invocation
-
-            asyncio.create_task(
-                settle_invocation(
-                    user_id=self._state.get("user_id", ""),
-                    agent_id=agent_id,
-                    session_id=self._state.get("session_id", ""),
-                    call_id=call_id,
-                    base_fee=base_fee,
-                    latency_ms=elapsed_ms,
-                    execution_success=success,
-                    platform_tokens=self._state.get("_last_turn_tokens", 0),
-                )
+            from ..pricing.settlement import (
+                defer_charge,
+                release_reserve,
+                settle_invocation,
             )
+
+            charge = {
+                "user_id": self._state.get("user_id", ""),
+                "agent_id": agent_id,
+                "session_id": self._state.get("session_id", ""),
+                "call_id": call_id,
+                "base_fee": base_fee,
+                "latency_ms": elapsed_ms,
+                "execution_success": success,
+                "platform_tokens": self._state.get("_last_turn_tokens", 0),
+            }
+            # With the gate on, the charge is stored here, before this call
+            # returns — never in a background task — so the gate knows at
+            # seal time that this run charged something (AD-12). Only the
+            # reserve release is left to run in the background.
+            if defer_charge(**charge):
+                asyncio.create_task(release_reserve(charge["session_id"], call_id))
+            else:
+                asyncio.create_task(settle_invocation(**charge))
 
         # Surface cost breakdown for SSE / transcript.
         # total_cost_usd = agent base_fee + LLM token cost (PLATFORM_TOKEN_RATE × output tokens)

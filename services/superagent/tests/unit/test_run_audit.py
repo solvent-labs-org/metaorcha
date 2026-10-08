@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from superagent.api.audit import build_run_audit
 from superagent.nodes.execute_agent_calls import _tool_transcript_meta
 from superagent.persistence.transcript_store import TRANSCRIPT_TOOL_META_KEY
@@ -238,3 +239,20 @@ async def test_load_gate_outcome_logs_a_request_id_on_one_line(caplog):
     ]
     assert "\n" not in message and "\r" not in message
     assert message.endswith("sess-1\\nWARNING forged\\r")
+
+
+@pytest.mark.parametrize(("call_id", "charged"), [("c1", True), (None, False)])
+async def test_a_null_call_id_reads_as_verdict_only(call_id, charged):
+    """AD-12: a row with call_id NULL was judged and charged nothing."""
+    from superagent.api.audit import load_gate_outcome
+
+    row = SimpleNamespace(
+        outcome="settled",
+        failed_checks=[],
+        envelope_digest="ab" * 32,
+        created_at=datetime(2026, 10, 2, tzinfo=UTC),
+        call_id=call_id,
+    )
+    gate = await load_gate_outcome("sess-1", _FakeDb(row=row))
+    assert gate is not None
+    assert (gate.outcome, gate.charged) == ("settled", charged)
