@@ -404,21 +404,23 @@ async def upsert_conversation_session(
     session_id: str,
     user_id: str,
     title: str | None,
+    office_id: str | None = None,
 ) -> None:
+    """Create the session, or retitle it. The office is fixed at creation
+    (story 2.0): an update never moves a session to another office."""
     from src.generated_client import Prisma
 
     t = (title or "").strip() or DEFAULT_TITLE
+    create: dict[str, Any] = {"id": session_id, "user_id": user_id, "title": t}
+    if office_id:
+        create["office_id"] = office_id
     db = Prisma()
     await db.connect()
     try:
         await db.conversationsession.upsert(
             where={"id": session_id},
             data={
-                "create": {
-                    "id": session_id,
-                    "user_id": user_id,
-                    "title": t,
-                },
+                "create": create,
                 "update": {"title": t},
             },
         )
@@ -541,6 +543,22 @@ async def get_session_meta(session_id: str) -> tuple[int, str | None] | None:
         await db.disconnect()
 
 
+async def get_session_office(session_id: str) -> tuple[str | None, str | None] | None:
+    """Return (user_id, office_id) or None. A NULL office is the owner's
+    personal office; the Gateway resolves that, not this service."""
+    from src.generated_client import Prisma
+
+    db = Prisma()
+    await db.connect()
+    try:
+        row = await db.conversationsession.find_unique(where={"id": session_id})
+        if row is None:
+            return None
+        return (row.user_id, getattr(row, "office_id", None))
+    finally:
+        await db.disconnect()
+
+
 async def verify_session_owner(session_id: str, user_id: str) -> bool:
     meta = await get_session_meta(session_id)
     if meta is None:
@@ -552,19 +570,31 @@ async def list_sessions_paginated(
     user_id: str,
     page: int,
     page_size: int,
+    office_id: str | None = None,
+    include_unassigned: bool = False,
 ) -> tuple[list[Any], int]:
+    """List a user's sessions, optionally in one office. ``include_unassigned``
+    also returns sessions with no office (created before story 2.0), which
+    belong to the owner's personal office."""
     from src.generated_client import Prisma
 
     ps = min(max(1, page_size), _MAX_PAGE_SIZE)
     p = max(1, page)
     skip = (p - 1) * ps
 
+    where: dict[str, Any] = {"user_id": user_id}
+    if office_id:
+        if include_unassigned:
+            where["OR"] = [{"office_id": office_id}, {"office_id": None}]
+        else:
+            where["office_id"] = office_id
+
     db = Prisma()
     await db.connect()
     try:
-        total = await db.conversationsession.count(where={"user_id": user_id})
+        total = await db.conversationsession.count(where=where)
         rows = await db.conversationsession.find_many(
-            where={"user_id": user_id},
+            where=where,
             order={"updated_at": "desc"},
             skip=skip,
             take=ps,

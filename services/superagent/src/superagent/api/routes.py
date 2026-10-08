@@ -79,7 +79,9 @@ async def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
 
     session_id = str(uuid.uuid4())
     try:
-        await upsert_conversation_session(session_id, body.user_id, body.title)
+        await upsert_conversation_session(
+            session_id, body.user_id, body.title, body.office_id
+        )
     except Exception:
         logger.exception("create_session: DB upsert failed for %s", session_id)
         raise HTTPException(
@@ -97,10 +99,16 @@ async def list_sessions(
     user_id: str = Query(..., description="Owner user id (set by Gateway from JWT)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
+    office_id: str | None = Query(None, description="Office filter (set by Gateway)"),
+    include_unassigned: bool = Query(
+        False, description="Also list sessions with no office (personal office only)"
+    ),
 ) -> PaginatedSessionsResponse:
     from ..persistence.transcript_store import list_sessions_paginated
 
-    rows, total = await list_sessions_paginated(user_id, page, page_size)
+    rows, total = await list_sessions_paginated(
+        user_id, page, page_size, office_id, include_unassigned
+    )
     items = [
         ConversationSessionSummaryDTO(
             session_id=r.id,
@@ -121,12 +129,14 @@ async def list_sessions(
 
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
 async def get_session(session_id: str) -> SessionDetailResponse:
-    from ..persistence.transcript_store import get_session_meta
+    from ..persistence.transcript_store import get_session_office
 
-    meta = await get_session_meta(session_id)
-    if meta is None or meta[1] is None:
+    found = await get_session_office(session_id)
+    if found is None or found[0] is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return SessionDetailResponse(session_id=session_id, user_id=meta[1])
+    return SessionDetailResponse(
+        session_id=session_id, user_id=found[0], office_id=found[1]
+    )
 
 
 @router.get("/sessions/{session_id}/transcript", response_model=TranscriptListResponse)

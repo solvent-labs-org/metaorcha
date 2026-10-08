@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from ..auth.models import TokenPayload
 from ..config import settings
-from ..dependencies import require_auth, require_member
+from ..offices.context import OfficeContext, require_member_office, require_office
+from ..sessions.routes import assert_session_access
 from .models import (
     CreateRoutineRequest,
     CreateWorkflowRequest,
@@ -54,6 +54,26 @@ def _to_response(record: object) -> WorkflowResponse:
     )
 
 
+_NOT_FOUND = "Workflow not found"
+
+
+def _visible_where(ctx: OfficeContext) -> dict[str, Any]:
+    """Story 2.0 (FR-32, OQ-16): owners see the office's routines; members their own."""
+    where: dict[str, Any] = {"office_id": ctx.office_id}
+    if not ctx.is_owner:
+        where["user_id"] = ctx.user_id
+    return where
+
+
+async def _find_visible(db: Any, workflow_id: str, ctx: OfficeContext) -> Any:
+    record = await db.workflowtemplate.find_first(
+        where={"id": workflow_id, **_visible_where(ctx)}
+    )
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
+    return record
+
+
 def _reject(field: str, reason: str) -> HTTPException:
     return HTTPException(
         status_code=422,
@@ -76,10 +96,15 @@ def _check_schedule(cron: str, tz: str) -> None:
 async def create_workflow(
     body: CreateWorkflowRequest,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> WorkflowResponse:
-    # Fetch captured workflow from SuperAgent session state
+    from common.database.src.generated_client.fields import Json
+
+    payload = ctx.payload
     sa = request.app.state.superagent
+    # The session must be the caller's, in this office: its captured workflow
+    # is read from SuperAgent state, which does no ownership check of its own.
+    await assert_session_access(request, body.session_id, ctx)
     resp = await sa.get(f"/sessions/{body.session_id}/status")
     resp.raise_for_status()
     status_data = resp.json()
@@ -94,11 +119,13 @@ async def create_workflow(
     record = await db.workflowtemplate.create(
         data={
             "user_id": payload.user_id,
+            "office_id": ctx.office_id,
             "name": body.name,
             "description": body.description or captured.get("goal_template", "")[:200],
             "goal_template": captured["goal_template"],
-            "parameters": captured.get("parameters", {}),
-            "steps": captured.get("steps", []),
+            # Json columns must be wrapped, as in create_routine.
+            "parameters": Json(captured.get("parameters", {})),
+            "steps": Json(captured.get("steps", [])),
             "agents_used": captured.get("agents_used", []),
             "created_from_session": body.session_id,
             "status": "active",
@@ -111,7 +138,7 @@ async def create_workflow(
 async def create_routine(
     body: CreateRoutineRequest,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_member)],
+    ctx: Annotated[OfficeContext, Depends(require_member_office)],
 ) -> WorkflowResponse:
     """Save a routine (story 2.1, FR-23, AD-18, AD-19, UX-DR4).
 
@@ -131,8 +158,29 @@ async def create_routine(
             detail="connections_disabled: a routine runs on connections, which "
             "are turned off on this deployment (CONNECTIONS_ENABLED)",
         )
+    payload = ctx.payload
     cron = " ".join(body.cron.split())
     _check_schedule(cron, body.timezone)
+
+    # Story 2.0: a routine may use only the caller's own, active connections in
+    # this office. A member's token acts as that member (FR-17), so another
+    # member's connection — or another office's — is refused here, before the
+    # SuperAgent reads anything.
+    db = request.app.state.db
+    owned = await db.agent.find_many(
+        where={
+            "id": {"in": body.connections},
+            "office_id": ctx.office_id,
+            "user_id": ctx.user_id,
+            "is_active": True,
+        }
+    )
+    owned_ids = {a.id for a in owned}
+    for did in body.connections:
+        if did not in owned_ids:
+            raise _reject(
+                "connections", f"{did} is not one of your connections in this office"
+            )
 
     sa = request.app.state.superagent
     checked = await sa.post(
@@ -161,10 +209,10 @@ async def create_routine(
     # nested-relation input, not a value.
     from common.database.src.generated_client.fields import Json
 
-    db = request.app.state.db
     record = await db.workflowtemplate.create(
         data={
             "user_id": payload.user_id,
+            "office_id": ctx.office_id,
             "name": body.name,
             "description": body.description or body.goal[:200],
             "goal_template": body.goal,
@@ -185,11 +233,11 @@ async def create_routine(
 @router.get("", response_model=list[WorkflowResponse])
 async def list_workflows(
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> list[WorkflowResponse]:
     db = request.app.state.db
     records = await db.workflowtemplate.find_many(
-        where={"user_id": payload.user_id},
+        where=_visible_where(ctx),
         order={"created_at": "desc"},
     )
     return [_to_response(r) for r in records]
@@ -199,15 +247,9 @@ async def list_workflows(
 async def get_workflow(
     workflow_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> WorkflowResponse:
-    db = request.app.state.db
-    record = await db.workflowtemplate.find_unique(where={"id": workflow_id})
-    if record is None or record.user_id != payload.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
-        )
-    return _to_response(record)
+    return _to_response(await _find_visible(request.app.state.db, workflow_id, ctx))
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)
@@ -215,15 +257,19 @@ async def update_workflow(
     workflow_id: str,
     body: UpdateWorkflowRequest,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> WorkflowResponse:
+    """Edit your own routine; an owner may also pause anyone's (FR-33)."""
     db = request.app.state.db
-    existing = await db.workflowtemplate.find_unique(where={"id": workflow_id})
-    if existing is None or existing.user_id != payload.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
-        )
+    existing = await _find_visible(db, workflow_id, ctx)
     update_data = body.model_dump(exclude_none=True)
+    if existing.user_id != ctx.user_id and update_data != {"status": "inactive"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="an owner may pause another member's routine, not edit it",
+        )
+    if update_data == {"status": "inactive"}:
+        update_data["schedule_enabled"] = False
     record = await db.workflowtemplate.update(
         where={"id": workflow_id}, data=update_data
     )
@@ -234,12 +280,13 @@ async def update_workflow(
 async def delete_workflow(
     workflow_id: str,
     request: Request,
-    payload: Annotated[TokenPayload, Depends(require_auth)],
+    ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> None:
     db = request.app.state.db
-    existing = await db.workflowtemplate.find_unique(where={"id": workflow_id})
-    if existing is None or existing.user_id != payload.user_id:
+    existing = await _find_visible(db, workflow_id, ctx)
+    if existing.user_id != ctx.user_id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only the member who saved a routine can delete it",
         )
     await db.workflowtemplate.delete(where={"id": workflow_id})

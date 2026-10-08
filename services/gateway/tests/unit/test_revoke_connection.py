@@ -15,6 +15,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 
+from .office_db import FakeDB
+
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32-bytes-1234567")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
@@ -90,7 +92,9 @@ async def gw(monkeypatch):
     app.state.registry = registry
     app.state.superagent = superagent
     app.state.redis = redis
-    app.state.db = MagicMock()
+    db = FakeDB()
+    db.add_connection(DID, "user-001", "po_user-001")
+    app.state.db = db
     token, _ = create_access_token(user_id="user-001", email="test@example.com")
     headers = {"Authorization": f"Bearer {token}"}
     async with AsyncClient(

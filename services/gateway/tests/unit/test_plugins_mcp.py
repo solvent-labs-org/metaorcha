@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import re
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
+
+from .office_db import FakeDB
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32-bytes-1234567")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
@@ -49,7 +51,9 @@ async def client_with_mocks(monkeypatch):
     app.state.redis = redis
     app.state.registry = registry
     app.state.superagent = superagent
-    app.state.db = MagicMock()
+    db = FakeDB()
+    db.agent.update = AsyncMock()  # the Registry, mocked, owns the row
+    app.state.db = db
 
     token, _ = create_access_token(user_id="user-001", email="test@example.com")
     headers = {"Authorization": f"Bearer {token}"}
