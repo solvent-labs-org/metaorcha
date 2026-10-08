@@ -55,12 +55,19 @@ class Table:
         self.name = name
         self.unique = unique
 
-    async def find_many(self, where: dict[str, Any]) -> list[SimpleNamespace]:
+    async def find_many(
+        self, where: dict[str, Any], order: Any = None
+    ) -> list[SimpleNamespace]:
+        # Rows are kept in insertion order, which is created_at ascending.
+        assert order in (None, {"created_at": "asc"})
         return [SimpleNamespace(**r) for r in self.rows if _matches(r, where)]
 
     async def find_first(self, where: dict[str, Any]) -> SimpleNamespace | None:
         found = await self.find_many(where)
         return found[0] if found else None
+
+    async def find_unique(self, where: dict[str, Any]) -> SimpleNamespace | None:
+        return await self.find_first(where)
 
     async def update_many(self, where: dict[str, Any], data: dict[str, Any]) -> int:
         hit = [r for r in self.rows if _matches(r, where)]
@@ -78,8 +85,12 @@ class Table:
         return SimpleNamespace(**row)
 
     async def create(self, data: dict[str, Any]) -> SimpleNamespace:
+        # NULLs are distinct in a Postgres unique index.
         if self.unique and any(
-            all(r.get(c) == data.get(c) for c in self.unique) for r in self.rows
+            all(
+                data.get(c) is not None and r.get(c) == data.get(c) for c in self.unique
+            )
+            for r in self.rows
         ):
             raise RuntimeError("unique constraint")
         row = {
@@ -100,6 +111,11 @@ class DB:
         self.routinefiring = Table(self.log, "firing", unique=("routine_id", "slot"))
         self.officemember = Table(self.log, "member")
         self.agent = Table(self.log, "agent")
+        # The settle gate's ledger and the sealed envelopes (story 2.3).
+        self.attestedsettlement = Table(
+            self.log, "settlement", unique=("settled_run_id",)
+        )
+        self.attestation = Table(self.log, "attestation", unique=("run_id",))
 
     def factory(self):
         @contextlib.asynccontextmanager
@@ -554,6 +570,106 @@ async def test_a_failed_run_is_an_error_never_settled(events, state) -> None:
     (firing,) = db.routinefiring.rows
     assert firing["state"] == state
     assert firing["run_id"] is None
+
+
+# -- the gate's judgement lands on the firing row (story 2.3, AD-12) ---------
+
+
+def _gate_row(db: DB, run_id: str, outcome: str, checks: list[str]) -> None:
+    db.attestedsettlement.rows.append(
+        {
+            "run_id": run_id,
+            "outcome": outcome,
+            "settled_run_id": run_id if outcome == "settled" else None,
+            "call_id": None,
+            "failed_checks": checks,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([], (rules.ATTESTED_UNSETTLED, None)),
+        ([("settled", [])], (rules.SETTLED, None)),
+        ([("refused", ["verdict_fail"])], (rules.REFUSED, "verdict_fail")),
+        (
+            [("refused", ["signer_did", "x"])],
+            (rules.REFUSED, "signer_did, x"),
+        ),
+        # a replay of a settled run adds a refusal; the run stays settled
+        ([("settled", []), ("refused", ["already_settled"])], (rules.SETTLED, None)),
+        # a claim rolled back with its credit, then settled on retry
+        ([("refused", ["credit_write_error"]), ("settled", [])], (rules.SETTLED, None)),
+    ],
+)
+def test_the_gate_decides_how_an_attested_firing_ends(rows, expected) -> None:
+    ledger = [SimpleNamespace(outcome=o, failed_checks=c) for o, c in rows]
+    got = rules.judged(rules.Outcome(rules.ATTESTED_UNSETTLED, None, "r1"), ledger)
+    assert (got.state, got.detail, got.run_id) == (*expected, "r1")
+
+
+@pytest.mark.parametrize("state", [rules.PAUSED, rules.ERROR])
+def test_the_gate_never_changes_a_firing_that_did_not_seal(state) -> None:
+    outcome = rules.Outcome(state, "why")
+    settled = [SimpleNamespace(outcome="settled", failed_checks=[])]
+    assert rules.judged(outcome, settled) is outcome
+
+
+@pytest.mark.parametrize(
+    ("outcome", "checks", "state", "detail"),
+    [
+        ("settled", [], rules.SETTLED, None),
+        ("refused", ["verdict_fail"], rules.REFUSED, "verdict_fail"),
+    ],
+)
+async def test_a_firing_ends_as_the_gate_judged_its_run(
+    outcome, checks, state, detail
+) -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "run-1", outcome, checks)  # the Runner's run seals as run-1
+    await _tick(_scheduler(db))
+    (firing,) = db.routinefiring.rows
+    assert (firing["state"], firing["detail"], firing["run_id"]) == (
+        state,
+        detail,
+        "run-1",
+    )
+
+
+async def test_with_the_gate_off_a_sealed_firing_stays_attested_unsettled() -> None:
+    db = DB()
+    _seed(db)
+    _gate_row(db, "another-run", "settled", [])
+    await _tick(_scheduler(db))
+    assert db.routinefiring.rows[0]["state"] == rules.ATTESTED_UNSETTLED
+
+
+async def test_a_ledger_that_cannot_be_read_leaves_the_firing_attested() -> None:
+    db = DB()
+    _seed(db)
+
+    async def down(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("database is down")
+
+    db.attestedsettlement.find_many = down  # type: ignore[method-assign]
+    await _tick(_scheduler(db))
+    (firing,) = db.routinefiring.rows
+    assert (firing["state"], firing["run_id"]) == (rules.ATTESTED_UNSETTLED, "run-1")
+
+
+async def test_a_resumed_firing_ends_as_the_gate_judged_its_run() -> None:
+    db = DB()
+    _seed(db)
+    pause = {"type": "interrupt", "interrupt_type": "HITL_APPROVAL", "metadata": {}}
+    await _tick(_scheduler(db, Runner(events=[pause, {"type": "done"}])))
+    (firing,) = db.routinefiring.rows
+    _gate_row(db, "run-9", "refused", ["verdict_fail"])
+    await record_resume(
+        firing["session_id"], [{"type": "done", "run_id": "run-9"}], db.factory()
+    )
+    assert (firing["state"], firing["detail"]) == (rules.REFUSED, "verdict_fail")
 
 
 async def test_without_a_runner_the_scheduler_claims_nothing() -> None:
