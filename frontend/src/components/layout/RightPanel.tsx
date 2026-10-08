@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { workflows } from '../../api/client'
 import { isComputerUseTrace } from '../../lib/computerUse'
@@ -7,6 +7,7 @@ import { useSessionStore } from '../../store/session'
 import { AgentCard } from '../agents/AgentCard'
 import { ComputerUseViewport } from '../chat/ComputerUseViewport'
 import { RoutineEditorModal } from '../modals/RoutineEditorModal'
+import type { FiringState, WorkflowResponse } from '../../types'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 
@@ -98,6 +99,90 @@ export function RightPanel() {
   )
 }
 
+// AD-22's vocabulary, as the pane says it. Never "done": a firing is only
+// settled or refused once the gate has spoken (stories 2.3, 2.6).
+const FIRING_LABEL: Record<FiringState, string> = {
+  scheduled: 'scheduled',
+  running: 'running',
+  attested_unsettled: 'attested, not settled',
+  settled: 'settled',
+  refused: 'refused',
+  paused: 'waiting for you',
+  skipped: 'skipped',
+  error: 'error',
+}
+
+function RoutineItem({ wf }: { wf: WorkflowResponse }) {
+  const qc = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const toggle = useMutation({
+    mutationFn: (on: boolean) =>
+      workflows.update(wf.id, { status: on ? 'scheduled' : 'inactive' }),
+    onSuccess: () => {
+      setError(null)
+      void qc.invalidateQueries({ queryKey: ['workflows'] })
+    },
+    onError: (e: unknown) => setError(e instanceof Error ? e.message : 'Could not change the schedule'),
+  })
+  const firing = wf.last_firing
+  const scheduled = Boolean(wf.schedule_enabled)
+
+  return (
+    <li className="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-2">
+      <p className="truncate text-label font-medium text-text-body">{wf.name}</p>
+      <p className="truncate font-mono text-[10px] text-text-disabled">
+        {wf.schedule_cron
+          ? `${wf.schedule_cron} ${wf.schedule_tz ?? ''}`.trim()
+          : wf.agents_used.length > 0
+            ? wf.agents_used.join(' · ')
+            : wf.status}
+      </p>
+      {wf.schedule_cron && (
+        <p className="mt-1 flex items-center gap-2 text-[10px] text-text-secondary">
+          <span>
+            {scheduled && wf.next_run_at
+              ? `next ${new Date(wf.next_run_at).toLocaleString()}`
+              : 'schedule off'}
+          </span>
+          <button
+            type="button"
+            disabled={toggle.isPending}
+            onClick={() => toggle.mutate(!scheduled)}
+            className="text-brand-primary-light hover:underline disabled:opacity-50"
+          >
+            {scheduled ? 'Pause' : 'Turn on'}
+          </button>
+        </p>
+      )}
+      {firing && (
+        <p
+          className={cn(
+            'mt-1 flex items-center gap-2 text-[10px]',
+            firing.state === 'error' || firing.state === 'refused'
+              ? 'text-semantic-error'
+              : 'text-text-secondary',
+          )}
+          title={firing.detail ?? undefined}
+        >
+          <span>
+            last: {FIRING_LABEL[firing.state] ?? firing.state}
+            {firing.detail && firing.state !== 'paused' ? ` — ${firing.detail}` : ''}
+          </span>
+          {firing.session_id && (
+            <Link
+              to={`/chat/${firing.session_id}`}
+              className="text-brand-primary-light hover:underline"
+            >
+              {firing.state === 'paused' ? 'Review approval' : 'Open'}
+            </Link>
+          )}
+        </p>
+      )}
+      {error && <p className="mt-1 text-[10px] text-semantic-error">{error}</p>}
+    </li>
+  )
+}
+
 function RoutinesSection() {
   const { data, isLoading } = useQuery({
     queryKey: ['workflows'],
@@ -120,19 +205,7 @@ function RoutinesSection() {
       )}
       <ul className="m-0 flex list-none flex-col gap-1.5 px-3 p-0">
         {items.map((wf) => (
-          <li
-            key={wf.id}
-            className="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-2"
-          >
-            <p className="truncate text-label font-medium text-text-body">{wf.name}</p>
-            <p className="truncate font-mono text-[10px] text-text-disabled">
-              {wf.schedule_cron
-                ? `${wf.schedule_cron} ${wf.schedule_tz ?? ''}`.trim()
-                : wf.agents_used.length > 0
-                  ? wf.agents_used.join(' · ')
-                  : wf.status}
-            </p>
-          </li>
+          <RoutineItem key={wf.id} wf={wf} />
         ))}
       </ul>
       <p className="mt-3 flex items-center gap-3 px-4">

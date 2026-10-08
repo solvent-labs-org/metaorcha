@@ -4116,6 +4116,7 @@ name = "superagent"
 version = "0.1.0"
 source = { editable = "services/superagent" }
 dependencies = [
+    { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "boto3" },
     { name = "cdv" },
@@ -4142,11 +4143,13 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "redis" },
     { name = "sentence-transformers" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "boto3", specifier = ">=1.35" },
     { name = "cdv", specifier = "==1.0.1" },
@@ -4173,6 +4176,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "redis", specifier = ">=5" },
     { name = "sentence-transformers", specifier = ">=3" },
+    { name = "tzdata", specifier = ">=2024.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
 

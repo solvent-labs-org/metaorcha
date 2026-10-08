@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from apscheduler.triggers.cron import CronTrigger
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+
+from common.utils.src.cron import crontab_trigger, next_slot
 
 from ..config import settings
 from ..offices.context import OfficeContext, require_member_office, require_office
@@ -15,6 +17,7 @@ from ..sessions.routes import assert_session_access
 from .models import (
     CreateRoutineRequest,
     CreateWorkflowRequest,
+    FiringResponse,
     UpdateWorkflowRequest,
     WorkflowResponse,
 )
@@ -28,7 +31,21 @@ def _json_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _to_response(record: object) -> WorkflowResponse:
+def _firing_response(row: Any) -> FiringResponse:
+    state = getattr(row.state, "value", row.state)
+    return FiringResponse(
+        id=row.id,
+        slot=row.slot,
+        state=str(state),
+        detail=row.detail,
+        session_id=row.session_id,
+        run_id=row.run_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_response(record: object, last_firing: Any = None) -> WorkflowResponse:
     parameters = _json_dict(getattr(record, "parameters", None))
     allow = parameters.get("scope_allow")
     return WorkflowResponse(
@@ -51,7 +68,24 @@ def _to_response(record: object) -> WorkflowResponse:
         scope_allow=[str(a) for a in allow] if isinstance(allow, list) else [],
         criteria=_json_dict(getattr(record, "criteria", None)),
         criteria_operands=_json_dict(getattr(record, "criteria_operands", None)),
+        next_run_at=getattr(record, "next_run_at", None),
+        last_firing=_firing_response(last_firing) if last_firing is not None else None,
     )
+
+
+async def _last_firings(db: Any, routine_ids: list[str]) -> dict[str, Any]:
+    """The newest firing of each routine, keyed by routine id."""
+    if not routine_ids:
+        return {}
+    rows = await db.routinefiring.find_many(
+        where={"routine_id": {"in": routine_ids}},
+        order={"slot": "desc"},
+        distinct=["routine_id"],
+    )
+    latest: dict[str, Any] = {}
+    for row in rows:
+        latest.setdefault(row.routine_id, row)
+    return latest
 
 
 _NOT_FOUND = "Workflow not found"
@@ -83,13 +117,23 @@ def _reject(field: str, reason: str) -> HTTPException:
 
 def _check_schedule(cron: str, tz: str) -> None:
     try:
-        zone = ZoneInfo(tz)
+        ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError):
         raise _reject("timezone", f"unknown time zone: {tz}") from None
     try:
-        CronTrigger.from_crontab(cron, timezone=zone)
+        # A standard crontab (0 = Sunday), read through the one translation
+        # the SuperAgent's scheduler fires with (story 2.2).
+        crontab_trigger(cron, tz)
     except ValueError as exc:
         raise _reject("cron", f"invalid cron expression: {exc}") from None
+
+
+def _next_slot(cron: str, tz: str) -> datetime:
+    """The schedule's first slot after now, in UTC (the SuperAgent's rule)."""
+    try:
+        return next_slot(" ".join(cron.split()), tz, datetime.now(UTC))
+    except ValueError as exc:
+        raise _reject("cron", str(exc)) from None
 
 
 @router.post("", response_model=WorkflowResponse, status_code=201)
@@ -240,7 +284,8 @@ async def list_workflows(
         where=_visible_where(ctx),
         order={"created_at": "desc"},
     )
-    return [_to_response(r) for r in records]
+    latest = await _last_firings(db, [r.id for r in records])
+    return [_to_response(r, latest.get(r.id)) for r in records]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -249,7 +294,31 @@ async def get_workflow(
     request: Request,
     ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> WorkflowResponse:
-    return _to_response(await _find_visible(request.app.state.db, workflow_id, ctx))
+    db = request.app.state.db
+    record = await _find_visible(db, workflow_id, ctx)
+    latest = await _last_firings(db, [record.id])
+    return _to_response(record, latest.get(record.id))
+
+
+@router.get("/{workflow_id}/firings", response_model=list[FiringResponse])
+async def list_firings(
+    workflow_id: str,
+    request: Request,
+    ctx: Annotated[OfficeContext, Depends(require_office)],
+    limit: int = Query(20, ge=1, le=100),
+) -> list[FiringResponse]:
+    """A routine's firings, newest slot first (story 2.2, AD-22).
+
+    Visible exactly as the routine is: an owner sees any routine's in the
+    office, a member their own. A paused firing's approval card is in its
+    session, which only the routine's owner can open (OQ-15).
+    """
+    db = request.app.state.db
+    record = await _find_visible(db, workflow_id, ctx)
+    rows = await db.routinefiring.find_many(
+        where={"routine_id": record.id}, order={"slot": "desc"}, take=limit
+    )
+    return [_firing_response(r) for r in rows]
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)
@@ -268,8 +337,26 @@ async def update_workflow(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="an owner may pause another member's routine, not edit it",
         )
-    if update_data == {"status": "inactive"}:
+    if update_data.get("status") == "inactive":
+        # Pausing turns the schedule off; a slot is never claimed while off.
         update_data["schedule_enabled"] = False
+        update_data["next_run_at"] = None
+    elif update_data.get("status") == "scheduled":
+        # Story 2.2: the routine's own member turns its schedule on. It fires
+        # at the next slot after now — never a catch-up of missed slots.
+        if not getattr(existing, "schedule_cron", None):
+            raise _reject("status", "this routine has no schedule to turn on")
+        if not settings.connections_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="connections_disabled: a routine runs on connections, which "
+                "are turned off on this deployment (CONNECTIONS_ENABLED)",
+            )
+        _check_schedule(existing.schedule_cron, existing.schedule_tz or "UTC")
+        update_data["schedule_enabled"] = True
+        update_data["next_run_at"] = _next_slot(
+            existing.schedule_cron, existing.schedule_tz or "UTC"
+        )
     record = await db.workflowtemplate.update(
         where={"id": workflow_id}, data=update_data
     )

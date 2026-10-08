@@ -111,12 +111,24 @@ class Table:
         return await self.find_first(where, **kw)
 
     async def find_many(self, where: dict[str, Any] | None = None, **kw: Any) -> list:
-        self._check("find_many", where=where)
-        return [
-            self._out(r, kw.get("include"))
-            for r in self.rows
-            if _matches(r, where or {})
-        ]
+        self._check("find_many", where=where, **kw)
+        rows = [r for r in self.rows if _matches(r, where or {})]
+        order = kw.get("order")
+        if order:
+            ((key, direction),) = order.items()
+            rows.sort(key=lambda r: r[key], reverse=direction == "desc")
+        if kw.get("distinct"):
+            seen: set[tuple[Any, ...]] = set()
+            kept = []
+            for row in rows:  # Prisma keeps the first row of each, in order
+                ident = tuple(row.get(c) for c in kw["distinct"])
+                if ident not in seen:
+                    seen.add(ident)
+                    kept.append(row)
+            rows = kept
+        if kw.get("take") is not None:
+            rows = rows[: kw["take"]]
+        return [self._out(r, kw.get("include")) for r in rows]
 
     async def count(self, where: dict[str, Any] | None = None) -> int:
         self._check("count", where=where)
@@ -190,6 +202,13 @@ class FakeDB:
                 "run_count": 0,
                 "trigger_type": "manual",
             },
+        )
+
+        self.routinefiring = Table(
+            self,
+            "routinefiring",
+            unique=(("routine_id", "slot"),),
+            defaults={"detail": None, "session_id": None, "run_id": None},
         )
 
     # ── seeding helpers ────────────────────────────────────────────────────

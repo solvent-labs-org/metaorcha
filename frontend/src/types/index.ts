@@ -274,6 +274,32 @@ export interface WorkflowResponse {
   scope_allow?: string[]
   criteria?: Record<string, boolean>
   criteria_operands?: Record<string, Record<string, string | number | boolean>>
+  // Story 2.2: when the schedule next fires, and how the last firing ended.
+  next_run_at?: string | null
+  last_firing?: FiringResponse | null
+}
+
+/** AD-22: the one firing state vocabulary every pane and export uses. */
+export type FiringState =
+  | 'scheduled'
+  | 'running'
+  | 'attested_unsettled'
+  | 'settled'
+  | 'refused'
+  | 'paused'
+  | 'skipped'
+  | 'error'
+
+export interface FiringResponse {
+  id: string
+  slot: string
+  state: FiringState
+  detail: string | null
+  /** The firing's session: a paused firing's approval card waits there. */
+  session_id: string | null
+  run_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface CreateRoutineRequest {

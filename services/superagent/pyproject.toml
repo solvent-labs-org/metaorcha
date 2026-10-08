@@ -26,6 +26,10 @@ dependencies = [
   "cdv==1.0.1",
   "asyncpg>=0.29",
   "prisma>=0.15",
+  # routine schedules (story 2.2): the Gateway's cron dialect, and zoneinfo
+  # data for slim images
+  "apscheduler>=3.10.0",
+  "tzdata>=2024.1",
   "common-database",
   "common-pricing",
   "common-utils",
