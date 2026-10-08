@@ -253,6 +253,20 @@ def resolve_scope_class(
     return effective
 
 
+def is_recognised(capability: Any) -> bool:
+    """True when the platform rule has an entry or a verb token for ``capability``.
+
+    An unrecognised capability still resolves (to ``destructive``); this only
+    lets a refusal say *why* it is destructive.
+    """
+    if not is_valid_capability_id(capability):
+        return False
+    if capability in SYSTEM_TOOL_CLASSES:
+        return True
+    known = _DESTRUCTIVE_TOKENS | _WRITE_TOKENS | _READ_TOKENS
+    return any(t in known for t in _tokens(capability))
+
+
 def is_valid_capability_id(capability: Any) -> bool:
     """True iff the id fits AD-17's charset ``[A-Za-z0-9_.:-]+`` (so never ``#``)."""
     return isinstance(capability, str) and bool(CAPABILITY_PATTERN.match(capability))
@@ -262,6 +276,7 @@ __all__ = [
     "CAPABILITY_PATTERN",
     "SYSTEM_TOOL_CLASSES",
     "ScopeClass",
+    "is_recognised",
     "is_valid_capability_id",
     "platform_rule",
     "resolve_scope_class",

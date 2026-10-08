@@ -266,6 +266,34 @@ export interface WorkflowResponse {
   run_count: number
   created_at: string
   updated_at: string
+  // Routine fields (story 2.1); empty on a template saved from a chat.
+  schedule_cron?: string | null
+  schedule_tz?: string | null
+  schedule_enabled?: boolean
+  model?: string | null
+  scope_allow?: string[]
+  criteria?: Record<string, boolean>
+  criteria_operands?: Record<string, Record<string, string | number | boolean>>
+}
+
+export interface CreateRoutineRequest {
+  name: string
+  description?: string
+  goal: string
+  connections: string[]
+  /** `<connection DID>#<capability>`; destructive capabilities are refused at save. */
+  scope_allow: string[]
+  model: string
+  criteria: Record<string, boolean>
+  criteria_operands: Record<string, Record<string, string | number | boolean>>
+  cron: string
+  timezone: string
+}
+
+/** A refused routine save: the field at fault and a reason naming it. */
+export interface RoutineRejection {
+  field: string
+  reason: string
 }
 
 // ── Dev Agents ────────────────────────────────────────────────────────────────

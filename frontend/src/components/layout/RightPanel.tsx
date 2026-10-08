@@ -6,6 +6,7 @@ import { isComputerUseTrace } from '../../lib/computerUse'
 import { useSessionStore } from '../../store/session'
 import { AgentCard } from '../agents/AgentCard'
 import { ComputerUseViewport } from '../chat/ComputerUseViewport'
+import { RoutineEditorModal } from '../modals/RoutineEditorModal'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 
@@ -103,9 +104,11 @@ function RoutinesSection() {
     queryFn: () => workflows.list(),
   })
   const items = data ?? []
+  const [editorOpen, setEditorOpen] = useState(false)
 
   return (
     <div>
+      <RoutineEditorModal open={editorOpen} onClose={() => setEditorOpen(false)} />
       <p className="mb-2 px-4 text-[10px] font-semibold uppercase tracking-caps text-text-disabled">
         Routines
       </p>
@@ -123,12 +126,23 @@ function RoutinesSection() {
           >
             <p className="truncate text-label font-medium text-text-body">{wf.name}</p>
             <p className="truncate font-mono text-[10px] text-text-disabled">
-              {wf.agents_used.length > 0 ? wf.agents_used.join(' · ') : wf.status}
+              {wf.schedule_cron
+                ? `${wf.schedule_cron} ${wf.schedule_tz ?? ''}`.trim()
+                : wf.agents_used.length > 0
+                  ? wf.agents_used.join(' · ')
+                  : wf.status}
             </p>
           </li>
         ))}
       </ul>
-      <p className="mt-3 px-4">
+      <p className="mt-3 flex items-center gap-3 px-4">
+        <button
+          type="button"
+          onClick={() => setEditorOpen(true)}
+          className="text-[11px] text-brand-primary-light hover:underline"
+        >
+          New routine
+        </button>
         <Link to="/workflows" className="text-[11px] text-brand-primary-light hover:underline">
           Open all routines
         </Link>

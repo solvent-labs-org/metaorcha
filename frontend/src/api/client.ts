@@ -12,6 +12,7 @@ import type {
   WalletTransactionsResponse,
   WithdrawRequest,
   WorkflowResponse,
+  CreateRoutineRequest,
   WorkflowStatus,
 } from '../types'
 import type { PaginatedSessionsDTO, TranscriptEntryDTO } from '../types/transcript'
@@ -270,6 +271,12 @@ export const workflows = {
     apiFetch<WorkflowResponse>('/api/v1/workflows', {
       method: 'POST',
       body: JSON.stringify({ session_id, name, description }),
+    }),
+
+  createRoutine: (body: CreateRoutineRequest) =>
+    apiFetch<WorkflowResponse>('/api/v1/workflows/routines', {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   update: (id: string, patch: { name?: string; description?: string; status?: WorkflowStatus }) =>

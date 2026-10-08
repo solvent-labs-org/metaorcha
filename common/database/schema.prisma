@@ -317,6 +317,11 @@ model WorkflowTemplate {
   last_run_at          DateTime?
   run_count            Int       @default(0)
   status               String    @default("inactive")
+  // Story 2.1 (AD-19): a routine's declared criteria (name → bool, hashed into
+  // policy_version exactly as the chat path) and their operands, which are
+  // echoed into each criterion's verdict detail so the receipt carries them.
+  criteria             Json      @default("{}")
+  criteria_operands    Json      @default("{}")
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt
 

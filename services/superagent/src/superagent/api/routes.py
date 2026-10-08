@@ -439,6 +439,38 @@ async def delete_agent_env(
     await vault.delete_agent_env(user_id, agent_id, var_name)
 
 
+@router.post("/routines/validate")
+async def validate_routine(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Decide whether a routine may be saved (story 2.1, AD-18, AD-19).
+
+    The Gateway calls this before it persists anything. Returns
+    ``{"classes": {"<DID>#<capability>": "read" | "write"}}``, or 422 with
+    ``{"field", "reason"}`` naming what was refused — a destructive allow, an
+    allow the class rules do not recognise (unknown resolves to destructive),
+    a connection that is not current, or criteria outside the vocabulary.
+    """
+    from ..middleware.manifest_cache import MANIFEST_CACHE
+    from ..workflow.routine_rules import RoutineRejected, check_routine
+
+    async def read_manifest(did: str) -> dict[str, Any]:
+        return await MANIFEST_CACHE.get_manifest(did, fresh=True)
+
+    try:
+        classes = await check_routine(
+            connections=body.get("connections"),
+            scope_allow=body.get("scope_allow", []),
+            criteria=body.get("criteria", {}),
+            criteria_operands=body.get("criteria_operands", {}),
+            read_manifest=read_manifest,
+        )
+    except RoutineRejected as exc:
+        raise HTTPException(
+            status_code=422, detail={"field": exc.field, "reason": exc.reason}
+        ) from None
+    return {"classes": classes}
+
+
 @router.delete("/secrets/agent-env/{agent_id}")
 async def delete_all_agent_env(agent_id: str, user_id: str) -> dict[str, int]:
     """

@@ -1427,6 +1427,7 @@ dependencies = [
     { name = "pyjwt" },
     { name = "redis" },
     { name = "svix" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1446,6 +1447,7 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.15.1" },
     { name = "redis", specifier = ">=5" },
     { name = "svix", specifier = ">=1.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
 

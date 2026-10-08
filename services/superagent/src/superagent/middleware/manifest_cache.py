@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -13,6 +14,10 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 _TTL_SECONDS = 300  # 5 minutes
+# An agent id is one path segment of the Registry URL. Anything outside this
+# charset (a slash, a query, a fragment, a space) could point the request
+# somewhere else, so it is refused before any request is built.
+_AGENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
 
 
 class ManifestUnavailable(Exception):
@@ -75,14 +80,24 @@ class ManifestCache:
         return manifest
 
     async def _fetch(self, agent_id: str, *, strict: bool = False) -> dict[str, Any]:
+        if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
+            # ids arrive from requests: never let one shape the URL or a log line
+            logger.warning("Refused a manifest read: agent id is not one path segment")
+            if strict:
+                raise ManifestUnavailable("agent id is not one path segment")
+            return {"agent_id": agent_id, "capabilities": [], "security": {}}
         client = self._get_client()
         try:
-            resp = await client.get(f"/api/v1/agents/{agent_id}")
+            resp = await client.get("/api/v1/agents/" + agent_id)
             resp.raise_for_status()
             raw = resp.json()
             return self._normalise(raw)
         except Exception as exc:
-            logger.warning("Failed to fetch manifest for %s: %s", agent_id, exc)
+            logger.warning(
+                "Failed to fetch manifest for %s: %s",
+                agent_id.replace("\r", "\\r").replace("\n", "\\n"),
+                exc,
+            )
             if strict:
                 raise ManifestUnavailable(agent_id) from exc
             return {"agent_id": agent_id, "capabilities": [], "security": {}}
