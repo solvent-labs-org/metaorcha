@@ -52,6 +52,30 @@ class TestCDVObserver:
         assert (tmp_path / "sess-1.db").exists()
 
     @pytest.mark.asyncio
+    async def test_a_platform_tool_step_is_not_scored(self, tmp_path, monkeypatch):
+        # story 3.1: a system tool's step reaches the seam; it is nobody's
+        # answer to a goal, so no score and no prior under its DID
+        monkeypatch.setattr(
+            "superagent.verification.cdv_integration.settings",
+            MagicMock(cdv_store_dir=str(tmp_path)),
+        )
+        observer = CDVObserver()
+        record = StepResult(
+            call_id="c-clock",
+            agent_id="did:orcha:system:tools",
+            capability_id="get_datetime",
+            protocol="SYSTEM",
+            tool_name="get_datetime",
+            success=True,
+            content="2026-10-05T07:00:00+00:00",
+            session_id="sess-1",
+            metadata={"goal": ""},
+        )
+        await observer.on_step_complete(record)
+        assert "cdv" not in record.metadata
+        assert not (tmp_path / "sess-1.db").exists()
+
+    @pytest.mark.asyncio
     async def test_failed_step_skipped(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "superagent.verification.cdv_integration.settings",

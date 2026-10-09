@@ -48,10 +48,13 @@ VERDICT_FOR_CRITERION = {
 }
 # Verdict details that mean nothing was compared, though the verdict is a
 # fail. Mirrors validator/counts_match.py (_NO_OPERANDS, _NOT_EVALUATED, and
-# unreadable(<NEVER_CALLED | NO_PATH>)); pinned by
+# unreadable(<NEVER_CALLED | NO_PATH>)) and validator/run_observer.py
+# (NO_STEP_APPLICABLE: a run in which no step could be judged on the
+# criterion, story 3.1); pinned by
 # services/validator/tests/test_firing_view_contract.py.
 NOT_EVALUATED_DETAILS = {
     "counts_match": ("no operands declared", "counts_match could not be evaluated"),
+    "citations_required": ("no step was applicable to citations_required",),
 }
 NOT_EVALUATED_MARKERS = {
     "counts_match": ("unreadable(never called)", "unreadable(no path declared)"),

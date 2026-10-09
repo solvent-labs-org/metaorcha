@@ -161,3 +161,54 @@ async def test_every_criterion_maps_to_a_check_the_observer_signs() -> None:
         "checked",
         "checked: citations_required",
     )
+
+
+# ---------------------------------------------------------------------------
+# citations_required (story 3.1): a run no step could be judged on
+# ---------------------------------------------------------------------------
+
+
+def test_the_no_step_applicable_detail_is_the_validators() -> None:
+    from validator.run_observer import NO_STEP_APPLICABLE
+
+    details = firing_view.NOT_EVALUATED_DETAILS["citations_required"]
+    assert f"{NO_STEP_APPLICABLE} citations_required" in details
+
+
+@pytest.mark.asyncio
+async def test_a_run_of_platform_steps_only_is_refused_but_not_checked() -> None:
+    # The producer's own step shape: a platform tool's step is n/a on
+    # citations_required (superagent.middleware.criteria), so the run signs
+    # fail "no step was applicable" — a refusal, and on the pane
+    # "declared, not evaluated", never "checked: citations_required".
+    from superagent.middleware.criteria import (
+        criteria_step_meta,
+        system_step_declared_acceptance,
+    )
+
+    criteria = {"citations_required": True}
+    meta = criteria_step_meta(criteria, None)
+    meta["declared_acceptance"] = system_step_declared_acceptance(
+        criteria, "2026-10-05"
+    )
+    observer = RunAttestationObserver(db=FakeDB())
+    await observer.on_step_complete(
+        _step_result(
+            "c-clock",
+            agent_id="did:orcha:system:tools",
+            tool_name="get_datetime",
+            content="2026-10-05",
+            metadata=meta,
+        )
+    )
+    await observer.on_run_complete("sess-1")
+    (envelope,) = observer.envelopes.values()
+    (verdict,) = [
+        v for v in envelope["verdicts"] if v["check"] == "declared_acceptance"
+    ]
+    assert verdict["result"] == "fail"
+    assert firing_view.evaluated("citations_required", envelope) is False
+    assert firing_view.checks_view(criteria, envelope) == (
+        "not_evaluated",
+        "declared, not evaluated: citations_required",
+    )

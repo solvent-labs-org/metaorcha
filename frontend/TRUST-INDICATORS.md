@@ -9,7 +9,10 @@ Two kinds of check exist today:
 
 - **Structural check** — `services/superagent/.../middleware/pipeline.py`
   `_structural_verify`: the tool's output is well-formed (canvas envelope shape,
-  non-empty content). It gates nothing; it is a label on the step.
+  non-empty content). It gates nothing; it is a label on the step. A platform
+  system tool's step (story 3.1, `middleware/system_steps.py`) is in the
+  receipt with **no** structural verdict, so it is unchecked, never
+  "structurally checked".
 - **Settle gate** — `pricing/settle_gate.py`, the only check that gates an outcome
   (mock credit is written or refused). Its vocabulary: SDK verifier `schema`,
   `steps_root`, `steps_merkle_root`, `signature`; gate-side `charter_hash`,

@@ -39,7 +39,11 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..middleware.connections import is_connection
-from ..middleware.criteria import COUNTS_MATCH_OPERANDS, ROUTINE_CRITERIA
+from ..middleware.criteria import (
+    COUNTS_MATCH_OPERANDS,
+    ROUTINE_CRITERIA,
+    SUPPORTED_CRITERIA,
+)
 from ..middleware.scope_classes import (
     ScopeClass,
     is_recognised,
@@ -81,7 +85,12 @@ def check_criteria(criteria: Any, operands: Any) -> None:
         raise RoutineRejected("criteria", f"at most {MAX_CRITERIA} criteria")
     for key, value in criteria.items():
         if key not in ROUTINE_CRITERIA:
-            raise RoutineRejected("criteria", f"unsupported criterion: {key}")
+            why = (
+                f"{key} is chat-only for now (story 3.1)"
+                if key in SUPPORTED_CRITERIA
+                else f"unsupported criterion: {key}"
+            )
+            raise RoutineRejected("criteria", why)
         if not isinstance(value, bool):
             raise RoutineRejected("criteria", f"{key} must be true or false")
     if not isinstance(operands, dict):

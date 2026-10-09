@@ -34,6 +34,7 @@ from ..middleware.scope_gate import (
     approval_for,
     is_approved,
 )
+from ..middleware.system_steps import attest_system_tool_step, system_result_success
 from ..persistence.transcript_store import TRANSCRIPT_TOOL_META_KEY
 from ..pnd.candidate_compat import (
     cand_agent_id,
@@ -505,9 +506,12 @@ async def execute_agent_calls_node(
                 },
                 pending_events,
             )
+            _sys_start = datetime.now(UTC)
+            _sys_raw: Any = None
             try:
                 _system_tool_scope_gate(state, tool_name, args, call_id)
                 result = await SYSTEM_TOOL_REGISTRY.call(tool_name, args, state)
+                _sys_raw = result
                 if (
                     tool_name == "save_artifact"
                     and isinstance(result, dict)
@@ -549,6 +553,7 @@ async def execute_agent_calls_node(
             except Exception as exc:
                 logger.exception("System tool %r failed", tool_name)
                 content = f"Error: {exc}"
+                _sys_raw = content
             tool_messages.append(
                 ToolMessage(
                     content=content,
@@ -575,6 +580,17 @@ async def execute_agent_calls_node(
                     "content_preview": content[:300],
                 },
                 pending_events,
+            )
+            # FR-7: the platform tool call is a step the receipt covers.
+            await attest_system_tool_step(
+                call_id=call_id,
+                tool_name=tool_name,
+                args=args,
+                raw_result=_sys_raw,
+                content=content,
+                success=system_result_success(_sys_raw, content),
+                latency_ms=int((datetime.now(UTC) - _sys_start).total_seconds() * 1000),
+                state=state,
             )
             continue
 
