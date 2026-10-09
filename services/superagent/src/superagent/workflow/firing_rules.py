@@ -81,6 +81,8 @@ def routine_context(routine: Any, firing_id: str) -> dict[str, Any]:
         "firing_id": firing_id,
         "connections": [str(c) for c in (routine.agents_used or [])],
         "scope_allow": [str(a) for a in allow] if isinstance(allow, list) else [],
+        # Story 2.4: run-level criteria (counts_match) read their sources here.
+        "criteria_operands": _json(getattr(routine, "criteria_operands", None)),
     }
 
 

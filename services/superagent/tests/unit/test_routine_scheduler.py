@@ -351,6 +351,7 @@ async def test_a_due_routine_claims_then_records_then_runs() -> None:
         "firing_id": firing["id"],
         "connections": [DID],
         "scope_allow": [f"{DID}#create_comment"],
+        "criteria_operands": {},
     }
     # the session is made in the routine's office, as its owner
     ((session_id, user_id, title, office_id),) = sessions

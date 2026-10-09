@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .counts_match import evaluate_counts_match
 from .criteria import compose_policy_version
 from .run_envelope import (
     build_run_envelope,
@@ -101,6 +102,11 @@ class _AccumulatedStep:
     # Story 1.5 / AD-21: ``{"result": "pass"|"warn", "detail": ...}`` when a
     # human approved or declined this call at the scope gate.
     scope_approval: dict[str, Any] | None = None
+    # Story 2.4: ``{"counts_match": {operands}}`` on every step of a routine
+    # firing that declared a run-level criterion; evaluated at seal.
+    run_criteria: dict[str, Any] | None = None
+    # False when ``output`` is the display copy, not the AD-16 pre-image.
+    has_preimage: bool = True
 
 
 class RunAttestationObserver:
@@ -180,6 +186,7 @@ class RunAttestationObserver:
             declared = meta.get("declared_acceptance")
             digest = meta.get("criteria_digest")
             approval = meta.get("scope_approval")
+            run_criteria = meta.get("run_criteria")
             # AD-16: hash the raw, redacted pre-image; the display content is
             # the fallback only where the producer could not build one.
             preimage = getattr(record, "output_preimage", None)
@@ -201,6 +208,8 @@ class RunAttestationObserver:
                 criteria_digest=digest if isinstance(digest, str) else None,
                 completed_at=_parse_ts(record.completed_at),
                 scope_approval=approval if isinstance(approval, dict) else None,
+                run_criteria=run_criteria if isinstance(run_criteria, dict) else None,
+                has_preimage=preimage is not None,
             )
             steps = self._steps.setdefault(session_id, [])
             # RFC 0003: call_id is unique within the run. A retried call
@@ -235,8 +244,22 @@ class RunAttestationObserver:
         declared = self._declared_acceptance(steps)
         if declared is not None:
             verdicts.append(declared)
+        verdicts.extend(self._run_criteria(steps))
         verdicts.extend(self._scope_approvals(steps))
         return verdicts
+
+    @staticmethod
+    def _run_criteria(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """The run-level criteria verdicts (story 2.4): ``counts_match`` only.
+
+        Every step of the firing carries the same operands, so the first one
+        that carries them is read. A run that declared the check signs it,
+        pass or fail — never left out.
+        """
+        for step in steps:
+            if step.run_criteria and "counts_match" in step.run_criteria:
+                return [evaluate_counts_match(steps, step.run_criteria["counts_match"])]
+        return []
 
     @staticmethod
     def _scope_approvals(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:

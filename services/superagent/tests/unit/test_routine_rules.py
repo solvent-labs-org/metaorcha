@@ -23,6 +23,14 @@ from superagent.workflow.routine_rules import (
 
 DID = "did:orcha:agent:docs-mcp-0a1b2c3d"
 OTHER = "did:orcha:agent:other-99887766"
+NOTION = "did:orcha:agent:notion-5e6f7a8b"
+COUNTS = {
+    "left": f"{DID}#list_issues",
+    "left_path": "/total_count",
+    "right": f"{NOTION}#query_database",
+    "right_path": "/results",
+    "key": "open_issues",
+}
 
 
 def _manifest(**over: Any) -> dict[str, Any]:
@@ -154,7 +162,7 @@ def test_criteria_and_operands_accepted() -> None:
     ("criteria", "operands", "field"),
     [
         (["citations_required"], {}, "criteria"),
-        ({"counts_match": True}, {}, "criteria"),  # not evaluated yet (story 2.3)
+        ({"exit_zero": True}, {}, "criteria"),  # not built at this base
         ({"citations_required": "yes"}, {}, "criteria"),
         ({f"c{i}": True for i in range(MAX_CRITERIA + 1)}, {}, "criteria"),
         ({}, [], "criteria_operands"),
@@ -224,3 +232,178 @@ def test_route_refuses_a_destructive_allow_with_field_and_reason(client) -> None
     detail = resp.json()["detail"]
     assert detail["field"] == "scope_allow"
     assert detail["reason"].startswith("delete_repo is destructive")
+
+
+# -- counts_match (story 2.4) --------------------------------------------------
+
+
+def test_counts_match_with_its_sources_is_accepted() -> None:
+    check_criteria({"counts_match": True}, {"counts_match": dict(COUNTS)})
+    without_key = {k: v for k, v in COUNTS.items() if k != "key"}
+    check_criteria({"counts_match": True}, {"counts_match": without_key})
+    # declared off: no operands needed, no verdict, still in the digest
+    check_criteria({"counts_match": False}, {})
+
+
+@pytest.mark.parametrize(
+    ("operands", "fragment"),
+    [
+        ({}, "needs left and right"),
+        ({"counts_match": {"left": COUNTS["left"]}}, "needs left and right"),
+        (
+            {"counts_match": {"left": COUNTS["left"], "right": COUNTS["right"]}},
+            "needs left_path and right_path",
+        ),
+        ({"counts_match": {**COUNTS, "right_path": ""}}, "needs left_path"),
+        ({"counts_match": {**COUNTS, "lefty": "x"}}, "lefty is not an operand"),
+        ({"counts_match": {**COUNTS, "left_path": 3}}, "must be a string"),
+        ({"counts_match": {**COUNTS, "left": DID}}, "left must be"),
+        (
+            {"counts_match": {**COUNTS, "left": "did:web:x.example#list_issues"}},
+            "left must be",
+        ),
+        ({"counts_match": {**COUNTS, "right": f"{NOTION}#Bad Cap!"}}, "right must be"),
+        (
+            {"counts_match": {**COUNTS, "left_path": "total_count"}},
+            "JSON Pointer",
+        ),
+        (
+            {
+                "counts_match": {
+                    **COUNTS,
+                    "right": COUNTS["left"],
+                    "right_path": "/total_count",
+                }
+            },
+            "always passes",
+        ),
+        (
+            {
+                "counts_match": {
+                    "left": COUNTS["left"],
+                    "right": COUNTS["left"],
+                    "left_path": "/n",
+                    "right_path": "/n",
+                }
+            },
+            "always passes",
+        ),
+    ],
+)
+def test_counts_match_outside_the_rules_is_refused(operands, fragment) -> None:
+    with pytest.raises(RoutineRejected) as exc:
+        check_criteria({"counts_match": True}, operands)
+    assert exc.value.field == "criteria_operands"
+    assert fragment in exc.value.reason
+
+
+def _notion() -> dict[str, Any]:
+    return _manifest(
+        agent_id=NOTION,
+        capabilities=[
+            {"capability_id": c}
+            for c in ("query_database", "API-post-database-query", "databases")
+        ],
+    )
+
+
+async def _check_source(right: str, allow: list[str]) -> dict[str, str]:
+    return await _check(
+        allow,
+        connections=[DID, NOTION],
+        criteria={"counts_match": True},
+        criteria_operands={"counts_match": {**COUNTS, "right": right}},
+        read_manifest=_reader({DID: _manifest(), NOTION: _notion()}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_write_source_needs_to_be_allowed_without_asking() -> None:
+    # Notion's MCP query tool is a POST: it resolves to write, so a firing
+    # reads it unattended only when the routine allows it.
+    source = f"{NOTION}#API-post-database-query"
+    with pytest.raises(RoutineRejected) as exc:
+        await _check_source(source, [])
+    assert exc.value.field == "criteria_operands"
+    assert f"allow {source} without asking" in exc.value.reason
+
+    classes = await _check_source(source, [source])
+    assert classes == {source: "write"}
+
+
+@pytest.mark.asyncio
+async def test_a_source_resolving_to_destructive_is_refused() -> None:
+    # no recognised verb: resolves to destructive, and can never be allowed
+    with pytest.raises(RoutineRejected) as exc:
+        await _check_source(f"{NOTION}#databases", [])
+    assert exc.value.field == "criteria_operands"
+    assert "resolves to destructive" in exc.value.reason
+
+
+@pytest.mark.asyncio
+async def test_a_manifest_tightening_a_source_to_write_is_honoured() -> None:
+    notion = {**_notion(), "scope_classes": {"query_database": "write"}}
+    with pytest.raises(RoutineRejected) as exc:
+        await _check(
+            [],
+            connections=[DID, NOTION],
+            criteria={"counts_match": True},
+            criteria_operands={"counts_match": dict(COUNTS)},
+            read_manifest=_reader({DID: _manifest(), NOTION: notion}),
+        )
+    assert exc.value.field == "criteria_operands"
+    assert "query_database is a write" in exc.value.reason
+
+
+@pytest.mark.asyncio
+async def test_counts_match_sources_on_the_routines_connections_are_accepted() -> None:
+    classes = await _check(
+        [f"{DID}#list_issues"],
+        connections=[DID, NOTION],
+        criteria={"counts_match": True},
+        criteria_operands={"counts_match": dict(COUNTS)},
+        read_manifest=_reader({DID: _manifest(), NOTION: _notion()}),
+    )
+    assert classes == {f"{DID}#list_issues": "read"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operands", "fragment"),
+    [
+        (COUNTS, "does not name one of this routine's connections"),
+        (
+            {**COUNTS, "right": f"{DID}#query_database"},
+            f"query_database is not a capability of {DID}",
+        ),
+    ],
+)
+async def test_counts_match_sources_off_the_routine_are_refused(
+    operands, fragment
+) -> None:
+    with pytest.raises(RoutineRejected) as exc:
+        await _check(
+            [],
+            criteria={"counts_match": True},
+            criteria_operands={"counts_match": dict(operands)},
+        )
+    assert exc.value.field == "criteria_operands"
+    assert fragment in exc.value.reason
+
+
+def test_route_refuses_a_counts_match_source_off_the_routine(client) -> None:
+    get = AsyncMock(return_value=_manifest())
+    with patch("superagent.middleware.manifest_cache.MANIFEST_CACHE.get_manifest", get):
+        resp = client.post(
+            "/routines/validate",
+            json={
+                "connections": [DID],
+                "scope_allow": [],
+                "criteria": {"counts_match": True},
+                "criteria_operands": {"counts_match": COUNTS},
+            },
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["field"] == "criteria_operands"
+    assert NOTION in detail["reason"]

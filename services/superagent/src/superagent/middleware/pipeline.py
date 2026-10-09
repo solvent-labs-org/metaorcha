@@ -280,19 +280,22 @@ class ExecutionMiddleware:
         normalised["verified"] = verified
         normalised["verdict_reason"] = verdict_reason
 
-        declared_meta: dict[str, Any] = {}
+        declared_meta = self._criteria_meta()
         criteria = self._state.get("_declared_criteria")
         if isinstance(criteria, dict) and criteria:
-            from .criteria import criteria_digest, evaluate_declared_criteria
+            from .criteria import evaluate_declared_criteria, step_criteria
 
-            accepted, declared_reason = evaluate_declared_criteria(
-                criteria, content_str
-            )
-            declared_meta["criteria_digest"] = criteria_digest(criteria)
-            declared_meta["declared_acceptance"] = {
-                "result": "pass" if accepted else "fail",
-                "detail": declared_reason,
-            }
+            # A run-level criterion (counts_match) is judged at seal, so a
+            # routine declaring only that signs no per-step acceptance.
+            per_step = step_criteria(criteria)
+            if per_step:
+                accepted, declared_reason = evaluate_declared_criteria(
+                    per_step, content_str
+                )
+                declared_meta["declared_acceptance"] = {
+                    "result": "pass" if accepted else "fail",
+                    "detail": declared_reason,
+                }
 
         # Step 6: Checklist auto-update
         success = not (
@@ -412,7 +415,11 @@ class ExecutionMiddleware:
                 latency_ms=int((datetime.now(UTC) - started).total_seconds() * 1000),
                 base_fee=str(base_fee),
                 verdict={"verified": False, "reason": error_text[:120]},
-                metadata={"goal": self._session_goal(), **(scope_meta or {})},
+                metadata={
+                    "goal": self._session_goal(),
+                    **self._criteria_meta(),
+                    **(scope_meta or {}),
+                },
                 args=dict(args),
             )
         except Exception:
@@ -540,6 +547,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": content[:120]},
                 metadata={
                     "goal": self._session_goal(),
+                    **self._criteria_meta(),
                     "scope_approval": verdict or scope_verdict(approved=False),
                 },
                 args=dict(args),
@@ -639,6 +647,24 @@ class ExecutionMiddleware:
                 state=self._state,
             )
         return f"Unsupported protocol: {protocol}"
+
+    def _criteria_meta(self) -> dict[str, Any]:
+        """The turn's criteria digest and run-level operands, for every step.
+
+        Stamped on successful, failed and declined steps alike, so a run whose
+        source calls all failed still carries its run-level criteria and the
+        observer signs them as failed rather than leaving them out (story 2.4).
+        """
+        criteria = self._state.get("_declared_criteria")
+        if not isinstance(criteria, dict) or not criteria:
+            return {}
+        try:
+            from .criteria import criteria_step_meta
+
+            return criteria_step_meta(criteria, self._state.get("routine_context"))
+        except Exception:
+            logger.exception("criteria metadata not computed")
+            return {}
 
     def _session_goal(self) -> str:
         """Session goal: checklist goal when present, else first HumanMessage."""

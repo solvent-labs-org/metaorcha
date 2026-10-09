@@ -11,7 +11,20 @@ import { Button } from '../ui/Button'
 // destructive one (or one the class rules do not know) is refused at save.
 
 const CONNECTION_PREFIX = 'did:orcha:agent:'
-const CRITERIA = ['citations_required'] as const
+const CRITERIA = ['citations_required', 'counts_match'] as const
+
+// Story 2.4: counts_match compares two of the routine's connections. Each
+// source is "<connection DID>#<capability>"; each path is a JSON Pointer into
+// that call's output (e.g. /total_count), required; the key is a label for
+// the receipt. A source must be readable unattended (read, or an allowed write).
+const COUNTS_FIELDS = [
+  { name: 'left', label: 'Left source *', placeholder: 'did:orcha:agent:…#list_issues' },
+  { name: 'left_path', label: 'Left path *', placeholder: '/total_count' },
+  { name: 'right', label: 'Right source *', placeholder: 'did:orcha:agent:…#query_database' },
+  { name: 'right_path', label: 'Right path *', placeholder: '/results' },
+  { name: 'key', label: 'Key', placeholder: 'open_issues' },
+] as const
+type CountsField = (typeof COUNTS_FIELDS)[number]['name']
 
 const inputClass =
   'h-9 px-3 rounded-md bg-surface-base border border-surface-borderLight text-label text-text-body placeholder:text-text-disabled focus:outline-none focus:border-brand-primary'
@@ -86,6 +99,7 @@ export function RoutineEditorModal({ open, onClose }: { open: boolean; onClose: 
   const [allow, setAllow] = useState<string[]>([])
   const [model, setModel] = useState('')
   const [criteria, setCriteria] = useState<Record<string, boolean>>({})
+  const [counts, setCounts] = useState<Partial<Record<CountsField, string>>>({})
   const [cron, setCron] = useState('0 9 * * 1')
   const [timezone, setTimezone] = useState(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -111,6 +125,14 @@ export function RoutineEditorModal({ open, onClose }: { open: boolean; onClose: 
 
   const canSave = name.trim() && goal.trim() && model.trim() && cron.trim() && connections.length > 0
 
+  // Only filled fields are sent; the server names any that is missing or wrong.
+  const countsOperands = () =>
+    Object.fromEntries(
+      Object.entries(counts)
+        .map(([k, v]) => [k, (v ?? '').trim()])
+        .filter(([, v]) => v),
+    )
+
   const handleSave = async () => {
     if (!canSave) return
     setSaving(true)
@@ -123,8 +145,7 @@ export function RoutineEditorModal({ open, onClose }: { open: boolean; onClose: 
         scope_allow: allow,
         model: model.trim(),
         criteria,
-        // Operands are accepted by the API; no criterion reads one yet (2.3).
-        criteria_operands: {},
+        criteria_operands: criteria.counts_match ? { counts_match: countsOperands() } : {},
         cron: cron.trim(),
         timezone: timezone.trim() || 'UTC',
       })
@@ -218,6 +239,24 @@ export function RoutineEditorModal({ open, onClose }: { open: boolean; onClose: 
               {key}
             </label>
           ))}
+          {criteria.counts_match && (
+            <div className="grid grid-cols-2 gap-2 pl-6">
+              {COUNTS_FIELDS.map((f) => (
+                <div key={f.name} className={`flex flex-col gap-1 ${f.name === 'key' ? 'col-span-2' : ''}`}>
+                  <label htmlFor={`rt-counts-${f.name}`} className="text-[10px] uppercase tracking-caps text-text-disabled">
+                    {f.label}
+                  </label>
+                  <input
+                    id={`rt-counts-${f.name}`}
+                    value={counts[f.name] ?? ''}
+                    onChange={(e) => setCounts((cur) => ({ ...cur, [f.name]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    className={`${inputClass} font-mono text-[11px]`}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
           {fieldError('criteria')}
           {fieldError('criteria_operands')}
         </fieldset>
