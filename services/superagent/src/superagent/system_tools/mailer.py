@@ -1,7 +1,7 @@
-"""Mailer system tool — email a run's Verified Runs audit as a plain-text receipt.
+"""Mailer system tool — email a session's run evidence as a plain-text run summary.
 
 Sandbox demo tool (`did:orcha:system:mailer`, capability `send_run_receipt`).
-Registered only when ``SANDBOX_MAILER=true``. The receipt body is a fixed
+Registered only when ``SANDBOX_MAILER=true``. The summary body is a fixed
 template — no user-controlled content beyond the run's own goal/steps.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import textwrap
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -23,8 +24,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RESEND_URL = "https://api.resend.com/emails"
-_FROM = "Orcha Sandbox <receipts@orcha.ai>"
-_SUBJECT = "Your Orcha run receipt"
+_FROM = "Metaorcha Sandbox <receipts@orcha.ai>"
+_SUBJECT = "Your Metaorcha run summary"
+_SEALED_AT_TURN_END = (
+    "The receipt for the turn that sent this summary is sealed when that turn "
+    "ends, so it is not the one described above."
+)
 _REPO_LINE = "Run it yourself: https://github.com/solvent-labs-org/metaorcha"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _GOAL_MAX_LEN = 200
@@ -50,7 +55,7 @@ def _cap_key(user_id: str) -> str:
 
 
 async def _cap_reached(user_id: str) -> bool:
-    """True when the user already sent a receipt today. Fail-open if Redis is down."""
+    """True when the user already sent a summary today. Fail-open if Redis is down."""
     try:
         return bool(await _get_redis().get(_cap_key(user_id)))
     except Exception:
@@ -66,16 +71,22 @@ async def _mark_cap(user_id: str) -> None:
 
 
 def _render_receipt(audit: RunAuditResponse) -> str:
-    """Render the fixed plain-text receipt template from a run audit."""
+    """Render the fixed plain-text run-summary template from a run audit."""
     lines = [
-        "Your Orcha run receipt",
+        "Your Metaorcha run summary",
         "",
         f"Goal: {audit.goal[:_GOAL_MAX_LEN]}",
         "",
         "Steps:",
     ]
     for step in audit.steps:
-        verdict = {True: "verified", False: "failed"}.get(step.verified, "not checked")
+        # The structural check (TRUST-INDICATORS.md): it gates nothing, so a
+        # step is "structurally checked", never "verified". A failed step may
+        # be one the check failed or one that never ran (a refused or errored
+        # call); the export does not say which, so neither does this line.
+        verdict = {True: "structurally checked", False: "failed"}.get(
+            step.verified, "not checked"
+        )
         agent_tail = step.agent_id.rsplit(":", 1)[-1]
         line = (
             f"  {step.seq}. {agent_tail} · {step.protocol or '—'} · "
@@ -89,7 +100,8 @@ def _render_receipt(audit: RunAuditResponse) -> str:
         "",
         (
             f"Summary: {summary.total_steps} steps — "
-            f"{summary.steps_verified} verified, {summary.steps_failed} failed"
+            f"{summary.steps_verified} structurally checked, "
+            f"{summary.steps_failed} failed"
             + (
                 f", {summary.steps_unchecked} not checked"
                 if summary.steps_unchecked
@@ -102,7 +114,17 @@ def _render_receipt(audit: RunAuditResponse) -> str:
         lines.append(f"Settlement: {audit.settlement.label}")
     if summary.duration_ms is not None:
         lines.append(f"Duration: {summary.duration_ms} ms")
-    lines += ["", _REPO_LINE]
+    # FR-8: what a signed receipt covers travels with every export of it.
+    # This summary is sent mid-turn, before the turn that sent it seals.
+    lines += [
+        "",
+        "What a signed receipt covers:",
+        *textwrap.wrap(audit.coverage.statement, width=72),
+        *textwrap.wrap(audit.coverage.export, width=72),
+        *textwrap.wrap(_SEALED_AT_TURN_END, width=72),
+        "",
+        _REPO_LINE,
+    ]
     return "\n".join(lines)
 
 
@@ -122,7 +144,7 @@ async def _send_email(api_key: str, to_email: str, body: str) -> None:
 
 
 async def _send_run_receipt(args: dict[str, Any], state: dict[str, Any]) -> str:
-    """Email the session's run audit as a fixed-template plain-text receipt."""
+    """Email the session's run audit as a fixed-template plain-text run summary."""
     from ..api.audit import build_run_audit, load_settlement
     from ..persistence.transcript_store import load_transcript_rows
 
@@ -140,7 +162,7 @@ async def _send_run_receipt(args: dict[str, Any], state: dict[str, Any]) -> str:
 
     user_id = str(state.get("user_id") or "anonymous")
     if await _cap_reached(user_id):
-        return "Error: receipt email limit reached (1/day)"
+        return "Error: run summary email limit reached (1/day)"
 
     rows = await load_transcript_rows(session_id)
     evidence = await load_settlement(session_id)
@@ -149,11 +171,11 @@ async def _send_run_receipt(args: dict[str, Any], state: dict[str, Any]) -> str:
     try:
         await _send_email(api_key, to_email, body)
     except Exception:
-        logger.exception("mailer: failed to send receipt to %s", to_email)
-        return "Error: failed to send receipt"
+        logger.exception("mailer: failed to send the run summary to %s", to_email)
+        return "Error: failed to send the run summary"
 
     await _mark_cap(user_id)
-    return f"Receipt sent to {to_email} for session {session_id}"
+    return f"Run summary sent to {to_email} for session {session_id}"
 
 
 def register_mailer_tools(registry: SystemToolRegistry) -> None:
@@ -165,9 +187,9 @@ def register_mailer_tools(registry: SystemToolRegistry) -> None:
         SystemToolSpec(
             name="send_run_receipt",
             description=(
-                "Email the run's audit (goal, per-step verdicts, cost) as a "
-                "plain-text receipt. Pass the visitor's email and the session_id "
-                "to receipt. At most one receipt per user per day."
+                "Email the run's evidence (goal, per-step checks, cost) as a "
+                "plain-text run summary. Pass the visitor's email and the "
+                "session_id to summarise. At most one summary per user per day."
             ),
             parameters={
                 "type": "object",

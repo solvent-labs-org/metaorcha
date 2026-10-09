@@ -643,7 +643,7 @@ class SessionRunner:
             await self._clear_active_stream_task(session_id, current_task)
             await unregister_run(session_id)
             # Persist even on error/cancel: a failed run is exactly what the
-            # run audit (Verified Runs) is for. Never let a persist failure
+            # run audit (run evidence) is for. Never let a persist failure
             # break stream teardown.
             stream_msgs = values_messages_sink.get("messages")
             stream_list = stream_msgs if isinstance(stream_msgs, list) else None
@@ -750,7 +750,7 @@ class SessionRunner:
             await self._clear_active_stream_task(session_id, current_task)
             await unregister_run(session_id)
             # Persist even on error/cancel: a failed run is exactly what the
-            # run audit (Verified Runs) is for. Never let a persist failure
+            # run audit (run evidence) is for. Never let a persist failure
             # break stream teardown.
             stream_msgs = values_messages_sink.get("messages")
             stream_list = stream_msgs if isinstance(stream_msgs, list) else None

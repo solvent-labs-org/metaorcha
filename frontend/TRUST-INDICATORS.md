@@ -55,11 +55,15 @@ Two kinds of check exist today:
 | Receipt control "Receipt" / "receipt in the owner's session" | `components/layout/RightPanel.tsx` `FiringLines` | an `attestations` row for the firing's `run_id` in the firing's own session (`receipt_available`); the viewer owning that session (`receipt_downloadable`) | **added in story 2.5** — the button saves the stored envelope bytes via `lib/downloadReceipt.ts`; a failed download shows its error inline. An office owner viewing a member's firing sees the static text, because the receipt route lets only the session owner through. Absent when no envelope is stored |
 | Mailer receipt "Settlement: `<settlement label>`" | `services/superagent/.../system_tools/mailer.py` `_render_receipt` (not frontend; listed so the map is whole) | `audit.settlement.label` from the same export | **added in story 2.6** — a line after the summary only when `settlement` is present. The summary adds ", N not checked" for unchecked steps, which are no longer counted as verified |
 | Workflows page "Last run" | `pages/Workflows.tsx` `WorkflowCard` | the last firing's server label (same as the pane) and its slot | **relabelled in story 2.5** — was the template's `updated_at`, which no run produced; now "`<label>` · `<relative slot time>`", or "—" with no firing. A `scheduled` template now reads the plain word "scheduled" (it was the "Running" badge) |
+| Export coverage block `coverage` (statement + "The signed receipt for run … has N step(s). This export's step list is the session's transcript …, not itself signed.") | `GET /sessions/{id}/audit` (not frontend; listed so the map is whole) | the SDK verifier's `coverage_statement`, computed from the run's sealed envelope at export time, never stored | **added in story 3.2** (FR-8) — in every export, chat and firing alike, including one with no receipt ("No signed receipt was read for this export.") and a deployment without the SDK (a pinned copy of the same text, and "could not check its signature"). "The signed receipt" is said only after the stored envelope verified offline at export time; one that does not verify reads "A stored receipt for run … did not verify" with no step count, tools or `models` read from it. `orcha verify` prints the same statement as a "Coverage:" block |
+| Mailer summary "structurally checked" / "failed" / "not checked" per step, and "What a signed receipt covers:" | `services/superagent/.../system_tools/mailer.py` `_render_receipt` | structural check per step; `audit.coverage` | **relabelled in story 3.2** — was "verified" / "failed"; "failed" stays bare because the export does not say whether the structural check failed or never ran (an errored or refused call); the mail is a "run summary" (it is not the signed receipt), says its own turn's receipt seals after it, and names Metaorcha in its sender and subject |
 
-Recorded, not changed here (outside the frontend; owned by story 3.2, export copy):
+Recorded, not changed here:
 
 - Audit package fields `summary.steps_verified` / `steps_failed` describe the
   structural check, not the gate (story 2.6 stopped counting unchecked steps as
-  verified and renamed the `note` to Metaorcha; the field names stay).
-- Sandbox mailer receipt (`system_tools/mailer.py`) prints "verified" / "failed"
-  per step from the same structural field ("not checked" when absent).
+  verified; the field names stay, since renaming them breaks API readers). The
+  mailer and every UI label render them as "structurally checked" / "failed".
+- No string describes the record as covering all of the agent's work:
+  `common/utils/tests/test_record_wording.py` sweeps the tree for the phrases
+  it forbids (README is frozen and checked when it next changes).

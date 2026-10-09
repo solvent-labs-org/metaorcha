@@ -196,7 +196,7 @@ async def get_session_audit(
     ctx: Annotated[OfficeContext, Depends(require_office)],
 ) -> dict[str, Any]:
     payload = ctx.payload
-    """Proxy the SuperAgent Verified Runs audit package for this session."""
+    """Proxy the SuperAgent run evidence package for this session."""
     sa = request.app.state.superagent
     await assert_session_access(request, session_id, ctx)
     resp = await sa.get(
