@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from common.utils.src import firing_view
 from common.utils.src.cron import crontab_trigger, next_slot
 
 from ..config import settings
@@ -31,21 +33,130 @@ def _json_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _firing_response(row: Any) -> FiringResponse:
-    state = getattr(row.state, "value", row.state)
-    return FiringResponse(
-        id=row.id,
-        slot=row.slot,
-        state=str(state),
-        detail=row.detail,
-        session_id=row.session_id,
-        run_id=row.run_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+def _state(row: Any) -> str:
+    return str(getattr(row.state, "value", row.state))
 
 
-def _to_response(record: object, last_firing: Any = None) -> WorkflowResponse:
+# States whose run was sealed: the only ones with an envelope or a ledger row
+# to read (story 2.5).
+_SEALED = ("settled", "refused", "attested_unsettled")
+# States a gate decision is shown for: the row's state is the truth (AD-22).
+_GATED = ("settled", "refused")
+
+
+async def _envelopes(db: Any, rows: list[Any]) -> dict[tuple[str, str], Any] | None:
+    """Stored envelopes keyed by ``(run_id, session_id)``; None if unread.
+
+    An envelope counts for a firing only in the firing's own session.
+    """
+    if not rows:
+        return {}
+    try:
+        found = await db.attestation.find_many(
+            where={
+                "run_id": {"in": sorted({r.run_id for r in rows})},
+                "session_id": {"in": sorted({r.session_id for r in rows})},
+            }
+        )
+    except Exception:
+        logger.warning("routine firings: envelopes not read", exc_info=True)
+        return None
+    return {(a.run_id, a.session_id): a.payload for a in found}
+
+
+async def _ledger(db: Any, rows: list[Any]) -> dict[str, list[Any]] | None:
+    """Each run's ``attested_settlements`` rows, oldest first; None if unread."""
+    if not rows:
+        return {}
+    try:
+        found = await db.attestedsettlement.find_many(
+            where={"run_id": {"in": sorted({r.run_id for r in rows})}},
+            order={"created_at": "asc"},
+        )
+    except Exception:
+        logger.warning("routine firings: ledger not read", exc_info=True)
+        return None
+    by_run: dict[str, list[Any]] = {}
+    for row in found:
+        by_run.setdefault(row.run_id, []).append(row)
+    return by_run
+
+
+async def _firing_views(
+    db: Any,
+    rows: Iterable[Any],
+    criteria_of: dict[str, dict[str, Any]],
+    viewer_id: str,
+) -> dict[str, FiringResponse]:
+    """The pane's view of each firing, keyed by firing id (story 2.5).
+
+    The state and its label come from the row. Two batched reads add to it,
+    each in its own ``try`` so a failed read leaves its fields empty and
+    never turns into a claim: the stored envelopes (receipt, declared checks)
+    and the settlement ledger (gate, the "no settlement decision" note).
+    """
+    rows = list(rows)
+    sealed = [r for r in rows if r.run_id and _state(r) in _SEALED]
+    envelopes = await _envelopes(db, [r for r in sealed if r.session_id])
+    ledger = await _ledger(db, sealed)
+
+    views: dict[str, FiringResponse] = {}
+    for row in rows:
+        state = _state(row)
+        is_sealed = bool(row.run_id) and state in _SEALED
+        runs = ledger.get(row.run_id, []) if ledger is not None else None
+        ledger_seen = bool(runs) if is_sealed and runs is not None else None
+
+        gate = gate_label = None
+        checks_on_row: list[str] = []
+        if state in _GATED and runs:
+            deciding = firing_view.deciding_row(runs)
+            gate = firing_view.gate_kind(deciding)
+            gate_label = firing_view.VERDICT_ONLY if gate == "verdict_only" else None
+            checks_on_row = firing_view.gate_checks(deciding)
+
+        receipt, checks, checks_label = False, None, None
+        key = (row.run_id, row.session_id)
+        if is_sealed and envelopes is not None and key in envelopes:
+            receipt = True
+            # An envelope the gate found failed verification is no evidence
+            # of any check; the label already names the failed check.
+            untrusted = bool(runs) and firing_view.envelope_untrusted(
+                firing_view.deciding_row(runs)
+            )
+            checks, checks_label = firing_view.checks_view(
+                criteria_of.get(row.routine_id), envelopes[key], untrusted
+            )
+
+        views[row.id] = FiringResponse(
+            id=row.id,
+            slot=row.slot,
+            state=state,
+            detail=row.detail,
+            session_id=row.session_id,
+            run_id=row.run_id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            label=firing_view.state_label(state, row.detail),
+            note=firing_view.note(state, row.detail, ledger_seen),
+            gate=gate,
+            gate_label=gate_label,
+            gate_checks=checks_on_row,
+            receipt_available=receipt,
+            receipt_downloadable=receipt and row.user_id == viewer_id,
+            checks=checks,
+            checks_label=checks_label,
+        )
+    return views
+
+
+def _criteria_of(records: Iterable[Any]) -> dict[str, dict[str, Any]]:
+    return {r.id: _json_dict(getattr(r, "criteria", None)) for r in records}
+
+
+def _to_response(
+    record: object, last_firing: FiringResponse | None = None
+) -> WorkflowResponse:
     parameters = _json_dict(getattr(record, "parameters", None))
     allow = parameters.get("scope_allow")
     return WorkflowResponse(
@@ -69,7 +180,7 @@ def _to_response(record: object, last_firing: Any = None) -> WorkflowResponse:
         criteria=_json_dict(getattr(record, "criteria", None)),
         criteria_operands=_json_dict(getattr(record, "criteria_operands", None)),
         next_run_at=getattr(record, "next_run_at", None),
-        last_firing=_firing_response(last_firing) if last_firing is not None else None,
+        last_firing=last_firing,
     )
 
 
@@ -285,7 +396,11 @@ async def list_workflows(
         order={"created_at": "desc"},
     )
     latest = await _last_firings(db, [r.id for r in records])
-    return [_to_response(r, latest.get(r.id)) for r in records]
+    views = await _firing_views(db, latest.values(), _criteria_of(records), ctx.user_id)
+    return [
+        _to_response(r, views[latest[r.id].id] if r.id in latest else None)
+        for r in records
+    ]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -297,7 +412,11 @@ async def get_workflow(
     db = request.app.state.db
     record = await _find_visible(db, workflow_id, ctx)
     latest = await _last_firings(db, [record.id])
-    return _to_response(record, latest.get(record.id))
+    views = await _firing_views(
+        db, latest.values(), _criteria_of([record]), ctx.user_id
+    )
+    last = latest.get(record.id)
+    return _to_response(record, views[last.id] if last is not None else None)
 
 
 @router.get("/{workflow_id}/firings", response_model=list[FiringResponse])
@@ -318,7 +437,8 @@ async def list_firings(
     rows = await db.routinefiring.find_many(
         where={"routine_id": record.id}, order={"slot": "desc"}, take=limit
     )
-    return [_firing_response(r) for r in rows]
+    views = await _firing_views(db, rows, _criteria_of([record]), ctx.user_id)
+    return [views[r.id] for r in rows]
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)

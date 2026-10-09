@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { workflows } from '../../api/client'
 import { isComputerUseTrace } from '../../lib/computerUse'
+import { downloadReceipt } from '../../lib/downloadReceipt'
 import { useSessionStore } from '../../store/session'
 import { AgentCard } from '../agents/AgentCard'
 import { ComputerUseViewport } from '../chat/ComputerUseViewport'
 import { RoutineEditorModal } from '../modals/RoutineEditorModal'
-import type { FiringState, WorkflowResponse } from '../../types'
+import type { FiringResponse, WorkflowResponse } from '../../types'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 
@@ -99,19 +100,6 @@ export function RightPanel() {
   )
 }
 
-// AD-22's vocabulary, as the pane says it. Never "done": a firing is only
-// settled or refused once the gate has spoken (stories 2.3, 2.6).
-const FIRING_LABEL: Record<FiringState, string> = {
-  scheduled: 'scheduled',
-  running: 'running',
-  attested_unsettled: 'attested, not settled',
-  settled: 'settled',
-  refused: 'refused',
-  paused: 'waiting for you',
-  skipped: 'skipped',
-  error: 'error',
-}
-
 function RoutineItem({ wf }: { wf: WorkflowResponse }) {
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -154,20 +142,54 @@ function RoutineItem({ wf }: { wf: WorkflowResponse }) {
           </button>
         </p>
       )}
-      {firing && (
-        <p
-          className={cn(
-            'mt-1 flex items-center gap-2 text-[10px]',
-            firing.state === 'error' || firing.state === 'refused'
-              ? 'text-semantic-error'
-              : 'text-text-secondary',
-          )}
-          title={firing.detail ?? undefined}
-        >
-          <span>
-            last: {FIRING_LABEL[firing.state] ?? firing.state}
-            {firing.detail && firing.state !== 'paused' ? ` — ${firing.detail}` : ''}
-          </span>
+      {firing && <FiringLines firing={firing} />}
+      {error && <p className="mt-1 text-[10px] text-semantic-error">{error}</p>}
+    </li>
+  )
+}
+
+// Story 2.5: the pane renders what the server computed for the firing (its
+// label, the gate and checks qualifiers, the note) and never words a state
+// itself. Colour is keyed on the row's state; that is styling, not wording.
+function FiringLines({ firing }: { firing: FiringResponse }) {
+  const [receiptError, setReceiptError] = useState<string | null>(null)
+  const [receiptPending, setReceiptPending] = useState(false)
+  const runId = firing.run_id
+
+  const onReceipt = async () => {
+    if (!runId) return
+    setReceiptPending(true)
+    setReceiptError(null)
+    try {
+      await downloadReceipt(runId)
+    } catch (e: unknown) {
+      setReceiptError(e instanceof Error ? e.message : 'Could not download the receipt')
+    } finally {
+      setReceiptPending(false)
+    }
+  }
+
+  return (
+    <>
+      <p
+        className={cn(
+          'mt-1 text-[10px]',
+          firing.state === 'error' || firing.state === 'refused'
+            ? 'text-semantic-error'
+            : 'text-text-secondary',
+        )}
+      >
+        last: {firing.label}
+        {firing.gate_label ? ` · ${firing.gate_label}` : ''}
+        {firing.checks_label ? ` · ${firing.checks_label}` : ''}
+      </p>
+      {firing.note && (
+        <p className="truncate text-[10px] text-text-disabled" title={firing.note}>
+          {firing.note}
+        </p>
+      )}
+      {(firing.session_id || firing.receipt_available) && (
+        <p className="mt-1 flex items-center gap-2 text-[10px] text-text-secondary">
           {firing.session_id && (
             <Link
               to={`/chat/${firing.session_id}`}
@@ -176,10 +198,26 @@ function RoutineItem({ wf }: { wf: WorkflowResponse }) {
               {firing.state === 'paused' ? 'Review approval' : 'Open'}
             </Link>
           )}
+          {firing.receipt_downloadable && runId ? (
+            <button
+              type="button"
+              disabled={receiptPending}
+              onClick={() => void onReceipt()}
+              className="text-brand-primary-light hover:underline disabled:opacity-50"
+            >
+              Receipt
+            </button>
+          ) : firing.receipt_available && !firing.receipt_downloadable ? (
+            <span className="text-text-disabled">receipt in the owner&apos;s session</span>
+          ) : null}
         </p>
       )}
-      {error && <p className="mt-1 text-[10px] text-semantic-error">{error}</p>}
-    </li>
+      {receiptError && (
+        <p className="mt-1 truncate text-[10px] text-semantic-error" title={receiptError}>
+          {receiptError}
+        </p>
+      )}
+    </>
   )
 }
 
@@ -187,6 +225,9 @@ function RoutinesSection() {
   const { data, isLoading } = useQuery({
     queryKey: ['workflows'],
     queryFn: () => workflows.list(),
+    // A running firing must not sit stale behind the 30 s staleTime until
+    // the window is refocused.
+    refetchInterval: 30_000,
   })
   const items = data ?? []
   const [editorOpen, setEditorOpen] = useState(false)
@@ -194,8 +235,16 @@ function RoutinesSection() {
   return (
     <div>
       <RoutineEditorModal open={editorOpen} onClose={() => setEditorOpen(false)} />
-      <p className="mb-2 px-4 text-[10px] font-semibold uppercase tracking-caps text-text-disabled">
+      <p className="mb-1 px-4 text-[10px] font-semibold uppercase tracking-caps text-text-disabled">
         Routines
+      </p>
+      {/* FR-26 / NFR-14: what a restart costs, said once. 60 s is the
+          scheduler's default interval. */}
+      <p className="mb-2 px-4 text-[10px] text-text-disabled">
+        Routines run inside the server process, which checks for due routines every 60 seconds;
+        a restart ends any firing still running without a sealed receipt as error (detail:
+        restart), may strand one waiting for approval, and drops any settlement not yet
+        recorded.
       </p>
       {isLoading && <p className="px-4 text-caption text-text-secondary">Loading…</p>}
       {!isLoading && items.length === 0 && (

@@ -9,9 +9,10 @@ import { cn } from '../components/ui/cn'
 type FilterTab = 'All' | 'Active' | 'Inactive' | 'Scheduled'
 const TABS: FilterTab[] = ['All', 'Active', 'Inactive', 'Scheduled']
 
+// A scheduled template is not running: it renders the plain word
+// "scheduled", never the Running badge (story 2.5).
 function statusBadgeVariant(status: WorkflowStatus) {
   if (status === 'active') return 'active'
-  if (status === 'scheduled') return 'running'
   return 'pending'
 }
 
@@ -155,13 +156,20 @@ function WorkflowCard({
         ))}
       </div>
 
-      {/* Last run */}
+      {/* Last run: the last firing's server-computed label, never the
+          template's updated_at (story 2.5) */}
       <span className="text-[12px] text-text-secondary shrink-0 ml-auto pr-4">
-        {workflow.updated_at ? formatRelativeTime(workflow.updated_at) : '—'}
+        {workflow.last_firing
+          ? `${workflow.last_firing.label} · ${formatRelativeTime(workflow.last_firing.slot)}`
+          : '—'}
       </span>
 
       {/* Status badge */}
-      <Badge variant={statusBadgeVariant(workflow.status)} className="shrink-0" />
+      {workflow.status === 'scheduled' ? (
+        <span className="text-[12px] text-text-secondary shrink-0">scheduled</span>
+      ) : (
+        <Badge variant={statusBadgeVariant(workflow.status)} className="shrink-0" />
+      )}
 
       {/* Actions */}
       <div className="flex items-center gap-2 ml-3 shrink-0">

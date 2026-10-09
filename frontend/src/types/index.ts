@@ -300,6 +300,26 @@ export interface FiringResponse {
   run_id: string | null
   created_at: string
   updated_at: string
+  // Story 2.5: every field below is computed by the server. The pane renders
+  // them and never derives words from `state`.
+  /** The state in words, e.g. "refused — counts_match"; read from the row. */
+  label: string
+  /** Error/skipped/paused detail, or the unsettled note (story 2.6). */
+  note?: string | null
+  /** AD-12: the deciding ledger row's kind; set only on settled/refused. */
+  gate?: 'verdict_only' | 'charged' | null
+  /** "verdict only, nothing charged" when the deciding row moved no money. */
+  gate_label?: string | null
+  /** The deciding ledger row's failed-check ids. */
+  gate_checks?: string[]
+  /** A sealed envelope is stored for this run, in the firing's session. */
+  receipt_available?: boolean
+  /** The viewer owns that session, so the receipt route lets them through. */
+  receipt_downloadable?: boolean
+  /** Declared criteria against the signed verdicts; null when no envelope was read. */
+  checks?: 'unchecked' | 'checked' | 'not_evaluated' | null
+  /** "recorded, unchecked" / "checked: …" / "declared, not evaluated: …". */
+  checks_label?: string | null
 }
 
 export interface CreateRoutineRequest {

@@ -34,6 +34,8 @@ from superagent.pricing import settle_gate
 from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL, SettlementGateObserver
 from superagent.workflow import firing_rules as rules
 
+from common.utils.src import firing_view
+
 from .test_routine_scheduler import DB, DID, _scheduler, _seed, _tick
 
 NOTION = "did:orcha:agent:notion-5e6f7a8b"
@@ -236,11 +238,17 @@ async def test_different_counts_refuse_the_firing_and_still_verify(world) -> Non
         "detail": f"left=11 right=10 key=open_issues {SOURCES}",
     }
     assert verify_run_attestation(envelope).valid is True
+    # The ledger keeps the gate's id; the firing names the check (story 2.5).
     assert _ledger(db) == [("refused", None, None, [CHECK_VERDICT_FAIL])]
     assert (firing["state"], firing["detail"], firing["run_id"]) == (
         rules.REFUSED,
-        CHECK_VERDICT_FAIL,
+        "counts_match",
         envelope["run_id"],
+    )
+    # Both sources were read and compared: the pane may say the check ran.
+    assert firing_view.checks_view(CRITERIA, envelope) == (
+        "checked",
+        "checked: counts_match",
     )
 
 
@@ -257,7 +265,9 @@ async def test_an_unreadable_count_refuses_the_firing(world) -> None:
     entry = _counts(envelope)
     assert entry["result"] == "fail"
     assert entry["detail"].startswith("left=11 right=unreadable(path not found) ")
-    assert (firing["state"], firing["detail"]) == (rules.REFUSED, CHECK_VERDICT_FAIL)
+    assert (firing["state"], firing["detail"]) == (rules.REFUSED, "counts_match")
+    # The source was called and its output read: the check ran, and failed.
+    assert firing_view.checks_view(CRITERIA, envelope)[0] == "checked"
 
 
 async def test_a_source_never_called_refuses_the_firing(world) -> None:
@@ -267,7 +277,12 @@ async def test_a_source_never_called_refuses_the_firing(world) -> None:
     entry = _counts(envelope)
     assert entry["result"] == "fail"
     assert entry["detail"].startswith("left=11 right=unreadable(never called) ")
-    assert (firing["state"], firing["detail"]) == (rules.REFUSED, CHECK_VERDICT_FAIL)
+    assert (firing["state"], firing["detail"]) == (rules.REFUSED, "counts_match")
+    # Refused for it, but nothing was compared: never "checked" (story 2.5).
+    assert firing_view.checks_view(CRITERIA, envelope) == (
+        "not_evaluated",
+        "declared, not evaluated: counts_match",
+    )
 
 
 async def test_the_last_successful_read_wins(world) -> None:
