@@ -35,6 +35,8 @@ import type {
   Interrupt,
   InsufficientCreditsMetadata,
   PendingArtifact,
+  RunAuditResponse,
+  RunAuditSummary,
 } from '../types'
 import { HitlApprovalModal } from '../components/modals/HitlApprovalModal'
 import { OAuthPopupHandler } from '../components/modals/OAuthPopupHandler'
@@ -527,15 +529,9 @@ export function Chat() {
 
 // ── Run telemetry strip ────────────────────────────────────────────────────────
 
-interface RunAuditSummary {
-  total_steps?: number
-  protocols?: string[]
-  total_cost_usd?: string
-  duration_ms?: number | null
-}
-
 function formatRunTelemetry(audit: Record<string, unknown> | undefined): string | null {
-  const summary = (audit?.summary ?? {}) as RunAuditSummary
+  const report = (audit ?? {}) as Partial<RunAuditResponse>
+  const summary: Partial<RunAuditSummary> = report.summary ?? {}
   const parts: string[] = []
   if (typeof summary.total_steps === 'number') parts.push(`steps: ${summary.total_steps}`)
   if (Array.isArray(summary.protocols) && summary.protocols.length > 0) {
@@ -544,6 +540,11 @@ function formatRunTelemetry(audit: Record<string, unknown> | undefined): string 
   if (summary.total_cost_usd) parts.push(`cost: $${summary.total_cost_usd}`)
   if (typeof summary.duration_ms === 'number') {
     parts.push(`${(summary.duration_ms / 1000).toFixed(1)}s`)
+  }
+  // Story 2.6: the server-built settlement label, present only for a routine
+  // firing's session. A chat session (which may carry a charge) shows nothing.
+  if (typeof report.settlement?.label === 'string') {
+    parts.push(report.settlement.label)
   }
   return parts.length > 0 ? parts.join(' · ') : null
 }

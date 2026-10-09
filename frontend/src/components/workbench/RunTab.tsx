@@ -6,47 +6,24 @@ import { downloadRunAudit } from '../../lib/downloadAudit'
 import { ProtocolBadge } from '../chat/ToolRunCard'
 import { cn } from '../ui/cn'
 import type { TranscriptEntryDTO } from '../../types/transcript'
+import type { RunAuditResponse, RunAuditSettlement, RunAuditStep } from '../../types'
 
-interface AuditStep {
-  internal_tool_name?: string
-  /** Structural check (pipeline `_structural_verify`) — not a gate check. */
-  verified?: boolean
-  verdict_reason?: string
-}
-
-/** Latest settle-gate outcome for the run; absent when no gate evaluated it. */
-interface AuditGate {
-  outcome: string
-  failed_checks?: string[]
-  envelope_digest?: string
-  /** False when the gate judged a run that charged nothing (verdict only, AD-12). */
-  charged?: boolean
-}
-
-/** The one place a check name is turned into a label — see frontend/TRUST-INDICATORS.md. */
-function GateIndicator({ gate }: { gate: AuditGate | null }) {
-  if (!gate) return null
-  if (gate.outcome === 'settled') {
-    const verdictOnly = gate.charged === false
-    return (
-      <span
-        className="font-mono text-[10px] font-semibold text-semantic-success"
-        title={`settle gate: every check passed (schema, steps_root, steps_merkle_root, signature)${
-          verdictOnly ? ' — verdict only, nothing charged' : ''
-        }`}
-      >
-        {verdictOnly ? 'settled — verdict only' : 'settled'}
-      </span>
-    )
-  }
-  const checks = gate.failed_checks ?? []
-  const named = checks[0] ?? 'unknown'
+/**
+ * The run's settlement, as the server words it — see frontend/TRUST-INDICATORS.md.
+ * Shown only for a routine firing's session (`audit.settlement`); renders the
+ * server-built label and never derives words from a state or a check name.
+ */
+function GateIndicator({ settlement }: { settlement: RunAuditSettlement | null }) {
+  if (!settlement) return null
+  const tone =
+    settlement.state === 'settled'
+      ? 'text-semantic-success'
+      : settlement.gate_evaluated
+        ? 'text-semantic-error'
+        : 'text-text-secondary'
   return (
-    <span
-      className="font-mono text-[10px] font-semibold text-semantic-error"
-      title={`settle gate refused: ${checks.join(', ') || 'no check named'}`}
-    >
-      refused — {named}
+    <span className={cn('font-mono text-[10px] font-semibold', tone)} title={settlement.statement}>
+      {settlement.label}
     </span>
   )
 }
@@ -72,8 +49,8 @@ export function RunTab() {
   })
 
   const verdictByTool = useMemo(() => {
-    const map = new Map<string, AuditStep>()
-    const steps = (audit as { steps?: AuditStep[] } | undefined)?.steps
+    const map = new Map<string, RunAuditStep>()
+    const steps = (audit as Partial<RunAuditResponse> | undefined)?.steps
     if (Array.isArray(steps)) {
       for (const s of steps) {
         if (s.internal_tool_name) map.set(s.internal_tool_name, s)
@@ -82,7 +59,8 @@ export function RunTab() {
     return map
   }, [audit])
 
-  const gate = (audit as { gate?: AuditGate | null } | undefined)?.gate ?? null
+  // Firing sessions only (story 2.6); a chat session shows no run-level label.
+  const settlement = (audit as Partial<RunAuditResponse> | undefined)?.settlement ?? null
 
   const steps = useMemo(() => {
     const entries = transcript?.entries ?? []
@@ -111,7 +89,7 @@ export function RunTab() {
         <p className="text-[10px] font-semibold text-text-disabled tracking-caps uppercase">
           Run Inspector
         </p>
-        <GateIndicator gate={gate} />
+        <GateIndicator settlement={settlement} />
         <button
           onClick={handleDownloadAudit}
           className="h-6 px-2 rounded-sm border border-surface-borderLight bg-surface-overlay font-mono text-[10px] text-text-body hover:border-surface-muted transition-colors"
@@ -161,7 +139,7 @@ function RunStepRow({
 }: {
   entry: TranscriptEntryDTO
   next: TranscriptEntryDTO | undefined
-  verdict: AuditStep | undefined
+  verdict: RunAuditStep | undefined
 }) {
   const [open, setOpen] = useState(false)
 
@@ -173,6 +151,7 @@ function RunStepRow({
   const failed = entry.tool_status === 'error' || verdict?.verified === false
   // A step that merely succeeded is not "verified" — only the structural
   // check is a check, and it gates nothing (FR-14; frontend/TRUST-INDICATORS.md).
+  // A step with no structural verdict (`verified` absent) is unchecked: neutral dot.
   const structurallyChecked = !failed && verdict?.verified === true
   const ms = durationMs(entry, next)
 
@@ -199,14 +178,14 @@ function RunStepRow({
         {failed ? (
           <span
             className="shrink-0 font-mono text-[10px] font-semibold text-semantic-error"
-            title={verdict?.verdict_reason ?? 'step failed'}
+            title={verdict?.verdict_reason || 'step failed'}
           >
             failed
           </span>
         ) : structurallyChecked ? (
           <span
             className="shrink-0 font-mono text-[10px] font-semibold text-blue-400"
-            title={`structural check passed — not a gate check (${verdict?.verdict_reason ?? 'ok'})`}
+            title={`structural check passed — not a gate check (${verdict?.verdict_reason || 'ok'})`}
           >
             structurally checked
           </span>

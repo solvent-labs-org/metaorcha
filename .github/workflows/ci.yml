@@ -609,6 +609,7 @@ jobs:
             tests/unit/test_step65_defer.py \
             tests/unit/test_run_audit.py \
             tests/unit/test_routine_firing_gate.py \
+            tests/unit/test_routine_evidence.py \
             tests/unit/test_routine_counts_match.py --verbose
 
   # ============================================================================

@@ -19,17 +19,29 @@ Two kinds of check exist today:
   the names of signed `verdicts[]` entries that failed** (`structural_verification`,
   `declared_acceptance`, `counts_match`), which a routine firing's detail
   substitutes for `verdict_fail` (story 2.5; the ledger keeps `verdict_fail`).
-  Reaches the UI as `gate` on `GET /sessions/{id}/audit` (latest
-  `attested_settlements` row for the session), present only when a gate
-  evaluated the run. The routines pane does not read that: it reads the firing
-  row and its run's ledger row (`attested_settlements` by `run_id`), through the
-  fields the Gateway computes on `last_firing`.
+  `GET /sessions/{id}/audit` keys its gate block by the session's latest sealed
+  run (`run_id`: the firing's run, else the newest sealed envelope; case
+  attestations are not seals), never by the session, so a later unjudged run
+  never inherits an earlier run's outcome. `gate` is that run's deciding
+  `attested_settlements` row, present only when a gate evaluated it; the UI
+  shows no words from it. `settlement` (story 2.6), **firing sessions only**,
+  carries the server-built `label` and `statement` from the firing row's state
+  and that ledger row: "attested but unsettled" with no gate field when no
+  decision is recorded, else "settled" / "refused — `<check>`", with
+  " — verdict only, nothing charged" when the deciding row has `call_id` NULL.
+  A chat session gets no `settlement` (a paid call there can settle without the
+  gate, so nothing is said about it). The routines pane does not read the
+  export: it reads the firing row and its run's ledger row
+  (`attested_settlements` by `run_id`), through the fields the Gateway computes
+  on `last_firing`. Both word their labels with `common/utils/src/firing_view.py`.
 
 | Indicator | Where | Backed by | State (2026-09-25) |
 |---|---|---|---|
 | "Structurally checked" / "Structurally failed" badge | `components/chat/ToolRunCard.tsx` `VerifiedBadge` | structural check (`verified` + `verdict_reason` on the step) | relabelled in #75 (`d1e992d`); unchanged |
 | Per-step dot + label | `components/workbench/RunTab.tsx` `RunStepRow` | structural check via the audit `steps[]`; `tool_status` is only success/error | **relabelled here** — was green + "verified" when the tool merely succeeded; now: failed → red "failed"; structural pass → blue "structurally checked"; success alone → neutral dot, no label |
-| Run-level "settled" / "refused — `<check>`" | `components/workbench/RunTab.tsx` `GateIndicator` | settle gate (`audit.gate`) | **added here** — the one indicator backed by a check that gates an outcome; names the first failed check; absent when no gate ran. Story 2.7 (AD-12): a run that charged nothing is judged too; its row has `call_id` NULL, reaches the UI as `gate.charged: false`, and reads "settled — verdict only" — it moved no money |
+| Unchecked step (neutral dot, no label) | `components/workbench/RunTab.tsx` `RunStepRow` | a step with no structural verdict (blocked, unresolved or system call, or a row persisted before verdicts existed): the export omits `verified` and counts it in `summary.steps_unchecked` | **corrected in story 2.6** — the export used to default such a step to `verified: true` / "ok"; it now leaves `verified` absent and never counts it in `steps_verified`. The row renders it as success alone: neutral dot, no label |
+| Run-level settlement label, e.g. "attested but unsettled" / "settled — verdict only, nothing charged" / "refused — `<check>`" | `components/workbench/RunTab.tsx` `GateIndicator` | `audit.settlement` — the firing row's state and its run's deciding ledger row, worded by the server (`firing_view`) | **story 2.6** — renders `settlement.label` with `settlement.statement` as its title, and derives nothing: the tool tip no longer claims "every check passed", and a non-settled gate row is no longer shown as a refusal. Absent for a chat session and whenever no settlement block was built (nothing sealed, an unreconciled row, or a state other than attested/settled/refused). RunTab is unmounted since `fd5cd3b`; this keeps it honest if remounted |
+| Telemetry strip settlement " · `<settlement label>`" | `pages/Chat.tsx` `RunTelemetryStrip` | `audit.settlement.label` (same server label as above) | **added in story 2.6** — appended to the steps/protocols/cost line only when `settlement` is present (firing sessions). A chat page, including one with a paid call, is unchanged |
 | Owl mascot state | `components/ui/metis/OwlMascot.tsx`, `mapSessionToOwlState.ts` | nothing — it mirrors session status | **renamed** `verified` → `complete` (status `complete` → owl `complete`); green stays, the word does not |
 | Owl preview copy "green verified" | `pages/OwlPreview.tsx` | nothing | **relabelled** "green complete" |
 | Home tagline "verified multi-protocol run out" | `pages/Home.tsx` | nothing (attestation is flag-gated, the gate is flag-gated) | **relabelled** "recorded multi-protocol run out" |
@@ -38,11 +50,13 @@ Two kinds of check exist today:
 | Verdict-only qualifier " · verdict only, nothing charged" | `components/layout/RightPanel.tsx` `FiringLines` | the run's deciding ledger row (`attested_settlements`, any settled row else the oldest) with `call_id` NULL — AD-12 | **added in story 2.5** — shown only on a settled or refused firing; a charged row shows no qualifier. Absent when the ledger read failed |
 | Checks qualifier " · recorded, unchecked" / " · checked: `<criteria>`" / " · declared, not evaluated: `<criteria>`" | `components/layout/RightPanel.tsx` `FiringLines` | the routine's declared `criteria` (immutable after save) against the signed envelope's `verdicts[]` (`firing_view.checks_view`) | **added in story 2.5** — "checked" only where each declared criterion's verdict is present in the signed envelope and compared something (a `counts_match` verdict that compared nothing reads "declared, not evaluated"). No criteria → "recorded, unchecked". Absent when no envelope was read. Never "verified" |
 | Receipt control "Receipt" / "receipt in the owner's session" | `components/layout/RightPanel.tsx` `FiringLines` | an `attestations` row for the firing's `run_id` in the firing's own session (`receipt_available`); the viewer owning that session (`receipt_downloadable`) | **added in story 2.5** — the button saves the stored envelope bytes via `lib/downloadReceipt.ts`; a failed download shows its error inline. An office owner viewing a member's firing sees the static text, because the receipt route lets only the session owner through. Absent when no envelope is stored |
+| Mailer receipt "Settlement: `<settlement label>`" | `services/superagent/.../system_tools/mailer.py` `_render_receipt` (not frontend; listed so the map is whole) | `audit.settlement.label` from the same export | **added in story 2.6** — a line after the summary only when `settlement` is present. The summary adds ", N not checked" for unchecked steps, which are no longer counted as verified |
 | Workflows page "Last run" | `pages/Workflows.tsx` `WorkflowCard` | the last firing's server label (same as the pane) and its slot | **relabelled in story 2.5** — was the template's `updated_at`, which no run produced; now "`<label>` · `<relative slot time>`", or "—" with no firing. A `scheduled` template now reads the plain word "scheduled" (it was the "Running" badge) |
 
 Recorded, not changed here (outside the frontend; owned by story 3.2, export copy):
 
-- Audit package fields `summary.steps_verified` / `steps_failed` and its `note`
-  ("Verified Runs") describe the structural check, not the gate.
+- Audit package fields `summary.steps_verified` / `steps_failed` describe the
+  structural check, not the gate (story 2.6 stopped counting unchecked steps as
+  verified and renamed the `note` to Metaorcha; the field names stay).
 - Sandbox mailer receipt (`system_tools/mailer.py`) prints "verified" / "failed"
-  per step from the same structural field.
+  per step from the same structural field ("not checked" when absent).
