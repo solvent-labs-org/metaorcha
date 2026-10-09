@@ -40,6 +40,15 @@ def _content_to_str(content: Any) -> str:
     return str(content) if content is not None else ""
 
 
+def _assistant_model(message: AIMessage) -> dict[str, Any] | None:
+    """``{"model": "<route>/<model id>"}`` from the message, or None."""
+    from ..turn_model import TURN_MODEL_KEY
+
+    metadata = getattr(message, "response_metadata", None)
+    model = metadata.get(TURN_MODEL_KEY) if isinstance(metadata, dict) else None
+    return {"model": model} if isinstance(model, str) and model else None
+
+
 def _tool_calls_to_json(msg: AIMessage) -> list[dict[str, Any]] | None:
     raw = getattr(msg, "tool_calls", None) or []
     if not raw:
@@ -287,7 +296,9 @@ def messages_to_entry_dicts(
                     "tool_calls": _tool_calls_to_json(m),
                     "tool_call_id": None,
                     "tool_name": None,
-                    "tool_inputs": None,
+                    # Story 3.3: the model that produced this message, so a
+                    # turn with no steps (no receipt) still records it.
+                    "tool_inputs": _assistant_model(m),
                     "tool_status": None,
                 }
             )

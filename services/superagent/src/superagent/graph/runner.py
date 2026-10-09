@@ -30,11 +30,14 @@ from .state import SESSION_CREDENTIALS_CONFIG_KEY, default_state
 logger = logging.getLogger(__name__)
 
 
-def _done_event(session_id: str) -> dict[str, Any]:
-    """Turn-finished SSE payload. Adds a fetch path when a receipt was sealed."""
+def _done_event(session_id: str, model: Any = None) -> dict[str, Any]:
+    """Turn-finished SSE payload. Adds a fetch path when a receipt was sealed,
+    and the model that ran the turn when one did (story 3.3)."""
     from ..middleware.observers import peek_published_run_id
 
     event: dict[str, Any] = {"type": "done", "session_id": session_id}
+    if isinstance(model, str) and model:
+        event["model"] = model
     run_id = peek_published_run_id(session_id)
     if run_id:
         event["run_id"] = run_id
@@ -271,6 +274,8 @@ async def _yield_multistream_events(
                     vm = chunk.get("messages")
                     if vm is not None:
                         values_messages_sink["messages"] = vm
+                    if "_turn_model" in chunk:
+                        values_messages_sink["_turn_model"] = chunk["_turn_model"]
                 try:
                     for event in _extract_events(
                         chunk,
@@ -606,6 +611,8 @@ class SessionRunner:
         # Story 2.2: a routine firing's bounds (the scope gate reads them);
         # per-turn, so a chat turn in the firing's session is a chat turn.
         state_update["routine_context"] = routine_context
+        # Story 3.3: the model is the turn's own, never the last turn's.
+        state_update["_turn_model"] = None
 
         # AD-14 (story 1.6b): session credentials ride on the run config only
         # (SESSION_CREDENTIALS_CONFIG_KEY above) — never on graph state, which
@@ -683,7 +690,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield _done_event(session_id)
+        yield _done_event(session_id, values_messages_sink.get("_turn_model"))
 
     async def resume_from_interrupt(
         self,
@@ -783,7 +790,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield _done_event(session_id)
+        yield _done_event(session_id, values_messages_sink.get("_turn_model"))
 
     async def get_status(
         self, session_id: str, thread_config: dict[str, Any] | None = None

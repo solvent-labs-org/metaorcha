@@ -509,11 +509,11 @@ async def test_a_charged_settle_exports_settled_and_not_verdict_only(
     the scheduler's own rule (``firing_rules.judged``) over the ledger row the
     real gate wrote — the state is derived, not assumed.
     """
+    import validator.run_envelope
     from superagent.api.audit import build_run_audit, load_settlement
     from superagent.config import settings
     from superagent.workflow import firing_rules as rules
     from validator import signer
-    from validator.run_envelope import build_run_envelope, sign_run_envelope
 
     from common.utils.src import firing_view
 
@@ -523,8 +523,8 @@ async def test_a_charged_settle_exports_settled_and_not_verdict_only(
     signer._reset_signing_key_for_tests()
 
     run_id = "run-charged"
-    envelope = sign_run_envelope(
-        build_run_envelope(
+    envelope = validator.run_envelope.sign_run_envelope(
+        validator.run_envelope.build_run_envelope(
             run_id=run_id,
             agent_dids=["did:orcha:agent:kya-demo"],
             charter_hash=CHARTER,

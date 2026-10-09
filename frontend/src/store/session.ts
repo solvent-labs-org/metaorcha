@@ -75,6 +75,8 @@ interface SessionState {
     runId: string
     attestationPath: string
   }) => void
+  /** Story 3.3: the server's "<route>/<model id>" for the turn just finished. */
+  attachModelToLastTurn: (model: string) => void
   setAgents: (agents: AgentInfo[]) => void
   updateAgent: (agentId: string, patch: Partial<AgentInfo>) => void
   setChecklist: (tasks: ChecklistTask[]) => void
@@ -253,6 +255,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         attestationPath,
       })
       return { messages, timelineSeq: seq }
+    }),
+
+  attachModelToLastTurn: (model) =>
+    set((s) => {
+      const messages = [...s.messages]
+      // Only this turn's bubble: the scan stops at the user message that
+      // started the turn, so a turn that ended without an agent message
+      // (an interrupt, an empty answer) labels nothing rather than the
+      // previous turn's bubble.
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') return {}
+        if (messages[i].role === 'agent') {
+          messages[i] = { ...messages[i], model }
+          return { messages }
+        }
+      }
+      return {}
     }),
 
   setAgents: (agents) => set({ agents }),
@@ -505,12 +524,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             attachedArtifacts,
           })
         } else if (e.role === 'ASSISTANT') {
+          const rowModel = (e.tool_inputs ?? {}).model
           messages.push({
             id: stableId,
             role: 'agent',
             content: e.content,
             timestamp,
             sortIndex: e.sequence_num,
+            model: typeof rowModel === 'string' && rowModel ? rowModel : undefined,
           })
         } else {
           const phase: ToolInvocationPhase =

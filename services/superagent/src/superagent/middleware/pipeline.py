@@ -280,7 +280,7 @@ class ExecutionMiddleware:
         normalised["verified"] = verified
         normalised["verdict_reason"] = verdict_reason
 
-        declared_meta = self._criteria_meta()
+        declared_meta = self._run_meta()
         criteria = self._state.get("_declared_criteria")
         if isinstance(criteria, dict) and criteria:
             from .criteria import step_criteria, step_declared_acceptance
@@ -417,7 +417,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": error_text[:120]},
                 metadata={
                     "goal": self._session_goal(),
-                    **self._criteria_meta(),
+                    **self._run_meta(),
                     **(scope_meta or {}),
                 },
                 args=dict(args),
@@ -547,7 +547,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": content[:120]},
                 metadata={
                     "goal": self._session_goal(),
-                    **self._criteria_meta(),
+                    **self._run_meta(),
                     "scope_approval": verdict or scope_verdict(approved=False),
                 },
                 args=dict(args),
@@ -647,6 +647,14 @@ class ExecutionMiddleware:
                 state=self._state,
             )
         return f"Unsupported protocol: {protocol}"
+
+    def _run_meta(self) -> dict[str, Any]:
+        """Run-level step metadata: the criteria's, and the model that ran (AD-21)."""
+        meta = self._criteria_meta()
+        model = self._state.get("_turn_model")
+        if isinstance(model, str) and model:
+            meta["model"] = model
+        return meta
 
     def _criteria_meta(self) -> dict[str, Any]:
         """The turn's criteria digest and run-level operands, for every step.

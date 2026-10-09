@@ -128,6 +128,8 @@ export interface RunAuditResponse {
   steps: RunAuditStep[]
   note: string
   coverage: RunAuditCoverage
+  /** The sealed run's signed ``model`` verdicts; absent when no receipt was read. */
+  models?: string[]
   /** The session's latest sealed run: a firing's run, else the newest sealed envelope. */
   run_id?: string
   gate?: RunAuditGate
@@ -338,6 +340,8 @@ export type SSEEvent =
       session_id: string
       run_id?: string
       attestation_path?: string
+      /** "<route>/<model id>" the server recorded for the turn (story 3.3). */
+      model?: string
     }
   | { type: 'stopped'; session_id: string }
   | {
@@ -570,6 +574,9 @@ export interface ChatMessage {
   runId?: string
   /** SuperAgent-relative fetch path; Gateway prefixes ``/api/v1``. */
   attestationPath?: string
+  /** The model that ran the turn, "<route>/<model id>", as the server recorded
+   *  it (SSE ``done`` event, or the transcript row's ``tool_inputs.model``). */
+  model?: string
 }
 
 export interface Artifact {
