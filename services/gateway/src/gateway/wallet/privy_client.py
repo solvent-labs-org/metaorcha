@@ -13,8 +13,22 @@ arrears_* on the User row.  All on-chain operations live here.
 from __future__ import annotations
 
 import os
+import re
 
 import httpx
+
+# Wallet and action ids are path segments of the API URLs below, which carry
+# the app's credentials. A transfer's action id arrives on the client's
+# request, so an id is placed in a URL only when it is one plain segment.
+_ID = r"[A-Za-z0-9_-]{1,128}"
+
+
+def checked_id(value: str) -> str:
+    """Return ``value`` if it is one plain path segment, else raise ValueError."""
+    if re.fullmatch(_ID, value):
+        return value
+    raise ValueError(f"not a wallet or action id: {value!r}")
+
 
 # ── Lazy singleton ────────────────────────────────────────────────────────────
 
@@ -176,6 +190,8 @@ async def get_transfer_status(wallet_id: str, action_id: str) -> tuple[str, str 
       status:  'pending' | 'succeeded' | 'rejected' | 'failed'
       tx_hash: on-chain transaction hash once succeeded, else None
     """
+    wallet_id, action_id = checked_id(wallet_id), checked_id(action_id)
+
     import logging as _logging
 
     _log = _logging.getLogger(__name__)
