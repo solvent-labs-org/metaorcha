@@ -280,22 +280,11 @@ class ExecutionMiddleware:
         normalised["verified"] = verified
         normalised["verdict_reason"] = verdict_reason
 
-        declared_meta = self._run_meta()
-        criteria = self._state.get("_declared_criteria")
-        if isinstance(criteria, dict) and criteria:
-            from .criteria import step_criteria, step_declared_acceptance
-
-            # A run-level criterion (counts_match) is judged at seal, so a
-            # routine declaring only that signs no per-step acceptance.
-            per_step = step_criteria(criteria)
-            if per_step:
-                # FR-7: criteria read the agent's (redacted) bytes, not the
-                # card — the normalizer caps plain text at 280 characters,
-                # which cut a test runner's JSON mid-string on the 2026-09-21
-                # bed and turned `exit_code: 1` into "no exit code".
-                declared_meta["declared_acceptance"] = step_declared_acceptance(
-                    per_step, raw_output
-                )
+        # FR-7: criteria read the agent's (redacted) bytes, not the card — the
+        # normalizer caps plain text at 280 characters, which cut a test
+        # runner's JSON mid-string on the 2026-09-21 bed and turned
+        # `exit_code: 1` into "no exit code".
+        declared_meta = self._step_meta(raw_output)
 
         # Step 6: Checklist auto-update
         success = not (
@@ -417,7 +406,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": error_text[:120]},
                 metadata={
                     "goal": self._session_goal(),
-                    **self._run_meta(),
+                    **self._step_meta(error_text),
                     **(scope_meta or {}),
                 },
                 args=dict(args),
@@ -547,7 +536,7 @@ class ExecutionMiddleware:
                 verdict={"verified": False, "reason": content[:120]},
                 metadata={
                     "goal": self._session_goal(),
-                    **self._run_meta(),
+                    **self._step_meta(content),
                     "scope_approval": verdict or scope_verdict(approved=False),
                 },
                 args=dict(args),
@@ -648,28 +637,33 @@ class ExecutionMiddleware:
             )
         return f"Unsupported protocol: {protocol}"
 
-    def _run_meta(self) -> dict[str, Any]:
-        """Run-level step metadata: the criteria's, and the model that ran (AD-21)."""
-        meta = self._criteria_meta()
+    def _step_meta(self, raw_output: Any) -> dict[str, Any]:
+        """A step's metadata: the criteria's (judged on *raw_output*), and the
+        model that ran (AD-21)."""
+        meta = self._criteria_meta(raw_output)
         model = self._state.get("_turn_model")
         if isinstance(model, str) and model:
             meta["model"] = model
         return meta
 
-    def _criteria_meta(self) -> dict[str, Any]:
-        """The turn's criteria digest and run-level operands, for every step.
+    def _criteria_meta(self, raw_output: Any) -> dict[str, Any]:
+        """The turn's criteria digest, run-level operands and this step's
+        ``declared_acceptance``, judged on *raw_output* (``agent_step_meta``).
 
         Stamped on successful, failed and declined steps alike, so a run whose
-        source calls all failed still carries its run-level criteria and the
-        observer signs them as failed rather than leaving them out (story 2.4).
+        source calls all failed still carries its criteria and the observer
+        signs them as failed rather than leaving them out (stories 2.4, 4.1).
+        Never raises: a step is recorded even if its metadata is not.
         """
         criteria = self._state.get("_declared_criteria")
         if not isinstance(criteria, dict) or not criteria:
             return {}
         try:
-            from .criteria import criteria_step_meta
+            from .criteria import agent_step_meta
 
-            return criteria_step_meta(criteria, self._state.get("routine_context"))
+            return agent_step_meta(
+                criteria, self._state.get("routine_context"), raw_output
+            )
         except Exception:
             logger.exception("criteria metadata not computed")
             return {}

@@ -22,8 +22,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from emerge.criteria import (  # noqa: F401 — NO_STEP_* re-exported for readers
+    NO_STEP_APPLICABLE,
+    NO_STEP_EXIT_CODE,
+    compose_policy_version,
+    run_declared_acceptance,
+)
+
 from .counts_match import evaluate_counts_match
-from .criteria import compose_policy_version
 from .run_envelope import (
     build_run_envelope,
     cdv_score_to_bp,
@@ -31,13 +37,26 @@ from .run_envelope import (
     sign_run_envelope,
 )
 
+# the re-exported names are this module's public API too (readers import them here)
+__all__ = [
+    "DEFAULT_MAX_ENVELOPES",
+    "DEFAULT_PERSIST_TIMEOUT_SECONDS",
+    "DEFAULT_POLICY_VERSION",
+    "DEFAULT_SIGNER_DID",
+    "MAX_ENVELOPES_ENV",
+    "NO_STEP_APPLICABLE",
+    "NO_STEP_EXIT_CODE",
+    "PERSIST_TIMEOUT_ENV",
+    "POLICY_VERSION_ENV",
+    "RunAttestationObserver",
+    "compose_policy_version",
+    "run_declared_acceptance",
+    "step_tool",
+]
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIGNER_DID = "did:orcha:system:validator"
-# declared_acceptance details for a declared criterion no step could be
-# judged on (story 3.1): declaring exit_zero and running nothing is a fail.
-NO_STEP_EXIT_CODE = "no step reported an exit code"
-NO_STEP_APPLICABLE = "no step was applicable to"
 # A ``model`` verdict's detail (story 3.3): printable ASCII, as every verdict
 # detail must be, and bounded like the producer's (turn_model._MAX_LEN).
 _MODEL_DETAIL_RE = re.compile(r"^[\x20-\x7e]{1,200}$")
@@ -321,67 +340,15 @@ class RunAttestationObserver:
     def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
         """One run-level declared_acceptance verdict from step metadata.
 
-        Per criterion across the run's steps: ``fail`` if any applicable step
-        failed; ``pass`` if at least one applicable step passed and none
-        failed; and a criterion no step was applicable to fails the run
-        ("no step reported an exit code") — declaring ``exit_zero`` and never
-        running anything is not acceptance. Steps sealed before per-criterion
-        results existed (no ``criteria`` map) fall back to fail-wins-else-last.
+        The rule is the SDK's (``emerge.criteria.run_declared_acceptance``,
+        AD-20): per criterion across the run's steps, fail if any applicable
+        step failed; pass if at least one applied and none failed; a criterion
+        no step was applicable to fails the run. Steps sealed before
+        per-criterion results existed fall back to fail-wins-else-last.
         """
-        seen = [s.declared_acceptance for s in steps if s.declared_acceptance]
-        if not seen:
-            return None
-        if all(isinstance(e.get("criteria"), dict) for e in seen):
-            keys: list[str] = []
-            for e in seen:
-                for k in e["criteria"]:
-                    if k not in keys:
-                        keys.append(k)
-            if not keys:
-                return None
-            per_key: dict[str, str] = {}
-            for key in keys:
-                results = [e["criteria"][key] for e in seen if key in e["criteria"]]
-                if "fail" in results:
-                    per_key[key] = "fail"
-                elif "pass" in results:
-                    per_key[key] = "pass"
-                else:
-                    per_key[key] = "n/a"
-            failing = [k for k, v in per_key.items() if v == "fail"]
-            unapplied = [k for k, v in per_key.items() if v == "n/a"]
-            if failing:
-                key = failing[0]
-                step_detail = next(
-                    (
-                        str(e.get("detail"))
-                        for e in seen
-                        if e["criteria"].get(key) == "fail" and e.get("detail")
-                    ),
-                    "fail",
-                )
-                result, detail = "fail", f"{key}: {step_detail}"
-            elif unapplied:
-                key = unapplied[0]
-                result = "fail"
-                detail = (
-                    NO_STEP_EXIT_CODE
-                    if key == "exit_zero"
-                    else f"{NO_STEP_APPLICABLE} {key}"
-                )
-            else:
-                result, detail = "pass", "ok"
-            return {"check": "declared_acceptance", "result": result, "detail": detail}
-        failed = next((item for item in seen if item.get("result") == "fail"), None)
-        chosen = failed or seen[-1]
-        result = chosen.get("result")
-        if result not in ("pass", "fail"):
-            return None
-        entry: dict[str, Any] = {"check": "declared_acceptance", "result": result}
-        detail = chosen.get("detail")
-        if detail:
-            entry["detail"] = str(detail)
-        return entry
+        return run_declared_acceptance(
+            [s.declared_acceptance for s in steps if s.declared_acceptance]
+        )
 
     @staticmethod
     def _criteria_digest_from_steps(steps: list[_AccumulatedStep]) -> str | None:

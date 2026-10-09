@@ -33,6 +33,8 @@ from superagent.middleware.criteria import (
     NO_EXIT_CODE,
     NOT_APPLICABLE,
     SYSTEM_STEP_NA,
+    agent_step_meta,
+    criteria_digest,
     criteria_text,
     criteria_units,
     parse_exit_code,
@@ -220,7 +222,8 @@ def test_evaluation_never_raises_on_the_agents_bytes(raw) -> None:
 
 
 def test_an_evaluator_fault_is_signed_fail_not_raised(monkeypatch) -> None:
-    from superagent.middleware import criteria as mod
+    # the evaluators live in the SDK (AD-20); the platform reads them from there
+    from emerge import criteria as mod
 
     def boom(_units):
         raise RuntimeError("evaluator bug")
@@ -347,6 +350,40 @@ async def test_a_dispatched_call_is_a_step_whatever_its_bytes(recorded, raw) -> 
     (step,) = recorded
     assert step.call_id == "c-hostile"
     assert step.metadata["declared_acceptance"]["result"] in ("fail", NOT_APPLICABLE)
+
+
+async def test_a_failed_dispatch_is_judged_on_its_error_text_like_any_step(
+    recorded,
+) -> None:
+    # story 4.1 parity: the local journal judges a failed call on the bytes
+    # it has; so does the platform. "Error: ..." carries no exit code (n/a)
+    # and no citations (fail), so a run of only failed calls fails its
+    # declared acceptance rather than signing none.
+    both = {"citations_required": True, "exit_zero": True}
+    with pytest.raises(RuntimeError, match="connection refused"):
+        await _agent_step(
+            _state(both),
+            None,
+            call_id="c-failed",
+            dispatch=AsyncMock(side_effect=RuntimeError("connection refused")),
+        )
+    (step,) = recorded
+    assert step.success is False and step.content.startswith("Error:")
+    assert step.metadata["criteria_digest"] == criteria_digest(both)
+    assert step.metadata["declared_acceptance"] == step_declared_acceptance(
+        both, step.content
+    )
+    assert step.metadata["declared_acceptance"]["criteria"] == {
+        "citations_required": "fail",
+        "exit_zero": NOT_APPLICABLE,
+    }
+    # a declined call is stamped the same way (the scope gate's text is the
+    # step's output); a routine declaring only a run-level criterion is not
+    declined = agent_step_meta(both, None, "declined: write outside scope")
+    assert declined["declared_acceptance"]["result"] == "fail"
+    assert "declared_acceptance" not in agent_step_meta(
+        {"counts_match": True}, None, "Error: x"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -4137,6 +4137,7 @@ dependencies = [
     { name = "langgraph-checkpoint-redis" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "orcha-sdk" },
     { name = "playwright" },
     { name = "prisma" },
     { name = "pydantic" },
@@ -4170,6 +4171,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-redis", specifier = ">=0.1" },
     { name = "mcp", specifier = ">=1" },
     { name = "openai", specifier = ">=2.29.0" },
+    { name = "orcha-sdk", editable = "sdk" },
     { name = "playwright", specifier = ">=1.49" },
     { name = "prisma", specifier = ">=0.15" },
     { name = "pydantic", specifier = ">=2" },
@@ -4636,6 +4638,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "emerge-node" },
     { name = "httpx" },
+    { name = "orcha-sdk" },
 ]
 
 [package.metadata]
@@ -4644,6 +4647,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42" },
     { name = "emerge-node", editable = "node" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "orcha-sdk", editable = "sdk" },
 ]
 
 [[package]]
