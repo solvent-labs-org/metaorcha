@@ -1,26 +1,13 @@
 # AGENTS.md
 
-Instructions for AI coding agents (Cursor, Claude Code, Codex, aider, etc.)
-working in this repository. Human contributors: see [CONTRIBUTING.md](CONTRIBUTING.md).
+Instructions for AI coding agents working in this repository. Human
+contributors: see [CONTRIBUTING.md](CONTRIBUTING.md).
 Project trajectory: [metaorcha.ai/roadmap](https://metaorcha.ai/roadmap).
 
 - The default branch is `main`. Branch naming: `<type>/<description>`
-  (e.g. `feat/sandbox-deploy`, `fix/registry-health`). Never push to
-  `main` directly without review.
-
-## Two-repo topology
-
-- **`solvent-labs-org/metaorcha-internal`** (private, this repo) — the working
-  repo. All branches, full history, `docs-local/`, strategy docs.
-- **`solvent-labs-org/metaorcha`** (public) — the OSS face. Single orphan
-  `main` only: production code, sanitized downstream export of this
-  repo's `main`. Design/planning docs stay private.
-- Export flow: internal `main` → sanitize (brand sweep, exclude internal
-  paths, gitleaks) → force-update public orphan `main` per release. The
-  export remote in the export worktree is named `public`; **never push
-  any ref other than the sanitized orphan `main` to it.** KY-A content
-  must never cross into the public repo — it is hackathon/product work,
-  private by design.
+  (e.g. `feat/sandbox-deploy`, `fix/registry-health`). `main` changes by
+  pull request, and each lands as one squash commit. Never push to `main`
+  directly, and never force-push it.
 
 ## Commands
 
@@ -55,7 +42,7 @@ make check                  # lint + format + tests, run before every PR
 
 1. **Mock-first** — full stack runs with `PAYMENT_MODE=mock`; mock fallback
    for anything external.
-2. **The name is Metaorcha** (`docs/brand.md`). Public copy says "Metaorcha".
+2. **The name is Metaorcha.** Public copy says "Metaorcha".
    "Orcha" is not a standalone name — it appears only inside component
    identifiers (`orcha-sdk`, `orcha-attest`, `did:orcha:*`, `ORCHA_*`), never
    as an H1, a page title, or the subject of a sentence. KYA = category term.
