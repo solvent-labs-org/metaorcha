@@ -1,6 +1,6 @@
 """Scope classes — every capability resolves to read | write | destructive.
 
-The platform owns the class *rules* (AD-18):
+The platform owns the class *rules*:
 
 * a committed table classing every platform system tool;
 * name-pattern rules for connector capabilities, keyed on the verb tokens
@@ -11,7 +11,7 @@ The platform owns the class *rules* (AD-18):
   three sources.
 
 A connector capability absent from every source resolves to ``destructive``
-(fail closed, AD-6). The lookup never raises: an empty, null or malformed id
+(fail closed). The lookup never raises: an empty, null or malformed id
 is ``destructive``.
 
 System tools are classed by consequence. None is ``destructive`` and a test
@@ -19,9 +19,9 @@ asserts it — a destructive system tool would pause every chat turn. The
 ``write``-class system tools act on the platform's own session state (or, for
 the sandbox mailer, on an address the operator configured); the scope gate
 that consumes this table treats them as covered by the platform's standing
-allow. That gate is story 1.5; this module only classifies.
+allow. The gate decides; this module only classifies.
 
-The capability charset ``[A-Za-z0-9_.:-]+`` is the one AD-17 fixes for the
+The capability charset ``[A-Za-z0-9_.:-]+`` is the one fixed for the
 ``<connection DID>#<capability>`` step tool string; the Registry rejects any
 capability outside it at registration.
 """
@@ -268,7 +268,7 @@ def is_recognised(capability: Any) -> bool:
 
 
 def is_valid_capability_id(capability: Any) -> bool:
-    """True iff the id fits AD-17's charset ``[A-Za-z0-9_.:-]+`` (so never ``#``)."""
+    """True iff the id fits the charset ``[A-Za-z0-9_.:-]+``, so never ``#``."""
     return isinstance(capability, str) and bool(CAPABILITY_PATTERN.match(capability))
 
 
