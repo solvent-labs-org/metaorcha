@@ -1,7 +1,7 @@
 [project]
 name = "orcha-sdk"
 version = "0.2.1"
-description = "Metaorcha agent SDK + CLI — register an agent in three lines."
+description = "Build Metaorcha agents in a few lines, and verify signed run receipts offline."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
