@@ -8,8 +8,8 @@ receipt (``<root>/.orcha/receipts/<run_id>.json``) is what travels and is
 what ``orcha verify`` checks.
 
 Sealing a journal applies the declared-acceptance rules of
-:mod:`emerge.criteria` — the same module the platform's run observer reads
-(AD-20), so a locally sealed receipt carries the same ``policy_version``
+:mod:`emerge.criteria` — the same module the platform's run observer reads,
+so a locally sealed receipt carries the same ``policy_version``
 digest and the same ``declared_acceptance`` verdict a platform run with the
 same criteria would. Nothing here evaluates a criterion itself.
 

@@ -1,4 +1,4 @@
-"""The Claude Code plugin package (story 4.2): a launcher and nothing else.
+"""The plugin package for the ``claude`` CLI: a launcher and nothing else.
 
 ``plugins/claude-code/orcha-record`` must subscribe to exactly the events
 the adapter handles, run the SDK's hook and no logic of its own, never exit

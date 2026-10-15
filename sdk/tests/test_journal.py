@@ -1,7 +1,7 @@
 """The local run journal: files, steps, and sealing through ``emerge.criteria``.
 
 The criteria rules themselves are tested in ``test_criteria.py``; here the
-journal is checked to apply them (story 4.1, AD-20) and to make a receipt the
+journal is checked to apply them and to make a receipt the
 one verifier accepts.
 """
 

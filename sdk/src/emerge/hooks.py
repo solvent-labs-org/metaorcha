@@ -5,7 +5,7 @@ from stdin, maps it onto the journal in :mod:`emerge.journal`, and on the
 session's stop event seals the receipt with the local key. Nothing is hosted,
 nothing leaves the machine; the receipt verifies with ``orcha verify``.
 
-Claude Code (verified on 2.1.278, 2026-09-21): a ``Bash`` call with a
+The ``claude`` CLI (verified on 2.1.278, 2026-09-21): a ``Bash`` call with a
 non-zero exit fires ``PostToolUseFailure`` with ``error: "Exit code N"`` and
 no ``tool_response``; a zero exit fires ``PostToolUse`` with ``tool_response
 {stdout, stderr, interrupted, isImage, noOutputExpected}``. No event carries
@@ -104,7 +104,7 @@ def run_claude_code_hook(
     agent_did: str | None = None,
     err=None,
 ) -> int:
-    """Handle one Claude Code hook payload. Returns the hook's exit code (0/1)."""
+    """Handle one hook payload from the ``claude`` CLI. Returns the hook's exit code (0/1)."""
     err = sys.stderr if err is None else err
     prog = "orcha record hook claude-code"
     event = payload.get("hook_event_name")

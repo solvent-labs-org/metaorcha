@@ -1,4 +1,4 @@
-"""The value a run step's ``output_hash`` commits to (RFC 0003, spine AD-16).
+"""The value a run step's ``output_hash`` commits to (RFC 0003).
 
 ``output_hash = sha256_hex(canonical_json_bytes(pre-image))``, where the
 pre-image is built from a tool call's **raw** result — before any display
@@ -57,7 +57,7 @@ def _safe_getattr(obj: Any, name: str) -> Any:
     """``getattr`` that treats a raising property as absent."""
     try:
         return getattr(obj, name, None)
-    except Exception:
+    except Exception:  # a property that raises counts as absent
         return None
 
 
@@ -136,7 +136,7 @@ def _container_or_object(value: Any, depth: int, active: set[int]) -> Any:
         out: dict[str, Any] = {}
         try:
             items = list(value.items())
-        except Exception:
+        except Exception:  # an items() that raises is no mapping to walk
             return type(value).__qualname__
         for key, item in items:
             out[_key(key)] = _preimage(item, depth + 1, active)
@@ -183,7 +183,7 @@ def output_preimage(result: Any) -> Any:
     """
     try:
         return _preimage(result, 0, set())
-    except Exception:
+    except Exception:  # a result that cannot be walked is named by its type
         return type(result).__qualname__
 
 
@@ -235,7 +235,7 @@ def redact_credentials(
         names = {secret: var for var, secret in pairs}
         pattern = re.compile("|".join(re.escape(secret) for _, secret in pairs))
         return _redact(preimage, pattern, names)
-    except Exception:
+    except Exception:  # credentials that cannot be matched leave the text as it was
         return preimage
 
 

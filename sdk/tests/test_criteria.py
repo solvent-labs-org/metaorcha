@@ -1,4 +1,4 @@
-"""``emerge.criteria``: the one digest and the one evaluation (story 4.1, AD-20).
+"""``emerge.criteria``: the one digest and the one evaluation.
 
 The digest case is pinned to the value the platform put in a real SM-2
 envelope on 2026-09-21; the step and run rules are the ones the platform's

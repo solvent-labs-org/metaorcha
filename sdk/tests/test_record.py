@@ -15,8 +15,11 @@ import copy
 import importlib.util
 import io
 import json
+import os
 import stat
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -27,6 +30,7 @@ from emerge.record import (
     KEY_PATH_ENV,
     PLATFORM_KEY_ENV,
     EphemeralKeyRefused,
+    _place_key_alone,
     build_run_envelope,
     key_did,
     load_signing_key,
@@ -246,7 +250,7 @@ def test_no_platform_variable_is_read_not_even_the_platforms_opt_in(
 def test_the_platforms_key_variable_is_never_read(
     no_ambient_key, monkeypatch, generator
 ):
-    # AD-20: a plugin receipt is signed as its holder, never as the platform
+    # a plugin receipt is signed as its holder, never as the platform
     monkeypatch.setenv(PLATFORM_KEY_ENV, generator.EXAMPLE_SEED_B64)
     with pytest.raises(EphemeralKeyRefused, match="not read here"):
         load_signing_key()
@@ -271,6 +275,81 @@ def test_key_file_is_mode_0600_and_never_overwritten_silently(no_ambient_key):
         write_key_file(path)
     _, second = write_key_file(path, force=True)
     assert public_key_b64_of(second) != public_key_b64_of(first)
+
+
+def test_a_new_key_folder_is_0700_and_an_existing_folder_keeps_its_mode(no_ambient_key):
+    old = os.umask(0o002)
+    try:
+        fresh = no_ambient_key / "fresh" / "key"
+        write_key_file(fresh)
+        assert stat.S_IMODE(fresh.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(fresh.stat().st_mode) == 0o600
+        chosen = no_ambient_key / "chosen"
+        chosen.mkdir(mode=0o755)
+        chosen.chmod(0o755)
+        write_key_file(chosen / "key")
+        assert stat.S_IMODE(chosen.stat().st_mode) == 0o755
+    finally:
+        os.umask(old)
+
+
+def test_two_writers_end_with_one_key(no_ambient_key):
+    path = no_ambient_key / "race" / "key"
+    barrier = threading.Barrier(2)
+    found: list[tuple[Path, Ed25519PrivateKey]] = []
+    errors: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            barrier.wait()
+            found.append(write_key_file(path))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert len(found) == 2
+    loaded = load_signing_key(path)
+    assert {public_key_b64_of(key) for _, key in found} == {public_key_b64_of(loaded)}
+
+
+def test_a_writer_that_loses_the_race_waits_for_the_whole_key(no_ambient_key):
+    path = no_ambient_key / "race" / "key"
+    path.parent.mkdir()
+    path.write_bytes(b"")
+    winner = Ed25519PrivateKey.generate()
+    seed = base64.b64encode(winner.private_bytes_raw()).decode("ascii") + "\n"
+
+    def fill() -> None:
+        time.sleep(0.05)
+        path.write_text(seed, encoding="ascii")
+
+    threading.Thread(target=fill).start()
+    got = _place_key_alone(path, "not-the-seed\n", Ed25519PrivateKey.generate())
+    assert public_key_b64_of(got) == public_key_b64_of(winner)
+    assert path.read_text(encoding="ascii") == seed
+
+
+def test_a_key_nobody_finishes_names_the_half_written_file(no_ambient_key):
+    path = no_ambient_key / "race" / "key"
+    path.parent.mkdir()
+    path.write_bytes(b"")
+    loser = Ed25519PrivateKey.generate()
+    seed = base64.b64encode(loser.private_bytes_raw()).decode("ascii") + "\n"
+    with pytest.raises(ValueError, match="empty or half written"):
+        _place_key_alone(path, seed, loser)
+    assert path.read_bytes() == b""
+
+
+def test_a_link_at_the_key_path_is_a_named_error(no_ambient_key):
+    path = no_ambient_key / "key"
+    path.symlink_to(no_ambient_key / "missing")
+    with pytest.raises(ValueError, match="link"):
+        write_key_file(path)
 
 
 @pytest.mark.parametrize("bad", ["not base64!", base64.b64encode(b"short").decode()])
@@ -360,7 +439,7 @@ def test_cli_seal_refuses_without_a_key(no_ambient_key, example_run, capsys):
 def test_cli_seal_with_the_opt_in_prints_an_unkept_receipt_but_never_writes_one(
     no_ambient_key, example_run, monkeypatch, capsys
 ):
-    # NFR-6: the ephemeral opt-in reaches a receipt printed to a terminal,
+    # the ephemeral opt-in reaches a receipt printed to a terminal,
     # never one written with --out or redirected; the kept receipt is refused,
     # no file appears, and the opt-in is not offered for it
     monkeypatch.setenv(ALLOW_EPHEMERAL_KEY_ENV, "1")

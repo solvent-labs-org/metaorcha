@@ -1,4 +1,4 @@
-"""FR-8 (story 3.2): the verifier says what a receipt does not cover.
+"""The verifier says what a receipt does not cover.
 
 The statement is export text: computed from the envelope by whoever reads it,
 never stored in the envelope, never emitted by a producer. It is the same for

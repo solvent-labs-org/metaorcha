@@ -7,7 +7,7 @@ with its own changelog: [sdk/CHANGELOG.md](sdk/CHANGELOG.md).
 
 ## [Unreleased]
 
-`orcha-sdk` 0.1.2, 0.1.3 and 0.2.0 were released from this range; their notes
+`orcha-sdk` 0.1.2, 0.1.3, 0.2.0 and 0.2.1 were released from this range; their notes
 are in [sdk/CHANGELOG.md](sdk/CHANGELOG.md). #59, #103, #104 and #105 add
 database migrations.
 
@@ -70,6 +70,7 @@ database migrations.
 
 ### Changed
 
+- `make check` also covers `sdk/`, as CI does.
 - `SECURITY.md` names the CLI `orcha-sdk` (community #47).
 - Public copy names the project Metaorcha; `orcha` stays inside component
   identifiers.

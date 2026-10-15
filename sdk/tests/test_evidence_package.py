@@ -12,7 +12,7 @@ import copy
 import importlib.util
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -247,7 +247,7 @@ def test_write_package_projects_orm_rows(pkg, tmp_path: Path):
     """The slice passes ORM rows: a Json-wrapped failed_checks and a datetime."""
     vectors = pkg._load_generator().build_vectors()
     valid, tampered = vectors["valid"], vectors["tampered"]
-    when = datetime(2026, 9, 5, 4, 0, tzinfo=UTC)
+    when = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
     settled = SimpleNamespace(
         run_id=valid["run_id"],
         session_id="sess-1",

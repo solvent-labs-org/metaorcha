@@ -56,7 +56,7 @@ jobs:
         run: uv build -o dist
 
       - name: Check metadata
-        run: uvx twine check sdk/dist/*
+        run: uvx twine@7.0.0 check sdk/dist/*
 
       - name: Smoke test wheel in isolation
         run: |
