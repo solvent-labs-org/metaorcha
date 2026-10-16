@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 import os
@@ -51,8 +52,11 @@ def test_a_sent_message_is_one_file_in_code_desks_shape_and_is_read_once(home, c
 def test_mail_from_code_desks_reads_and_comes_oldest_first(home):
     box = mail.mailbox("dev")
     (box / "20261013T091502-lead-ab12.md").write_text(CODE_DESKS_MESSAGE)
+    # a local time with no zone, a minute before lead's, in whatever zone this runs
+    lead_at = dt.datetime.fromisoformat("2026-10-13T09:15:02+05:00")
+    earlier = (lead_at - dt.timedelta(minutes=1)).astimezone().replace(tzinfo=None)
     (box / "20261013T091400-ops-cd34.md").write_text(
-        "from: ops\nto: dev\nat: 2026-10-13T09:14:00\n\nEarlier, with no zone.\n"
+        f"from: ops\nto: dev\nat: {earlier.isoformat()}\n\nEarlier, with no zone.\n"
     )
     got = mail.unread("dev")
     assert [m.sender for m in got] == ["ops", "lead"]
