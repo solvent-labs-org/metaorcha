@@ -123,6 +123,23 @@ async def test_closing_early_kills_the_engine(tmp_path, monkeypatch):
     assert time.monotonic() - t0 < 10
 
 
+async def test_closing_leaves_none_of_the_engines_tasks_running(tmp_path, monkeypatch):
+    import signal
+
+    holder = tmp_path / "holder.pid"
+    monkeypatch.setenv("FAKE_HOLDER_OUT", str(holder))  # a leftover keeps stdout open
+    monkeypatch.setenv("FAKE_FIXTURE", str(_fixture(tmp_path, ['{"type":"final","text":"ok"}'])))
+    try:
+        assert await _collect(EngineJob("x", tmp_path)) == [Final("ok", None)]
+        # a cancelled task is not done until it runs again, so close must wait for each
+        here = asyncio.current_task()
+        assert [task for task in asyncio.all_tasks() if task is not here] == []
+    finally:
+        if holder.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(holder.read_text()), signal.SIGKILL)
+
+
 async def test_overlong_line_is_dropped_not_fatal(tmp_path, monkeypatch):
     from metabot.engines import base
 

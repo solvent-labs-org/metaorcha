@@ -239,6 +239,26 @@ def test_a_stopped_serve_leaves_no_pid_in_the_lock(home):
     assert lock.read_text(encoding="ascii") == ""  # nobody to signal: that pid may be reused
 
 
+async def test_serve_waits_for_its_worker_to_end_before_it_stops(home, monkeypatch):
+    order: list[str] = []
+    work, stop = Scheduler.work, Scheduler.stop
+
+    async def working(self: Scheduler) -> None:
+        try:
+            await work(self)
+        finally:
+            order.append("worker ended")
+
+    def stopping(self: Scheduler) -> None:
+        order.append("stop")
+        stop(self)
+
+    monkeypatch.setattr(Scheduler, "work", working)
+    monkeypatch.setattr(Scheduler, "stop", stopping)
+    assert await serve(clock=ticking(at(8, 0), at(8, 0, 15)), once=True, out=io.StringIO()) == 0
+    assert order == ["worker ended", "stop"]
+
+
 async def test_restart_turns_running_into_error_restart(tmp_path):
     rid = _save(tmp_path, "0 9 * * *")
     _append(Firing("fr-00000000000a", rid, slot(9, 0), "running", "mb-never-sealed", None, "t"))
