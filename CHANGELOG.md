@@ -2,8 +2,9 @@
 
 All notable changes to Metaorcha are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
-[Semantic Versioning](https://semver.org/). `orcha-sdk` is released on its own,
-with its own changelog: [sdk/CHANGELOG.md](sdk/CHANGELOG.md).
+[Semantic Versioning](https://semver.org/). `orcha-sdk` and MetaBot are released
+on their own, with their own changelogs: [sdk/CHANGELOG.md](sdk/CHANGELOG.md)
+and [apps/metabot/CHANGELOG.md](apps/metabot/CHANGELOG.md).
 
 ## [Unreleased]
 
@@ -13,6 +14,11 @@ database migrations.
 
 ### Added
 
+- MetaBot (`apps/metabot`): a local bot that runs on the coding-agent plan you
+  already have, gates every connection, and leaves a signed receipt for every run.
+- CI checks MetaBot on each pull request that changes it or the SDK: lint,
+  format, types, a wheel build and its tests, and the tests again on Python
+  3.11, its floor.
 - RFC 0003, the signed run attestation envelope, is accepted, with golden
   vectors and the generator that reproduces them (#57).
 - Signed run receipts on the platform, with `RUN_ATTESTATION_ENABLED` on, as it
@@ -70,8 +76,9 @@ database migrations.
 
 ### Changed
 
-- `make check` also covers `sdk/`, as CI does.
-- `SECURITY.md` names the CLI `orcha-sdk` (community #47).
+- `make check` also covers `sdk/` and `apps/metabot`, as CI does.
+- `SECURITY.md` covers MetaBot, and names the CLI `orcha-sdk` (community #47).
+- The README leads with MetaBot.
 - Public copy names the project Metaorcha; `orcha` stays inside component
   identifiers.
 - The roadmap is rewritten around a signed run record anyone can check offline

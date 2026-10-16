@@ -1,0 +1,7 @@
+{
+  "name": "code-desks",
+  "version": "0.1.0",
+  "description": "Work as one desk of a Code Desks office: the work board, sign-offs and mail, with the desk command.",
+  "author": {"name": "Metaorcha"},
+  "license": "Apache-2.0"
+}

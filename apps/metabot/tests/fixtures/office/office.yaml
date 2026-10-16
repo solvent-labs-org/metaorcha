@@ -1,0 +1,74 @@
+# office.yaml: your whole company in one file. Edit it like code.
+# Office words, and the short names this file keeps: employee = desk,
+# assignment = thread, sign-off = gate, proof = evidence, cycle = sprint.
+name: my-office
+
+# Two sides of every sign-off: the owner (you, the CEO) decides, the engineer
+# (an employee) hands in proof. One person may do both; the tool keeps them apart.
+hats: [owner, engineer]
+
+cadence:
+  sprint_days: 7
+  start: 2026-09-22        # first cycle starts (ISO date)
+  review: friday
+
+# Sign-offs, in order. An assignment passes a sign-off only when both halves
+# are in. `order: engineer-first` means you may not decide until the employee's
+# proof is in (a verdict on no proof is refused).
+gates:
+  scope:
+    owner: [scope, priority]
+    engineer: [estimate, risks]
+  ready:
+    owner: [verdict]
+    engineer: [tests-green, evidence]
+    order: engineer-first
+  shipped:
+    owner: [acceptance]
+    engineer: [read-back, receipt]
+    order: engineer-first
+
+# Employees. `role` is the job description. `harness` is the AI tool:
+# claude | codex | cursor | custom (or any: on payroll, never started).
+# `cwd` is relative to this file. `budget` is tokens per cycle (input + output,
+# cached included) and is optional.
+#   kit: [bmad-dev-story, bmad-code-review]   # the toolkit, linked into the employee's own desk space
+#   overrides: { bmad-party-mode: { default_party: office } }
+#   advises: [dev]      # an advisor: reads everything, signs nothing, mails what it doubts
+desks:
+  pm:
+    role: .office/roles/pm.md
+    harness: claude
+    model: opus
+    tier: high
+    budget: 10_000_000
+  dev:
+    role: .office/roles/dev.md
+    harness: claude
+    model: opus
+    tier: xhigh
+    budget: 36_000_000
+  review:
+    role: .office/roles/review.md
+    harness: codex
+    budget: 5_000_000
+
+# Deadlines.
+milestones:
+  - name: first-release
+    due: 2026-10-15
+
+# Assignments. Each is owned by one employee and passes the sign-offs in order.
+threads:
+  - name: example-thread
+    desk: dev
+    milestone: first-release
+
+# Optional. Subscription tiers you would buy, in tokens per 30 days, per
+# AI tool. `desk estimate` picks the smallest tier that covers each employee's
+# measured pace. No vendor numbers ship with the tool: limits are not
+# published in tokens and change; put in what you have observed.
+# plans:
+#   claude:
+#     - { name: my-plan,   tokens_per_month: 100_000_000 }   # what you observed, not a vendor's figure
+#     - { name: next-tier, tokens_per_month: 400_000_000 }
