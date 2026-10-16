@@ -1,0 +1,57 @@
+[project]
+name = "orcha-metabot"
+version = "0.1.0"
+description = "A local bot for the coding agents you already use. Every connection gated, every run signed, every receipt checkable offline."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+  "orcha-sdk>=0.2.1",
+  "mcp>=2.0,<3",
+  "httpx2>=2.5.0",  # imported directly; also what mcp requires
+  "pyyaml>=6",  # Code Desks' office.yaml
+  "starlette>=0.27",  # metabot ui; mcp already requires it
+  "uvicorn>=0.31.1",  # metabot ui; mcp already requires it
+  "python-multipart>=0.0.9",  # metabot ui's forms; mcp already requires it
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX",
+]
+
+[project.scripts]
+metabot = "metabot.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metabot"]
+
+[dependency-groups]
+dev = ["mypy>=2.3", "pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.16"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+markers = ["live: drives real engines; set METABOT_LIVE=1"]
+
+[tool.mypy]
+files = ["src/metabot"]
+python_version = "3.11"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/../../sdk/src"  # the SDK in this tree, as the tests use
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true  # PyYAML ships no types; safe_load gives Any either way
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

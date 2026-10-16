@@ -1,0 +1,10 @@
+{"type": "system", "subtype": "init", "cwd": "/work", "session_id": "00000000-0000-4000-8000-000000000001", "model": "claude-haiku-5-5", "permissionMode": "default", "tools": ["Bash", "mcp__metabot__gh__list_issues"], "mcp_servers": [{"name": "metabot", "status": "connected"}]}
+{"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup", "hook_event": "SessionStart", "output": "text from someone else's hook", "stdout": "text from someone else's hook", "exit_code": 0, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "let me look"}, {"type": "tool_use", "id": "toolu_m1", "name": "mcp__metabot__gh__list_issues", "input": {"repo": "acme/widgets"}}]}, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_m1", "content": [{"type": "text", "text": "[]"}], "is_error": false}]}, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_b1", "name": "Bash", "input": {"command": "make test"}}]}, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_b1", "content": [{"type": "text", "text": "Exit code 1"}, {"type": "text", "text": "1 failed"}], "is_error": true}]}, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "future_event", "payload": {"anything": true}}
+{"type": "future_event_with_text", "text": "a newer CLI said something"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Tests fail: 1 failed."}]}, "session_id": "00000000-0000-4000-8000-000000000001"}
+{"type": "result", "subtype": "success", "is_error": false, "num_turns": 3, "result": "Tests fail: 1 failed.", "session_id": "00000000-0000-4000-8000-000000000001", "total_cost_usd": 0.01, "usage": {"input_tokens": 10, "output_tokens": 20}}

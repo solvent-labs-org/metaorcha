@@ -26,8 +26,14 @@ Please include:
 
 This policy covers the open-source Metaorcha runtime in this repository: the
 SuperAgent execution pipeline, Registry, Planning & Discovery, Gateway (mock
-mode), the example agents, the `common/*` libraries, and the `orcha-sdk` CLI/SDK
-(`emerge` is kept as a compatibility alias).
+mode), the example agents, the `common/*` libraries, the `orcha-sdk` CLI/SDK
+(`emerge` is kept as a compatibility alias), and MetaBot (`apps/metabot`).
+
+The limits MetaBot's README states, under **Limits**, are known and documented.
+A way past a protection MetaBot claims is in scope: for example, a tool call
+that skips its gate, a receipt that does not match what ran, a connection's
+token that reaches an engine or a record, or the web UI acting on a request
+that does not carry its token.
 
 Hosted/production payment rails are not part of this repository and are out of
 scope here.
