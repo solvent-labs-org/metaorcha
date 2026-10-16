@@ -37,7 +37,8 @@ class ApprovalRequest:
 class Approver(Protocol):
     kind: str
 
-    async def ask(self, req: ApprovalRequest) -> bool: ...
+    async def ask(self, req: ApprovalRequest) -> bool:
+        """Whether the person allows this call."""
 
 
 def printable(text: str, limit: int = PREVIEW_LIMIT) -> str:
@@ -56,7 +57,17 @@ def printable(text: str, limit: int = PREVIEW_LIMIT) -> str:
 
 
 # C0 and C1 controls except tab and newline, and the marks that reorder text.
-_UNSAFE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_UNSAFE_POINTS = (
+    *range(0x00, 0x09),
+    *range(0x0B, 0x20),
+    *range(0x7F, 0xA0),
+    0x061C,
+    0x200E,
+    0x200F,
+    *range(0x202A, 0x202F),
+    *range(0x2066, 0x206A),
+)
+_UNSAFE = re.compile("[" + "".join(re.escape(chr(c)) for c in _UNSAFE_POINTS) + "]")
 
 
 def terminal_safe(text: str) -> str:

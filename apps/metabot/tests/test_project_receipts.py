@@ -76,7 +76,7 @@ def test_copy_goes_to_the_git_top_level(tmp_path, ask, capsys):
     assert code == 0
     copy = repo / PROJECT_RECEIPTS / f"{row['run_id']}.json"
     assert copy.read_bytes() == Path(row["receipt"]).read_bytes()
-    assert stat.S_IMODE(copy.stat().st_mode) == 0o644
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600
     assert f"[metabot] project copy {copy}" in err
     capsys.readouterr()
     assert main(["receipts", "verify", str(copy)]) == 0
@@ -256,4 +256,4 @@ async def test_a_routine_copies_into_its_folder(tmp_path):
     copy = tmp_path / PROJECT_RECEIPTS / Path(firing.receipt).name
     assert copy.read_bytes() == Path(firing.receipt).read_bytes()
     assert verify_file(copy).valid
-    assert os.stat(copy).st_mode & 0o777 == 0o644
+    assert os.stat(copy).st_mode & 0o777 == 0o600

@@ -61,6 +61,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     try:
         asyncio.run(server.serve(sockets=[sock]))
     except KeyboardInterrupt:
+        # Ctrl-C is how the page is stopped, so it ends without a traceback
         pass
     finally:
         sock.close()

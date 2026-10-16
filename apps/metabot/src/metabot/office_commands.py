@@ -217,7 +217,7 @@ def cmd_office_run(args: argparse.Namespace) -> int:
     import asyncio
 
     from metabot.approvals import pick_approver, terminal_safe
-    from metabot.commands import read_prompt
+    from metabot.cmdline import read_prompt
     from metabot.console import Trace
     from metabot.office_run import receipt_state, run_fan, run_relay
     from metabot.runner import RunCancelled

@@ -14,6 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from metabot.approvals import Approver, pick_approver, printable, terminal_safe
+from metabot.cmdline import (
+    EXIT_CANCELLED,
+    EXIT_FAILED,
+    EXIT_OK,
+    EXIT_USAGE,
+    read_prompt,
+    resolve_allows,
+)
 from metabot.config import load_config, project_receipts_on, save_config
 from metabot.connections import Connection, ConnectionStore
 from metabot.console import Trace
@@ -32,7 +40,6 @@ from metabot.suggest import Suggestion, reason, suggest_here
 from metabot.text import ascii_digits
 
 ENGINE_ORDER = ("claude", "codex", "cursor", "openai")
-EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_CANCELLED = 0, 1, 2, 130
 SERVER_SAID_LIMIT = 4000
 SERVER_SAID_LINES = 12
 
@@ -145,30 +152,6 @@ def cmd_engines(_args: argparse.Namespace) -> int:
 
 
 # ── ask ─────────────────────────────────────────────────────────────────────
-
-
-def resolve_allows(raw: list[str], engine: Any, store: ConnectionStore) -> frozenset[str]:
-    """``gh__create_issue`` -> the connection's DID form; ``Edit`` -> ``<prefix>/Edit``."""
-    out: set[str] = set()
-    for item in raw:
-        if "#" in item or "/" in item:
-            out.add(item)
-            continue
-        conn_name, sep, capability = item.partition("__")
-        if sep:
-            try:
-                out.add(f"{store.get(conn_name).id}#{capability}")
-                continue
-            except KeyError:
-                pass
-        out.add(f"{engine.tool_prefix}/{item}")
-    return frozenset(out)
-
-
-def read_prompt(words: list[str]) -> str:
-    if words == ["-"]:
-        return sys.stdin.read()
-    return " ".join(words)
 
 
 async def ask_once(
@@ -423,7 +406,7 @@ def _tools_or_error(store: ConnectionStore, name: str) -> tuple[Connection, list
             errlog.seek(0)
             said = errlog.read()
             if secret:  # redact before cutting, so no part of the token survives the cut
-                said = said.replace(secret, f"[REDACTED:{conn.secret_var}]")
+                said = said.replace(secret, f"[REDACTED:{conn.redacted_as}]")
             for line in said[-SERVER_SAID_LIMIT:].splitlines()[-SERVER_SAID_LINES:]:
                 print(f"  {name}: {printable(line, 200)}", file=sys.stderr)
             return EXIT_FAILED

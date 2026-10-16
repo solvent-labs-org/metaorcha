@@ -360,7 +360,7 @@ class Switchboard:
             conn = route.conn
             conn.state = "removed"
         secret = self.store.secret(conn)
-        redact = {conn.secret_var: secret} if secret else {}
+        redact = {conn.redacted_as: secret} if secret else {}
         clean_args = redact_credentials(output_preimage(args), redact) if redact else args
         if not conn.active:
             reason = f"connection {conn.name} is {conn.state}"

@@ -113,6 +113,7 @@ class ControlServer:
             writer.write(json.dumps(reply).encode("utf-8") + b"\n")
             await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
+            # the client went away or sent a line that is not JSON; it gets no reply
             pass
         finally:
             if task is not None:

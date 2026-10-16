@@ -179,7 +179,8 @@ def _copy_files(src: Path, dst: Path, skip: Callable[[str], bool] = lambda rel: 
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        os.chmod(target, 0o755 if path.stat().st_mode & 0o111 else 0o644)
+        if path.stat().st_mode & 0o111:  # a script stays runnable; the umask sets the rest
+            target.chmod(target.stat().st_mode | stat.S_IXUSR)
 
 
 # ── what a plugin carries ───────────────────────────────────────────────────

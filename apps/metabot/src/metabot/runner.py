@@ -13,10 +13,10 @@ import asyncio
 import contextlib
 import json
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from emerge.journal import utc_now
 
@@ -162,6 +162,13 @@ def _metabot_command(*args: str) -> list[str]:
     return [sys.executable, "-I", "-m", "metabot", *args]
 
 
+@contextlib.contextmanager
+def _appending(path: Path) -> Iterator[TextIO]:
+    """A log file opened for appending, closed when the run's stack unwinds."""
+    with open(path, "a", encoding="utf-8") as fh:
+        yield fh
+
+
 @contextlib.asynccontextmanager
 async def _events(
     engine: Any,
@@ -199,7 +206,7 @@ async def _events(
             assert job.work_dir is not None  # run_job gives every run its directory
             log_path = job.work_dir / "switchboard.log"
             write_private(log_path, "")
-            errlog = stack.enter_context(open(log_path, "a", encoding="utf-8"))  # noqa: SIM115  # the stack closes it
+            errlog = stack.enter_context(_appending(log_path))
             board = await stack.enter_async_context(
                 Switchboard(
                     ConnectionStore(),

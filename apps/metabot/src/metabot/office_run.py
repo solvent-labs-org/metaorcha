@@ -675,7 +675,7 @@ async def _run_row(
     read-only with every write asked and nothing allowed ahead, and files
     nothing; ``since`` is where the work it reviews began.
     """
-    from metabot.commands import resolve_allows
+    from metabot.cmdline import resolve_allows
 
     desk = run.office.desks[row.desk]
     advisor = row.advises is not None

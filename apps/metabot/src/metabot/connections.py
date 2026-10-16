@@ -54,8 +54,8 @@ class Connection:
         return self.state == "active"
 
     @property
-    def secret_var(self) -> str:
-        """The name a redacted token shows as: ``[REDACTED:<secret_var>]``."""
+    def redacted_as(self) -> str:
+        """The name a redacted token shows as: ``[REDACTED:<redacted_as>]``."""
         return self.token_env or f"{self.name}-token"
 
 
@@ -253,7 +253,7 @@ class ConnectionStore:
         for conn in self.active():
             token = self.secret(conn)
             if token:
-                out[conn.secret_var] = token
+                out[conn.redacted_as] = token
         return out
 
     def secret(self, conn: Connection) -> str | None:

@@ -175,7 +175,7 @@ def reason(s: Suggestion) -> str:
 
 
 def cmd_suggest(args: argparse.Namespace) -> int:
-    from metabot.commands import EXIT_USAGE, read_prompt
+    from metabot.cmdline import EXIT_USAGE, read_prompt
 
     task = read_prompt(args.task)
     if not task.strip():

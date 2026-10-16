@@ -100,7 +100,8 @@ def test_remove_deletes_the_connection_and_its_token():
     conn = _stdio(store)
     token_file = secrets_dir() / conn.suffix
     assert token_file.exists()
-    assert store.remove("gh").id == conn.id
+    removed = store.remove("gh")
+    assert removed.id == conn.id
     assert store.list() == [] and not token_file.exists()
     with pytest.raises(KeyError):
         store.remove("gh")

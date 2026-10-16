@@ -46,7 +46,7 @@ from metabot.steps import ascii_text
 POLICY_VERSION = "metabot/1.0"
 # where the orcha-record plugin keeps its receipts too
 PROJECT_RECEIPTS = Path(".orcha") / "receipts"
-PROJECT_MODE = 0o644  # a receipt holds hashes and DIDs only
+PROJECT_MODE = 0o600  # as the home copy; git keeps no read bits, so a commit shares it the same
 JOURNAL_FORMAT = "metabot.journal/1"
 INDEX_TEXT_LIMIT = 200
 KEY_WAIT_S = 2.0  # how long a run waits for a key another run is still writing
@@ -402,26 +402,33 @@ def copy_to_project(receipt: Path | str, folder: Path) -> Path:
     """
     source = Path(receipt)
     top = project_root(folder)
-    opened: list[int] = []
     try:
         data = source.read_bytes()
-        fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY)
-        opened.append(fd)
-        for part in PROJECT_RECEIPTS.parts:
-            with contextlib.suppress(FileExistsError):
-                os.mkdir(part, 0o755, dir_fd=fd)
-            fd = _open_folder(part, fd)
-            opened.append(fd)
-        _write_new(fd, source.name, data)
+        top_fd = os.open(top, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            _write_inside(top_fd, PROJECT_RECEIPTS.parts, source.name, data)
+        finally:
+            os.close(top_fd)
     except OSError as exc:
         why = _WHY.get(exc.errno or 0) or exc.strerror or type(exc).__name__
         raise ProjectCopyError(
             f"no copy of the receipt in {top / PROJECT_RECEIPTS}: {why}"
         ) from None
-    finally:
-        for each in reversed(opened):
-            os.close(each)
     return top / PROJECT_RECEIPTS / source.name
+
+
+def _write_inside(dir_fd: int, parts: tuple[str, ...], name: str, data: bytes) -> None:
+    """Make and enter each folder in ``parts`` without following a link, then write ``name``."""
+    if not parts:
+        _write_new(dir_fd, name, data)
+        return
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(parts[0], 0o755, dir_fd=dir_fd)
+    fd = _open_folder(parts[0], dir_fd)
+    try:
+        _write_inside(fd, parts[1:], name, data)
+    finally:
+        os.close(fd)
 
 
 def _open_folder(name: str, dir_fd: int) -> int:
