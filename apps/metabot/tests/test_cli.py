@@ -417,6 +417,17 @@ def test_receipts_list_and_show(echo, tmp_path, capsys):
     assert main(["receipts", "show", "nope"]) == 2
 
 
+def test_receipts_list_takes_the_last_n_and_none_for_a_limit_below_one(echo, tmp_path, capsys):
+    first, second = _one_run(tmp_path, capsys), _one_run(tmp_path, capsys)
+    assert main(["receipts", "list", "-n", "1"]) == 0
+    listed = capsys.readouterr().out
+    assert second in listed and first not in listed
+    for limit in ("0", "-1"):
+        assert main(["receipts", "list", "-n", limit]) == 0
+        listed = capsys.readouterr().out
+        assert first not in listed and second not in listed
+
+
 def test_looking_up_a_run_never_creates_its_folder(home, capsys):
     assert main(["receipts", "show", "mb-typo"]) == 2
     assert "no run 'mb-typo'" in capsys.readouterr().err

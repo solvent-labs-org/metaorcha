@@ -481,7 +481,7 @@ def _receipt_path(ref: str) -> Path | None:
 
 
 def cmd_receipts_list(args: argparse.Namespace) -> int:
-    rows = list_index()[-args.limit :]
+    rows = list_index()[-args.limit :] if args.limit > 0 else []
     if not rows:
         print("no runs yet")
     for row in rows:
