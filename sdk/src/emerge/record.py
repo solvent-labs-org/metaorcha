@@ -21,7 +21,7 @@ Rules carried over unchanged (see the RFC and the verifier's docstring):
   integer in ``[0, 1000]``. DIDs follow the platform profile
   (``did:orcha:agent:*`` / ``did:orcha:system:*``).
 
-This module is the single producer implementation (AD-20): the platform's
+This module is the single producer implementation: the platform's
 validator builds and signs through :func:`build_run_envelope` and
 :func:`sign_run_envelope` with its own key, and ``orcha record`` through
 :func:`seal_run` with the developer's. Neither has a copy.
@@ -44,7 +44,8 @@ import base64
 import hashlib
 import os
 import re
-import stat
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,7 @@ PLATFORM_KEY_ENV = "ATTESTATION_PRIVATE_KEY_B64"
 ALLOW_EPHEMERAL_KEY_ENV = "ORCHA_ALLOW_EPHEMERAL_KEY"
 KEY_PATH_ENV = "ORCHA_KEY_PATH"
 DEFAULT_KEY_PATH = Path("~/.orcha/key")
+_KEY_WAIT_S = 2.0  # how long a loser waits for a key another writer is still filling
 
 _PLATFORM_DID_RE = re.compile(r"^did:orcha:(agent|system):[\x20-\x7e]+$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -327,7 +329,7 @@ def load_signing_key(
 ) -> Ed25519PrivateKey:
     """Load the local signing key from the key file, and nothing else.
 
-    ``ATTESTATION_PRIVATE_KEY_B64`` is never consulted (AD-20): the platform
+    ``ATTESTATION_PRIVATE_KEY_B64`` is never consulted: the platform
     signs as the platform, a local receipt as its holder. Without a key file,
     :class:`EphemeralKeyRefused` is raised — a receipt sealed by a key nobody
     keeps cannot be re-verified against that signer later. With *kept* False
@@ -359,29 +361,114 @@ def load_signing_key(
     )
 
 
+def _key_folder(parent: Path) -> None:
+    """A key folder this function makes is 0700. One already there keeps its mode."""
+    if parent.is_dir():
+        return
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent.chmod(0o700)
+
+
+def _whole_key(path: Path) -> Ed25519PrivateKey:
+    """The key at ``path``, after a short wait when another writer has not filled it yet.
+
+    A link is refused: following it would read whatever it points at, and a
+    dangling one is not a key file.
+    """
+    if path.is_symlink():
+        raise ValueError(f"{path} is a link; a key file is a regular file")
+    deadline = time.monotonic() + _KEY_WAIT_S
+    while True:
+        try:
+            return load_signing_key(path)
+        except ValueError:  # not a whole seed yet
+            if time.monotonic() >= deadline:
+                raise ValueError(f"{path} is empty or half written") from None
+            time.sleep(0.02)
+
+
+def _place_key_alone(
+    path: Path, seed: str, private_key: Ed25519PrivateKey
+) -> Ed25519PrivateKey:
+    """Create the key file exclusively, or return the key another writer put there."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return _whole_key(path)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(seed)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return private_key
+
+
+def _place_new_key(
+    path: Path, seed: str, private_key: Ed25519PrivateKey
+) -> Ed25519PrivateKey:
+    """Write the seed whole, then link it into place. Two writers leave one file."""
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(seed)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return _whole_key(path)
+        except OSError:
+            return _place_key_alone(path, seed, private_key)
+        return private_key
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _replace_key(
+    path: Path, seed: str, private_key: Ed25519PrivateKey
+) -> Ed25519PrivateKey:
+    """Replace a key file with a whole new seed, mode 0600."""
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    tmp = Path(tmp_name)
+    placed = False
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(seed)
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+        placed = True
+        path.chmod(0o600)
+        return private_key
+    finally:
+        if not placed:
+            tmp.unlink(missing_ok=True)
+
+
 def write_key_file(
     key_path: str | os.PathLike[str] | None = None, *, force: bool = False
 ) -> tuple[Path, Ed25519PrivateKey]:
     """Generate a new Ed25519 seed and write it base64-encoded, mode ``0600``.
 
-    Refuses to overwrite an existing file unless *force*. The seed is
-    returned as a key object only; it is never rendered to stdout or a log.
+    A folder this function makes for the key is 0700. A folder that is already
+    there keeps its mode. Refuses to overwrite an existing file unless *force*.
+    Two writers at once leave one key file. The seed is returned as a key
+    object; it is never rendered to stdout or a log.
     """
     path = resolve_key_path(key_path)
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists; pass --force to replace it")
+    _key_folder(path.parent)
     private_key = Ed25519PrivateKey.generate()
-    seed_b64 = base64.b64encode(private_key.private_bytes_raw()).decode("ascii")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(seed_b64 + "\n")
-    finally:
-        del seed_b64
-    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    return path, private_key
+    seed = base64.b64encode(private_key.private_bytes_raw()).decode("ascii") + "\n"
+    if force and path.exists():
+        return path, _replace_key(path, seed, private_key)
+    return path, _place_new_key(path, seed, private_key)
 
 
 # ── One-call seal ────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
-"""Orcha agent CLI — the launch-scope developer surface.
+"""The ``orcha-sdk`` command line, for people who build agents.
 
-Installed as ``orcha-sdk`` (and ``emerge``, kept as an alias). Six commands
-only (resist scope creep — test/deploy/login are post-launch):
+Installed as ``orcha-sdk``, and as ``emerge``, an alias kept for older scripts.
+Six commands:
 
 - ``orcha-sdk init [name]``   scaffold a new agent from the bundled template
 - ``orcha-sdk run [module]``  serve decorated agents locally + register them
@@ -10,8 +10,8 @@ only (resist scope creep — test/deploy/login are post-launch):
 - ``orcha-sdk verify <envelope.json>``  offline run attestation verifier (RFC 0003)
 - ``orcha-sdk record seal <run.json>``  seal a run into a signed envelope with a
   local key and no service (RFC 0003 producer); ``record keygen`` mints the key;
-  ``record hook claude-code`` is the Claude Code hook that journals every tool
-  call and seals the receipt on Stop
+  ``record hook claude-code`` is the hook for the ``claude`` CLI that journals
+  every tool call and seals the receipt on Stop
 """
 
 from __future__ import annotations
@@ -327,7 +327,7 @@ def _print_verdict(verdict: AttestationVerdict) -> None:
 
 
 def _print_coverage(coverage: dict[str, Any]) -> None:
-    """FR-8: say what the record covers, so a partial record is not read as whole."""
+    """Say what the record covers, so a partial record is not read as whole."""
     print("Coverage:")
     for line in textwrap.wrap(coverage["statement"], width=72):
         print(f"  {line}")
@@ -450,7 +450,7 @@ def cmd_record_keygen(args: argparse.Namespace) -> int:
     prog = "emerge record keygen"
     try:
         path, private_key = write_key_file(args.key, force=args.force)
-    except (FileExistsError, OSError) as exc:
+    except (FileExistsError, OSError, ValueError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
     print(f"wrote {path} (mode 0600)")
@@ -460,7 +460,9 @@ def cmd_record_keygen(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Orcha agent developer CLI")
+    p = argparse.ArgumentParser(
+        description="The orcha-sdk command line, for people who build agents"
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -482,7 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-register",
         dest="register",
         action="store_false",
-        help="serve only; do not register",
+        help="serve without registering",
     )
     pr.set_defaults(func=cmd_run, register=True)
 
@@ -619,9 +621,9 @@ def build_parser() -> argparse.ArgumentParser:
             "that journal with the local key into\n"
             "<cwd>/.orcha/receipts/<session_id>.json and prints the verify line.\n"
             "Raw args and outputs stay in the journal on this machine; the\n"
-            "receipt carries only their hashes.\n"
+            "receipt carries their hashes, never the values.\n"
             "\n"
-            "Install (Claude Code): merge the output of\n"
+            "Install for the claude CLI: merge the output of\n"
             "  orcha record hook claude-code --print-settings --criteria exit_zero\n"
             "into .claude/settings.json, and mint a key with `orcha record keygen`.\n"
             "\n"

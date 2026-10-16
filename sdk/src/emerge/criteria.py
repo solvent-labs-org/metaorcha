@@ -1,4 +1,4 @@
-"""Declared acceptance criteria: the one digest and the one evaluation (AD-20).
+"""Declared acceptance criteria: the one digest and the one evaluation.
 
 Every producer of an ``orcha.run-attestation/v1`` envelope — the platform's
 run observer and the local ``orcha record`` journal — reads this module and
@@ -115,7 +115,7 @@ def criteria_units(raw_output: Any) -> list[str]:
     """
     try:
         return _read_units(raw_output)
-    except Exception:
+    except Exception:  # an output that cannot be read holds no units
         return []
 
 
@@ -211,10 +211,8 @@ def evaluate_criteria(
     """
     try:
         units: list[str] | None = _read_units(raw_output)
-    except Exception:
-        # an output no block of which can be rendered is not "a step with no
-        # exit code": every declared criterion is unevaluable on it
-        units = None
+    except Exception:  # no block renders, which is not "a step with no exit code"
+        units = None  # so every declared criterion is unevaluable on it
     results: dict[str, dict[str, str]] = {}
     for key in criteria:
         if key not in SUPPORTED_CRITERIA:
@@ -226,7 +224,7 @@ def evaluate_criteria(
             if units is None:
                 raise ValueError(CRITERIA_UNEVALUABLE)
             results[key] = _EVALUATORS[key](units)
-        except Exception:
+        except Exception:  # a criterion that raises is unevaluable
             results[key] = {"result": "fail", "detail": CRITERIA_UNEVALUABLE}
     return results
 
@@ -344,11 +342,11 @@ def run_declared_acceptance(entries: list[dict[str, Any]]) -> dict[str, Any] | N
         return {"check": "declared_acceptance", "result": result, "detail": detail}
     failed = next((item for item in seen if item.get("result") == "fail"), None)
     chosen = failed or seen[-1]
-    result = chosen.get("result")
-    if result not in ("pass", "fail"):
+    verdict = chosen.get("result")
+    if verdict not in ("pass", "fail"):
         return None
-    entry: dict[str, Any] = {"check": "declared_acceptance", "result": result}
-    detail = chosen.get("detail")
-    if detail:
-        entry["detail"] = str(detail)
+    entry: dict[str, Any] = {"check": "declared_acceptance", "result": verdict}
+    said = chosen.get("detail")
+    if said:
+        entry["detail"] = str(said)
     return entry

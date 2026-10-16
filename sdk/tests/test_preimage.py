@@ -1,4 +1,4 @@
-"""AD-16: the value a step's ``output_hash`` commits to.
+"""The value a step's ``output_hash`` commits to.
 
 ``output_preimage`` must be total (any handler result, never raises),
 deterministic (the same result always gives the same bytes) and JSON-only (the
@@ -243,7 +243,7 @@ def test_same_secret_under_two_names_uses_the_smallest_name() -> None:
 
 
 def test_empty_and_non_string_secrets_are_ignored() -> None:
-    assert redact_credentials("abc", {"E": "", "N": None}) == "abc"  # type: ignore[dict-item]
+    assert redact_credentials("abc", {"E": "", "N": None}) == "abc"  # type: ignore[dict-item]  # None is a bad value under test
     assert redact_credentials("abc", {}) == "abc"
 
 

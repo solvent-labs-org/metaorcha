@@ -1,4 +1,4 @@
-"""The Claude Code hook adapter, driven by payloads captured on 2.1.278.
+"""The hook adapter for the ``claude`` CLI, driven by payloads captured on 2.1.278.
 
 The fixtures below are the field shapes observed on 2026-09-21 (ids, paths and
 outputs replaced): a failing ``Bash`` call fires ``PostToolUseFailure`` with

@@ -83,4 +83,4 @@ A2A-compatible HTTP endpoint (`/health`, `/.well-known/agent.json`, JSON-RPC
 generated `emerge.yaml` to the registry. The runtime's planner can then discover
 and orchestrate your agent alongside agents that speak other protocols.
 
-Apache 2.0 runtime, MIT SDK. See the [main repo](https://github.com/solvent-labs-org/metaorcha).
+Licensed under Apache-2.0, as is the whole repo. See the [main repo](https://github.com/solvent-labs-org/metaorcha).

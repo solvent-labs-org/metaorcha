@@ -5,6 +5,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the package
 uses [Semantic Versioning](https://semver.org/). Releases are tagged
 `sdk-vX.Y.Z`. The repo's own releases are in the [root changelog](../CHANGELOG.md).
 
+## [0.2.1] — 2026-10-16
+
+### Changed
+
+- Licensed under Apache-2.0, like the rest of the repo, with the licence file
+  in the package. Releases up to 0.2.0 stay under MIT, as they were published.
+- Docs and help name the product Metaorcha, and each engine by its command.
+
+### Fixed
+
+- A new folder for the signing key is made with mode 0700.
+- Two processes that make the signing key at once end with one key. The one
+  that loses the race waits for the whole key, and a key that no writer
+  finished is refused as empty or half written.
+- The registry client, which `run` and `publish` use, refuses a registry URL
+  that is not http or https.
+
 ## [0.2.0] — 2026-10-06
 
 ### Added

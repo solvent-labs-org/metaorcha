@@ -78,7 +78,7 @@ _VERDICT_RESULTS = frozenset({"pass", "fail", "warn"})
 _SIGNER_FIELDS = frozenset({"did", "public_key_b64"})
 
 
-# What a receipt covers and what it does not (FR-8, story 3.2). Export text:
+# What a receipt covers and what it does not. Export text:
 # computed from the envelope by whoever reads it — this verifier's CLI, a
 # platform's evidence export — never stored in the envelope and never emitted
 # by a producer. Producer-neutral: true of a bot receipt and a plugin receipt.

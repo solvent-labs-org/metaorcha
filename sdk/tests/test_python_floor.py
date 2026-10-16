@@ -84,10 +84,12 @@ def _uses(tree: ast.AST) -> list[tuple[str, str, int]]:
     return found
 
 
-def test_no_sdk_module_uses_a_stdlib_name_newer_than_the_floor():
+def test_no_sdk_module_or_test_uses_a_stdlib_name_newer_than_the_floor():
+    # the tests too: the suite is what proves the floor, so it must run there
+    paths = [*SDK_SRC.rglob("*.py"), *(REPO / "sdk" / "tests").rglob("*.py")]
     offenders = [
         f"{path.relative_to(REPO)}:{line} {module}.{name}".rstrip(".")
-        for path in sorted(SDK_SRC.rglob("*.py"))
+        for path in sorted(paths)
         for module, name, line in _uses(ast.parse(path.read_text()))
     ]
     assert offenders == [], offenders
