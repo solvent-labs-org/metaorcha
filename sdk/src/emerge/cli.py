@@ -450,7 +450,7 @@ def cmd_record_keygen(args: argparse.Namespace) -> int:
     prog = "emerge record keygen"
     try:
         path, private_key = write_key_file(args.key, force=args.force)
-    except (FileExistsError, OSError) as exc:
+    except (FileExistsError, OSError, ValueError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
     print(f"wrote {path} (mode 0600)")

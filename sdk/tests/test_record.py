@@ -499,3 +499,10 @@ def test_cli_keygen_refuses_to_overwrite(no_ambient_key, capsys):
     assert main(["record", "keygen", "--key", key]) == 2
     assert "--force" in capsys.readouterr().err
     assert main(["record", "keygen", "--key", key, "--force"]) == 0
+
+
+def test_cli_keygen_names_a_link_at_the_key_path(no_ambient_key, capsys):
+    key = no_ambient_key / "key"
+    key.symlink_to(no_ambient_key / "nowhere")
+    assert main(["record", "keygen", "--key", str(key)]) == 2
+    assert "is a link" in capsys.readouterr().err
