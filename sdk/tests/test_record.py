@@ -297,13 +297,13 @@ def test_two_writers_end_with_one_key(no_ambient_key):
     path = no_ambient_key / "race" / "key"
     barrier = threading.Barrier(2)
     found: list[tuple[Path, Ed25519PrivateKey]] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def write() -> None:
         try:
             barrier.wait()
             found.append(write_key_file(path))
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=write) for _ in range(2)]
