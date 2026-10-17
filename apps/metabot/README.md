@@ -61,8 +61,10 @@ Roles map kinds of work to an engine and a model: `fast`, `build`, `review`,
 build --engine codex` changes one, and `metabot roster unset build` gives it
 back its default. `metabot suggest TASK` names a role, an engine and a model,
 with the rule that chose them. `metabot ask --role build` runs on a role, and
-`metabot ask --suggest` runs on the suggestion. The run's journal keeps what
-was suggested beside what ran, and the receipt signs what ran.
+`metabot ask --suggest` runs on the suggestion. A plain `metabot ask` runs on
+the default engine, with the `fast` role's model when that role runs there and
+no model is set for the engine. The run's journal keeps what was suggested
+beside what ran, and the receipt signs what ran.
 
 ## Connections and approvals
 
@@ -113,9 +115,11 @@ run, with `--allow-write` or `--allow` or in a routine, names that allow. A
 declined call carries its reason. A read carries none, and neither do the
 calls the `codex` and `cursor` engines run in their own sandbox.
 
-A model can say a call worked when it was declined or failed. So when a run
-has such calls, MetaBot says how many under the answer, in the terminal and
-on the run's page. The steps in the receipt are what happened.
+A model can say a call worked when it was declined or did not succeed. So when
+a run has such calls, MetaBot says how many under the answer, in the terminal
+and on the run's page. When the prompt names files in the project and the run
+made no tool calls, it says the receipt shows no read of them. The steps in
+the receipt are what happened.
 
 The signing key is at `~/.orcha/key`, or where `ORCHA_KEY_PATH` points.
 `metabot config set project_receipts true`, or `--project-receipt` on one run,
