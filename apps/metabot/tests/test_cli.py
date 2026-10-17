@@ -582,7 +582,7 @@ def test_chat_says_after_an_answer_when_calls_did_not_go_as_asked():
     results = iter([_result(declined=1, failed=2), _result()])
     code, out, traced = _loop(["first", "second"], lambda **kw: next(results))
     assert code == 0 and out.count("answer") == 2
-    said = f"[metabot] 1 call was declined and 2 calls failed. {CAVEAT}"
+    said = f"[metabot] 1 call was declined and 2 calls did not succeed. {CAVEAT}"
     assert traced.splitlines().count(said) == 1  # after the first answer, not the second
 
 
@@ -671,6 +671,23 @@ def test_trace_shows_notices_and_errors_and_quiet_keeps_only_errors():
         "[metabot] codex: turn failed: \\x1b[2Jboom",
     ]
     assert quiet.out.getvalue().splitlines() == ["[metabot] codex: turn failed: \\x1b[2Jboom"]
+
+
+def test_trace_shows_a_call_that_returned_an_error_on_one_readable_line():
+    from metabot.events import ToolCall, ToolResult
+
+    trace = Trace(out=io.StringIO())
+    trace(ToolCall("c1", "Bash", {"command": "ls -a .cursor/rules"}))
+    trace(ToolResult("c1", "Exit code 2\nls: no such folder\n\n  \x1b[2Jboom\r\n", False))
+    trace(ToolCall("c2", "shellToolCall", {"command": "python3 -m unittest -q"}))
+    trace(ToolResult("c2", {"failure": {"exitCode": 1}}, False))
+    trace(ToolResult("c3", "fine", True))
+    assert trace.out.getvalue().splitlines() == [
+        "  - Bash  ls -a .cursor/rules",
+        "    Bash returned an error: Exit code 2 | ls: no such folder | \\x1b[2Jboom",
+        "  - shellToolCall  python3 -m unittest -q",
+        '    shellToolCall returned an error: {"failure": {"exitCode": 1}}',
+    ]
 
 
 @pytest.mark.parametrize(

@@ -60,7 +60,7 @@ class RunResult:
     project_receipt: Path | None = None  # the copy in the project, when one was asked for
     project_error: str | None = None  # why that copy is missing
     declined: int = 0  # calls the gate declined; the answer may say they ran
-    failed: int = 0  # other calls that failed
+    failed: int = 0  # other calls that did not succeed
 
 
 @dataclass(frozen=True)

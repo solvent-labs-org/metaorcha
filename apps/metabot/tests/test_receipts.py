@@ -153,8 +153,8 @@ def test_declines_and_other_failures_are_each_counted_once():
     [
         (0, 0, None),
         (1, 0, f"1 call was declined. {CAVEAT}"),
-        (0, 3, f"3 calls failed. {CAVEAT}"),
-        (2, 1, f"2 calls were declined and 1 call failed. {CAVEAT}"),
+        (0, 3, f"3 calls did not succeed. {CAVEAT}"),
+        (2, 1, f"2 calls were declined and 1 call did not succeed. {CAVEAT}"),
     ],
 )
 def test_the_caveat_says_how_many_calls_did_not_go_as_asked(declined, failed, said):
