@@ -18,8 +18,7 @@ import re
 import httpx
 
 # Wallet and action ids are path segments of the API URLs below, which carry
-# the app's credentials. A transfer's action id arrives on the client's
-# request, so an id is placed in a URL only when it is one plain segment.
+# the app's credentials. An id is placed in a URL only when it is one plain segment.
 _ID = r"[A-Za-z0-9_-]{1,128}"
 
 
@@ -84,6 +83,7 @@ async def create_wallet(display_name: str | None = None) -> dict[str, str]:
 
 async def get_wallet_address(privy_wallet_id: str) -> str:
     """Fetch the on-chain EVM address for a Privy wallet ID."""
+    privy_wallet_id = checked_id(privy_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.get(
@@ -109,6 +109,7 @@ async def get_wallet_balance(privy_wallet_id: str) -> dict:
     Returns the raw Privy response:
         {total: {value, currency}, assets: [{symbol, amount, price}]}
     """
+    privy_wallet_id = checked_id(privy_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.get(
@@ -144,6 +145,7 @@ async def transfer_usdc(
       - Daily settlement cron: platform wallet → developer wallet
       - Developer withdrawal: developer wallet → external address
     """
+    from_wallet_id = checked_id(from_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.post(

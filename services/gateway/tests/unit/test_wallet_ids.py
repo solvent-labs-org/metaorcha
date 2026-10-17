@@ -90,6 +90,20 @@ async def test_status_polling_builds_the_url_from_plain_ids(api: list[str]) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wallet_id", ["..", "a/b", "a?x"])
+async def test_every_wallet_url_refuses_an_id_before_any_request(
+    api: list[str], wallet_id: str
+) -> None:
+    with pytest.raises(ValueError):
+        await privy_client.get_wallet_address(wallet_id)
+    with pytest.raises(ValueError):
+        await privy_client.get_wallet_balance(wallet_id)
+    with pytest.raises(ValueError):
+        await privy_client.transfer_usdc(wallet_id, "0x1", 1.0)
+    assert api == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action_id", NOT_ONE_SEGMENT)
 async def test_status_polling_refuses_before_any_request(
     api: list[str], action_id: str
