@@ -18,10 +18,12 @@ import errno
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -231,6 +233,47 @@ def answer_caveat(declined: int, failed: int) -> str | None:
     if failed:  # not "failed": a test run that exits 1, or a call never answered, counts here
         said.append("1 call did not succeed" if failed == 1 else f"{failed} calls did not succeed")
     return f"{' and '.join(said)}. {CAVEAT}" if said else None
+
+
+PATH_WORD = re.compile(r"[\w./~-]*[./][\w./~-]*")
+PATH_WORDS = 40  # the most words with a dot or a slash a prompt has looked up
+
+
+def named_here(prompt: str, cwd: Path) -> list[str]:
+    """The files and folders under ``cwd`` that ``prompt`` names, in order, each once.
+
+    A word names one when it has a dot or a slash and resolves to something
+    under ``cwd``; a word that leads out of it, by ``..`` or a link, does not.
+    """
+    root = cwd.resolve()
+    out: list[str] = []
+    seen: set[Path] = set()
+    for found in islice(PATH_WORD.finditer(prompt), PATH_WORDS):
+        word = found.group().rstrip(".")  # a sentence's full stop is not the name's
+        if "." not in word and "/" not in word:
+            continue
+        try:
+            path = (root / word).resolve()
+            here = path != root and path.is_relative_to(root) and path.exists()
+        except (OSError, ValueError):
+            continue
+        if here and path not in seen:
+            seen.add(path)
+            out.append(word)
+    return out
+
+
+def unread_caveat(named: Sequence[str]) -> str | None:
+    """The line beside an answer that names files here when its run made no tool calls."""
+    if not named:
+        return None
+    shown = list(named[:3]) + ([f"{len(named) - 3} more"] if len(named) > 3 else [])
+    which = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+    one = len(named) == 1
+    return (
+        f"{which} {'is' if one else 'are'} here, but this run made no tool calls, "
+        f"so the receipt shows no read of {'it' if one else 'them'}."
+    )
 
 
 def run_caveat(run_id: str) -> str | None:

@@ -230,6 +230,41 @@ def test_ask_says_nothing_more_when_every_call_went_as_asked(echo, tmp_path, cap
     assert "may say otherwise" not in capsys.readouterr().err
 
 
+UNREAD = (
+    "[metabot] calc.py is here, but this run made no tool calls,"
+    " so the receipt shows no read of it."
+)
+
+
+def test_ask_says_when_it_answered_about_a_file_here_without_a_tool_call(
+    bin_dir, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-answer-only.jsonl"))
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    ask = ["ask", "-q", "--cwd", str(tmp_path)]
+    assert main([*ask, "what does calc.py do?"]) == 0
+    assert UNREAD in capsys.readouterr().err.splitlines()  # about the answer, so said when quiet
+    assert main([*ask, "what is two plus two?"]) == 0
+    assert "made no tool calls" not in capsys.readouterr().err
+    assert main([*ask, "--resume", "s-1", "what does calc.py do?"]) == 0
+    assert "made no tool calls" not in capsys.readouterr().err  # an earlier turn may have read it
+    monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-echo.jsonl"))
+    assert main([*ask, "what does calc.py do?"]) == 0
+    assert "made no tool calls" not in capsys.readouterr().err
+
+
+def test_chat_says_so_on_a_new_conversation_and_not_on_a_resumed_one(
+    bin_dir, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-answer-only.jsonl"))
+    (tmp_path / "calc.py").write_text("")
+    out: list[str] = []
+    trace = Trace(out=io.StringIO())
+    script = Script("what does calc.py do?", "and calc.py again?", "/new", "calc.py?")
+    assert repl(script, out.append, engine="claude", cwd=tmp_path, trace=trace) == 0
+    assert trace.out.getvalue().splitlines().count(UNREAD) == 2  # the first turn, and after /new
+
+
 def test_ask_json_counts_the_declined_and_failed_calls(echo, tmp_path, monkeypatch, capsys):
     ask = {"op": "approve", "call_id": "toolu_x", "tool": "claude-code/Write", "cls": "write"}
     monkeypatch.setenv("FAKE_CONTROL", "from-hook")

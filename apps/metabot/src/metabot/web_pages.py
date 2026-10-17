@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Sequence
 from html import escape
+from pathlib import Path
 from typing import Any
 
 from metabot.approvals import terminal_safe
@@ -584,7 +585,7 @@ def live_page(
     office: dict[str, Any] | None = None,
 ) -> str:
     """A run started here, as it goes. An office run's ``office`` is its record's view."""
-    from metabot.receipts import answer_caveat
+    from metabot.receipts import answer_caveat, named_here, unread_caveat
 
     going = live.state == "running"
     what = "office run" if live.office is not None else "run"
@@ -626,6 +627,10 @@ def live_page(
         caveat = answer_caveat(result.declined, result.failed)
         if caveat:
             body.append(f'<p class="bad">{e(caveat)}</p>')
+        if not result.steps:  # a page run never resumes, so nothing earlier read them
+            unread = unread_caveat(named_here(live.prompt, Path(live.cwd)))
+            if unread:
+                body.append(f'<p class="bad">{e(unread)}</p>')
     # the newest lines are what the person needs: what waits for them, and how the run ended
     lines, cut = _newest(live.out.lines)
     dropped = live.out.dropped + cut
