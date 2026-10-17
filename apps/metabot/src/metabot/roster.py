@@ -142,6 +142,22 @@ def role_entry(role: str, cfg: Config | None = None) -> Entry:
     return entry
 
 
+def fast_model(engine: str, cfg: Config | None = None) -> str | None:
+    """The model a plain ``ask`` takes on ``engine``: the fast role's, when that role runs
+    on the same engine and no model is set for it; None otherwise.
+
+    The model only: where the work goes stays the default engine's, so a local
+    default never sends work off this machine. Nothing is contacted here.
+    """
+    cfg = cfg or load_config()
+    if cfg.models.get(engine):
+        return None
+    entry = _mine(cfg, "fast") or default_roster(available(), False).get("fast")
+    if entry is None or entry["engine"] != engine:
+        return None
+    return entry.get("model") or None
+
+
 def pick(
     role: str | None, engine: str | None, model: str | None, cfg: Config | None = None
 ) -> tuple[str | None, str | None]:
