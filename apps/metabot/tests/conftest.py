@@ -33,9 +33,9 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture(autouse=True)
 def _nothing_installed_here(monkeypatch: pytest.MonkeyPatch) -> None:
     """The roster sees no engine CLI and no local model server unless a test says so."""
-    monkeypatch.setattr(
-        "metabot.roster.here", lambda cfg: ({"claude": None, "codex": None, "cursor": None}, False)
-    )
+    nothing = {"claude": None, "codex": None, "cursor": None}
+    monkeypatch.setattr("metabot.roster.here", lambda cfg: (dict(nothing), False))
+    monkeypatch.setattr("metabot.roster.available", lambda: dict(nothing))
 
 
 @pytest.fixture(autouse=True)
