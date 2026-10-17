@@ -249,7 +249,9 @@ def named_here(prompt: str, cwd: Path) -> list[str]:
     out: list[str] = []
     seen: set[Path] = set()
     for found in islice(PATH_WORD.finditer(prompt), PATH_WORDS):
-        word = found.group().rstrip(".")  # a sentence's full stop is not the name's
+        word = found.group()
+        if word.rsplit("/", 1)[-1].strip("."):  # a sentence's full stop, never a ".." part
+            word = word.rstrip(".")
         if "." not in word and "/" not in word:
             continue
         try:
