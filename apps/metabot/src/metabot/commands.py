@@ -33,6 +33,8 @@ from metabot.receipts import (
     ensure_key,
     journal_matches,
     list_index,
+    named_here,
+    unread_caveat,
     verify_file,
 )
 from metabot.roster import RosterError, fast_model, fill, local_status, pick
@@ -307,6 +309,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
             caveat = answer_caveat(result.declined, result.failed)
             if caveat:  # about the answer itself, so said even when quiet
                 trace.line(f"[metabot] {caveat}")
+            unread = None if result.steps or args.resume else unread_caveat(named_here(prompt, cwd))
+            if unread:  # an earlier turn of a resumed run may have read them
+                trace.line(f"[metabot] {unread}")
         trace.note(line)
         if copy is not None:
             trace.note(f"[metabot] project copy {copy}")

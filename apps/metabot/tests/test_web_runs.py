@@ -68,6 +68,18 @@ class Sleeps:
         yield Final("woke", "s-1")
 
 
+class Answers:
+    """Answers at once, with no tool call."""
+
+    name = "fake"
+    tool_prefix = "fake"
+    skip_tools = ()
+
+    async def run(self, job, *, board=None, approve):
+        yield Started("s-1", job.model)
+        yield Final("calc.py is not here.", "s-1")
+
+
 class Chatty(Asks):
     """Says ``count`` long lines, then asks: a trace longer than a page holds."""
 
@@ -185,6 +197,15 @@ def test_a_decline_in_the_page_is_recorded(tmp_path):
         "1 call was declined. The answer may say otherwise; the receipt's steps are what happened."
     )
     assert html.escape(said, quote=True) in text  # beside the answer on the live page
+
+
+def test_the_page_says_when_it_answered_about_a_file_here_without_a_tool_call(tmp_path):
+    (tmp_path / "calc.py").write_text("")
+    with ui(tmp_path, Answers()) as (client, guard):
+        run_id = _start(client, guard, tmp_path, prompt="what does calc.py do?")
+        text = _until(client, run_id, _ended)
+    said = "calc.py is here, but this run made no tool calls, so the receipt shows no read of it."
+    assert html.escape(said, quote=True) in text
 
 
 def test_a_destructive_call_needs_the_word_yes(tmp_path):

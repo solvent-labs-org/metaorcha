@@ -47,7 +47,7 @@ def repl(
 ) -> int:
     """Read lines until /exit or end of input; each line is one run."""
     from metabot.commands import cancelled_result, receipt_line
-    from metabot.receipts import answer_caveat
+    from metabot.receipts import answer_caveat, named_here, unread_caveat
 
     trace = trace or Trace()
     options = dict(options or {})
@@ -90,6 +90,7 @@ def repl(
             else:
                 write(f"unknown command {command}; /help lists them")
             continue
+        resumed = session is not None  # an earlier turn may have read what this one names
         try:
             result = run(
                 engine_name=engine,
@@ -115,6 +116,9 @@ def repl(
             caveat = answer_caveat(result.declined, result.failed)
             if caveat:
                 trace.line(f"[metabot] {caveat}")
+            unread = None if result.steps or resumed else unread_caveat(named_here(text, cwd))
+            if unread:
+                trace.line(f"[metabot] {unread}")
         trace.line(receipt_line(result)[0])
 
 

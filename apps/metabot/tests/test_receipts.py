@@ -161,6 +161,47 @@ def test_the_caveat_says_how_many_calls_did_not_go_as_asked(declined, failed, sa
     assert receipts.answer_caveat(declined, failed) == said
 
 
+def test_named_here_finds_the_files_and_folders_a_prompt_names(tmp_path):
+    (tmp_path / "calc.py").write_text("")
+    (tmp_path / ".gitignore").write_text("")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "x.txt").write_text("")
+    (tmp_path / "out").symlink_to(tmp_path.parent)
+    prompt = (
+        "what does calc.py do? and sub/x.txt, `.gitignore`, sub/, ../, out/, missing.py, "
+        f"{tmp_path / 'calc.py'}, /etc/hostname, e.g. v1.2 and calc.py."
+    )
+    assert receipts.named_here(prompt, tmp_path) == ["calc.py", "sub/x.txt", ".gitignore", "sub/"]
+    assert receipts.named_here("what is two plus two?", tmp_path) == []
+    assert receipts.named_here("look at sub. then stop.", tmp_path) == []  # full stops only
+    assert receipts.named_here("look in sub/.. and sub/../..", tmp_path) == []  # itself, then out
+    stops = " ".join(f"say {n}." for n in range(receipts.PATH_WORDS + 5))
+    assert receipts.named_here(f"{stops} then calc.py", tmp_path) == ["calc.py"]  # a stop is free
+    looked = " ".join(f"v{n}.0" for n in range(receipts.PATH_WORDS))
+    assert receipts.named_here(f"{looked} calc.py", tmp_path) == []  # past the cap, unread
+
+
+@pytest.mark.parametrize(
+    ("named", "said"),
+    [
+        ([], None),
+        (["calc.py"], "calc.py is here, but this run made no tool calls, so {} of it."),
+        (
+            ["a.py", "b.py"],
+            "a.py and b.py are here, but this run made no tool calls, so {} of them.",
+        ),
+        (["a", "b", "c"], "a, b and c are here, but this run made no tool calls, so {} of them."),
+        (
+            ["a", "b", "c", "d", "e"],
+            "a, b, c and 2 more are here, but this run made no tool calls, so {} of them.",
+        ),
+    ],
+)
+def test_the_unread_caveat_names_what_the_run_never_looked_at(named, said):
+    want = said.format("the receipt shows no read") if said else None
+    assert receipts.unread_caveat(named) == want
+
+
 def test_journal_rederives_every_hash():
     path, _ = _seal(output="token is tok-123 here", secrets={"GH_TOKEN": "tok-123"})
     assert receipts.journal_matches("mb-test-000001") is True
