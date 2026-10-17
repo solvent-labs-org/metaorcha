@@ -55,7 +55,7 @@ def test_tree_hash_is_stable_and_follows_every_byte_and_mode(tmp_path):
     assert tree_sha256(a) != tree_sha256(b)
     c = tmp_path / "c"
     shutil.copytree(a, c)
-    os.chmod(c / "commands" / "go.md", 0o755)
+    os.chmod(c / "commands" / "go.md", 0o700)  # runnable by its owner, and read by no one else
     assert tree_sha256(a) != tree_sha256(c)
     d = tmp_path / "d"
     shutil.copytree(a, d)
