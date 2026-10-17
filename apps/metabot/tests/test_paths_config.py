@@ -21,11 +21,12 @@ def test_a_private_folder_and_each_parent_it_makes_are_0700_whatever_the_umask(t
     old = os.umask(0o002)  # a umask that lets the group in
     try:
         leaf = paths.private_dir(there / "made" / "also" / "leaf")
+        made = [there / "made", there / "made" / "also", leaf]
+        assert [private_mode(p) for p in made] == [0o700] * 3
+        assert private_mode(there) == 0o300  # a parent that was there already keeps its mode
     finally:
         os.umask(old)
-    made = [there / "made", there / "made" / "also", leaf]
-    assert [private_mode(p) for p in made] == [0o700] * 3
-    assert private_mode(there) == 0o300  # a parent that was there already keeps its mode
+        os.chmod(there, 0o700)  # readable again, so pytest can clear its temp folder
 
 
 def test_write_private_mode(tmp_path):
