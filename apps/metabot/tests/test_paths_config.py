@@ -17,7 +17,7 @@ def test_home_is_private(home):
 def test_a_private_folder_and_each_parent_it_makes_are_0700_whatever_the_umask(tmp_path):
     there = tmp_path / "there"
     there.mkdir()
-    os.chmod(there, 0o750)
+    os.chmod(there, 0o300)  # its owner may make folders in it; no one else may read it
     old = os.umask(0o002)  # a umask that lets the group in
     try:
         leaf = paths.private_dir(there / "made" / "also" / "leaf")
@@ -25,7 +25,7 @@ def test_a_private_folder_and_each_parent_it_makes_are_0700_whatever_the_umask(t
         os.umask(old)
     made = [there / "made", there / "made" / "also", leaf]
     assert [private_mode(p) for p in made] == [0o700] * 3
-    assert private_mode(there) == 0o750  # a parent that was there already keeps its mode
+    assert private_mode(there) == 0o300  # a parent that was there already keeps its mode
 
 
 def test_write_private_mode(tmp_path):
