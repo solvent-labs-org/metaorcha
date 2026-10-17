@@ -26,6 +26,11 @@ def _args_preview(args: dict[str, Any]) -> str:
     return printable(json.dumps(args, ensure_ascii=False), ARG_PREVIEW) if args else ""
 
 
+def _one_line(text: str) -> str:
+    """A tool's error on one line: its lines in order, the blank ones dropped."""
+    return " | ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
 class Trace:
     def __init__(
         self, out: TextIO | TextIOBase | None = None, quiet: bool = False, label: str | None = None
@@ -65,6 +70,7 @@ class Trace:
         elif isinstance(event, ToolResult) and not event.ok:
             name = self.tools.get(event.call_id, "call")
             detail = event.output if isinstance(event.output, str) else json.dumps(event.output)
-            self.line(f"    {printable(name, 60)} failed: {printable(detail, 160)}")
+            said = printable(_one_line(detail), 160)
+            self.line(f"    {printable(name, 60)} returned an error: {said}")
         elif isinstance(event, Notice):
             self.line(f"[metabot] {printable(event.text, 300)}")
