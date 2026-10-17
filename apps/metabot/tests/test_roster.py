@@ -189,6 +189,46 @@ def test_explicit_e_and_m_beat_the_role(argv_of):
     assert pick(None, None, "m") == (None, "m")
 
 
+def test_fast_model_is_the_fast_roles_model_on_its_own_engine_only(monkeypatch):
+    monkeypatch.setattr(roster_mod, "available", lambda: dict(ONLY_CLAUDE))
+    assert roster_mod.fast_model("claude", Config()) == "haiku"
+    assert roster_mod.fast_model("openai", Config()) is None  # a local default stays local
+    assert roster_mod.fast_model("claude", Config(models={"claude": "opus"})) is None
+    yours = {"fast": {"engine": "claude", "model": "sonnet"}}
+    assert roster_mod.fast_model("claude", Config(roster=yours)) == "sonnet"
+    assert roster_mod.fast_model("claude", Config(roster={"fast": {"engine": "claude"}})) is None
+    monkeypatch.setattr(roster_mod, "available", lambda: dict(NONE))
+    assert roster_mod.fast_model("claude", Config()) is None
+
+
+def test_a_plain_ask_takes_the_fast_roles_model_and_says_so(argv_of, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(roster_mod, "available", lambda: dict(ONLY_CLAUDE))
+    save_config(Config(default_engine="claude"))
+    code, argv = argv_of()
+    assert code == 0 and argv[argv.index("--model") + 1] == "haiku"
+    [row] = list_index()
+    assert (row["engine"], row["model_requested"], row.get("role")) == ("claude", "haiku", None)
+    capsys.readouterr()
+    assert main(["ask", "--cwd", str(tmp_path), "hi"]) == 0
+    assert "[metabot] model haiku, from the fast role; -m picks another" in capsys.readouterr().err
+
+
+def test_a_plain_ask_keeps_a_model_you_set_and_the_engine_you_name(argv_of, monkeypatch):
+    monkeypatch.setattr(roster_mod, "available", lambda: dict(ALL))
+    save_config(Config(default_engine="claude", models={"claude": "sonnet"}))
+    code, argv = argv_of()
+    assert code == 0 and argv[argv.index("--model") + 1] == "sonnet"
+    save_config(Config(default_engine="claude"))
+    code, argv = argv_of("-e", "claude")
+    assert code == 0 and "haiku" not in argv  # an engine named runs on its own model
+    code, argv = argv_of("-m", "opus")
+    assert code == 0 and argv[argv.index("--model") + 1] == "opus"
+    save_config(Config(default_engine="codex"))
+    code, argv = argv_of()
+    assert code == 0 and "haiku" not in argv  # the fast role is on another engine
+    assert [r["engine"] for r in list_index()] == ["claude", "claude", "claude", "codex"]
+
+
 def test_a_role_with_nothing_here_is_refused(argv_of, capsys):
     code, argv = argv_of("--role", "second")
     assert code == 2 and argv == []

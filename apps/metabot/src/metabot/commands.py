@@ -37,7 +37,7 @@ from metabot.receipts import (
     unread_caveat,
     verify_file,
 )
-from metabot.roster import RosterError, fill, local_status, pick
+from metabot.roster import RosterError, fast_model, fill, local_status, pick
 from metabot.suggest import Suggestion, reason, suggest_here
 from metabot.text import ascii_digits
 
@@ -244,6 +244,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if engine_name not in ENGINES:
         _err(f"unknown engine {engine_name!r}; choose one of: {', '.join(ENGINES)}")
         return EXIT_USAGE
+    if role is None and args.engine is None and model is None:  # a plain ask
+        model = fast_model(engine_name)
+        if model:
+            trace.note(f"[metabot] model {model}, from the fast role; -m picks another")
     if prompt is None:
         prompt = read_prompt(args.prompt)
     if not prompt.strip():
