@@ -264,7 +264,9 @@ def test_the_connections_page_shows_a_browsers_origins(tmp_path):
     ConnectionStore().add(name="web", transport="stdio", command=["b"], origins=origins)
     ConnectionStore().add(name="plain", transport="stdio", command=["p"])
     page = _client(tmp_path).get("/connections")
-    assert "http://x.test:80" in page.text and "http://localhost:*" in page.text
+    cell = _row_of(page.text, ">web<").rsplit("<td>", 1)[1].removesuffix("</td>")
+    assert cell.split(", ") == origins  # the whole list in its order, not a match anywhere
+    assert origins[0] == "http://localhost:*" and origins[-1] == "http://x.test:80"
     assert "not a browser" in _row_of(page.text, ">plain<")
 
 
