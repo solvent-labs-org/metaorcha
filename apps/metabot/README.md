@@ -19,15 +19,13 @@ Part of Metaorcha. Status: pre-release, built in the open.
 
 ## Install
 
-From a checkout of this repository:
-
 ```sh
-uv tool install ./apps/metabot
+uv tool install orcha-metabot
 ```
 
-It is not on a package index yet. It needs Python 3.11 or newer and a POSIX
-system, and it is tested on Linux. Install and sign in to each engine you
-want to use, the same way you do without MetaBot.
+It needs Python 3.11 or newer and a POSIX system, and it is tested on Linux.
+Install and sign in to each engine you want to use, the same way you do
+without MetaBot.
 
 ## Getting started
 
