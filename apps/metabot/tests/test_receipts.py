@@ -175,6 +175,10 @@ def test_named_here_finds_the_files_and_folders_a_prompt_names(tmp_path):
     assert receipts.named_here("what is two plus two?", tmp_path) == []
     assert receipts.named_here("look at sub. then stop.", tmp_path) == []  # full stops only
     assert receipts.named_here("look in sub/.. and sub/../..", tmp_path) == []  # itself, then out
+    stops = " ".join(f"say {n}." for n in range(receipts.PATH_WORDS + 5))
+    assert receipts.named_here(f"{stops} then calc.py", tmp_path) == ["calc.py"]  # a stop is free
+    looked = " ".join(f"v{n}.0" for n in range(receipts.PATH_WORDS))
+    assert receipts.named_here(f"{looked} calc.py", tmp_path) == []  # past the cap, unread
 
 
 @pytest.mark.parametrize(

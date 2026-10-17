@@ -23,7 +23,6 @@ import stat
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -248,12 +247,16 @@ def named_here(prompt: str, cwd: Path) -> list[str]:
     root = cwd.resolve()
     out: list[str] = []
     seen: set[Path] = set()
-    for found in islice(PATH_WORD.finditer(prompt), PATH_WORDS):
+    looked = 0
+    for found in PATH_WORD.finditer(prompt):
         word = found.group()
         if word.rsplit("/", 1)[-1].strip("."):  # a sentence's full stop, never a ".." part
             word = word.rstrip(".")
         if "." not in word and "/" not in word:
             continue
+        if looked == PATH_WORDS:
+            break
+        looked += 1
         try:
             path = (root / word).resolve()
             here = path != root and path.is_relative_to(root) and path.exists()
