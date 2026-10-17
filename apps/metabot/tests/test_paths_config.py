@@ -60,7 +60,7 @@ def test_config_roundtrip():
 
 def test_version_cli(capsys):
     assert main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "metabot 0.1.0"
+    assert capsys.readouterr().out.strip() == "metabot 0.1.1"
 
 
 def test_run_dir_refuses_path_tricks():
