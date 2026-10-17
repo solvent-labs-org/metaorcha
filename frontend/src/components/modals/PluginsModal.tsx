@@ -9,16 +9,31 @@ interface PluginsModalProps {
   onClose: () => void
 }
 
+// NFR-15: the documented default for a GitHub connection is the smallest
+// fine-grained token that can read a repository and open a pull request.
+// There is deliberately no OAuth path: the token is the user's own, scoped by
+// them on GitHub and revocable there.
+const GITHUB_PERMISSIONS = [
+  'Metadata: Read-only',
+  'Contents: Read-only',
+  'Issues: Read-only',
+  'Pull requests: Read and write',
+]
+
+const AUTH_VAR_RE = /^[A-Z_][A-Z0-9_]{0,63}$/
+
 export function PluginsModal({ open, onClose }: PluginsModalProps) {
   const qc = useQueryClient()
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'sse' | 'stdio'>('sse')
   const [endpoint, setEndpoint] = useState('')
   const [command, setCommand] = useState('')
+  const [authVar, setAuthVar] = useState('MCP_TOKEN')
   const [authValue, setAuthValue] = useState('')
+  const [preset, setPreset] = useState<'github' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const authVar = 'MCP_TOKEN'
+  const authVarValid = AUTH_VAR_RE.test(authVar.trim())
 
   if (!open) return null
 
@@ -35,14 +50,16 @@ export function PluginsModal({ open, onClose }: PluginsModalProps) {
         transport,
         endpoint: transport === 'sse' ? endpoint.trim() : undefined,
         command: transport === 'stdio' ? command.trim() : undefined,
-        ...(token ? { auth_var: authVar, auth_value: token } : {}),
+        ...(token ? { auth_var: authVar.trim(), auth_value: token } : {}),
       })
       void qc.invalidateQueries({ queryKey: ['dev-agents'] })
       onClose()
       setName('')
       setEndpoint('')
       setCommand('')
+      setAuthVar('MCP_TOKEN')
       setAuthValue('')
+      setPreset(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Connect failed')
     } finally {
@@ -73,6 +90,37 @@ export function PluginsModal({ open, onClose }: PluginsModalProps) {
             Connect one of yours. This is not a catalogue. Auth is stored in the vault, not
             the manifest.
           </p>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-text-secondary">Preset</span>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPreset('github')
+                setName('GitHub')
+                setTransport('sse')
+                setAuthVar('GITHUB_TOKEN')
+              }}
+            >
+              GitHub
+            </Button>
+          </div>
+          {preset === 'github' && (
+            <div className="rounded-md border border-surface-borderLight px-3 py-2 text-caption text-text-secondary">
+              <p>
+                Use your own fine-grained personal access token, limited to the repositories
+                this connection may touch, with only these repository permissions:
+              </p>
+              <ul className="mt-1 list-disc pl-4">
+                {GITHUB_PERMISSIONS.map((perm) => (
+                  <li key={perm}>{perm}</li>
+                ))}
+              </ul>
+              <p className="mt-1">
+                There is no sign-in with GitHub here: you create the token, and you can revoke
+                it on GitHub at any time.
+              </p>
+            </div>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-[11px] text-text-secondary">Name</span>
             <input
@@ -115,13 +163,22 @@ export function PluginsModal({ open, onClose }: PluginsModalProps) {
             </label>
           )}
           <label className="flex flex-col gap-1">
+            <span className="text-[11px] text-text-secondary">Token variable</span>
+            <input
+              value={authVar}
+              onChange={(e) => setAuthVar(e.target.value.toUpperCase())}
+              className={fieldClass}
+              placeholder="MCP_TOKEN"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
             <span className="text-[11px] text-text-secondary">Auth token (optional)</span>
             <input
               type="password"
               value={authValue}
               onChange={(e) => setAuthValue(e.target.value)}
               className={fieldClass}
-              placeholder="stored as MCP_TOKEN"
+              placeholder={`stored as ${authVar.trim() || 'MCP_TOKEN'}`}
             />
           </label>
           {error && <p className="text-caption text-semantic-error">{error}</p>}
@@ -136,7 +193,8 @@ export function PluginsModal({ open, onClose }: PluginsModalProps) {
             disabled={
               !name.trim() ||
               busy ||
-              (transport === 'sse' ? !endpoint.trim() : !command.trim())
+              (transport === 'sse' ? !endpoint.trim() : !command.trim()) ||
+              (authValue.trim() !== '' && !authVarValid)
             }
             onClick={() => void handleConnect()}
           >

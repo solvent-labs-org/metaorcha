@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 
 _DID_SLUG = re.compile(r"[^a-z0-9._-]+")
+
+# Every connection manifest carries this tag. SuperAgent keys the connection
+# rules on it (CONNECTIONS_ENABLED, fail-closed credentials), so an agent
+# registered any other way behaves exactly as before.
+CONNECTION_TAG = "connection"
 
 # An environment-variable name, nothing else: ``auth_var`` is interpolated into
 # the yaml unquoted (``env:`` key, ``${VAR}`` and ``token_vault_ref``), so a
@@ -20,6 +26,18 @@ def agent_did_from_name(name: str) -> str:
     return f"did:orcha:agent:{slug}"
 
 
+def mint_connection_did(name: str, suffix: str | None = None) -> str:
+    """A DID unique to one registration: the name's slug plus a random suffix.
+
+    Spine AD-15: the vault key is ``agent:<DID>:env:<VAR>`` per user, and the
+    DID is one per registration — two users naming a connection "GitHub" get
+    two DIDs, so neither registration collides with (or reveals) the other,
+    and re-registering is a new DID. Minted here rather than by the Registry
+    so the credential is stored before anything is registered.
+    """
+    return f"{agent_did_from_name(name)}-{suffix or secrets.token_hex(4)}"
+
+
 def build_mcp_emerge_yaml(
     *,
     name: str,
@@ -29,11 +47,12 @@ def build_mcp_emerge_yaml(
     args: list[str] | None = None,
     auth_var: str | None = None,
     description: str | None = None,
+    did: str | None = None,
 ) -> str:
     name = name.strip()
     if not name:
         raise ValueError("name is required")
-    did = agent_did_from_name(name)
+    did = did or agent_did_from_name(name)
     desc = (description or f"User MCP: {name}").strip()
     auth = (auth_var or "").strip() or None
     if auth and not _AUTH_VAR.fullmatch(auth):
@@ -83,7 +102,7 @@ def build_mcp_emerge_yaml(
         f"  name: {json.dumps(name)}\n"
         '  version: "1.0.0"\n'
         f"  description: {json.dumps(desc)}\n"
-        "  tags:\n    - mcp\n    - user\n\n"
+        f"  tags:\n    - mcp\n    - user\n    - {CONNECTION_TAG}\n\n"
         'protocol:\n  type: mcp\n  version: "1.0"\n'
         f"{transport_block}\n\n"
         f"health_endpoint: {json.dumps(health)}\n\n"

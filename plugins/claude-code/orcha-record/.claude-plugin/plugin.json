@@ -1,0 +1,20 @@
+{
+  "name": "orcha-record",
+  "description": "Turn a Claude Code session into a signed, offline-verifiable receipt of what ran (RFC 0003 run attestation). Every tool call is journaled on your machine; on Stop the journal is sealed with a key you hold. Nothing is hosted and nothing leaves the machine.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Metaorcha",
+    "url": "https://metaorcha.ai"
+  },
+  "homepage": "https://github.com/solvent-labs-org/metaorcha/tree/main/plugins/claude-code/orcha-record",
+  "repository": "https://github.com/solvent-labs-org/metaorcha",
+  "license": "Apache-2.0",
+  "keywords": [
+    "provenance",
+    "attestation",
+    "receipt",
+    "audit",
+    "hooks"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

@@ -11,7 +11,7 @@ RUN apt-get update && \
 # could ship different dependency trees.
 COPY agents/finance-dashboard-agent/pyproject.toml agents/finance-dashboard-agent/uv.lock ./
 RUN pip install --no-cache-dir \
-    "mcp[cli]==1.29.0" \
+    "mcp[cli]==1.30.0" \
     "fastmcp==3.4.5" \
     "starlette==1.3.1" \
     "uvicorn[standard]==0.52.1" \

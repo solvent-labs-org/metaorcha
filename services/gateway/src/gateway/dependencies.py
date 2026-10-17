@@ -40,6 +40,28 @@ async def require_auth(
     return payload
 
 
+REQUIRE_MEMBER = (
+    "require_member: a guest session can chat but cannot store a credential; "
+    "sign in with a registered account"
+)
+
+
+async def require_member(
+    payload: Annotated[TokenPayload, Depends(require_auth)],
+) -> TokenPayload:
+    """A registered, non-guest account (spine AD-13 identity tiers).
+
+    Guests chat only: anything that stores a credential or saves a routine
+    needs a member, so nothing is left in the vault under a guest id nobody
+    can sign back in as.
+    """
+    if payload.is_guest:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=REQUIRE_MEMBER
+        )
+    return payload
+
+
 async def require_dev_mode(
     request: Request,
     payload: Annotated[TokenPayload, Depends(require_auth)],

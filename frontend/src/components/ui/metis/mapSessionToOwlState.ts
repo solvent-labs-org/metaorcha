@@ -9,7 +9,7 @@ export function mapSessionToOwlState(status: SessionStatus): OwlState {
     case 'interrupted':
       return 'executing'
     case 'complete':
-      return 'verified'
+      return 'complete'
     case 'failed':
       return 'error'
     default:

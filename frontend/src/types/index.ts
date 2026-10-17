@@ -37,6 +37,107 @@ export interface SessionLogEntry {
   message: string
 }
 
+// ── Run audit (`GET /sessions/{id}/audit`, SuperAgent `api/models.py`) ─────────
+// The server drops null fields (`response_model_exclude_none`), so anything
+// nullable on the server is optional here. See frontend/TRUST-INDICATORS.md.
+
+export interface RunAuditStep {
+  seq: number
+  agent_id: string
+  capability_id?: string
+  protocol?: string
+  internal_tool_name?: string
+  /**
+   * Structural check (pipeline `_structural_verify`), not a gate check.
+   * Absent when the step carries no structural verdict: unchecked.
+   */
+  verified?: boolean
+  verdict_reason?: string
+  base_fee?: string
+  total_cost_usd?: string
+}
+
+export interface RunAuditSummary {
+  total_steps: number
+  /** Steps whose structural check passed; an unchecked step is never counted here. */
+  steps_verified: number
+  steps_failed: number
+  /** Steps with no structural verdict. */
+  steps_unchecked?: number
+  protocols: string[]
+  total_cost_usd: string
+  duration_ms?: number
+}
+
+/** The settle gate's deciding row for the session's latest sealed run (keyed by run). */
+export interface RunAuditGate {
+  outcome: string
+  failed_checks: string[]
+  envelope_digest: string
+  created_at: string
+  /** False when the gate judged a run that charged nothing (verdict only, AD-12). */
+  charged?: boolean
+}
+
+/**
+ * Story 2.6: what a routine firing's sealed run amounts to in settlement.
+ * Present only for a firing's session. Every field is server-built; the UI
+ * renders `label` and `statement` and derives no words from `state`.
+ */
+export interface RunAuditSettlement {
+  run_id: string
+  state: FiringState
+  /** e.g. "attested but unsettled", "settled — verdict only, nothing charged". */
+  label: string
+  gate_evaluated: boolean
+  verdict_only?: boolean
+  /** Gate ids from the deciding ledger row. */
+  failed_checks?: string[]
+  /** The signed `verdicts[]` entries that failed: `{check, detail?}`. */
+  failed_verdicts?: Array<Record<string, string>>
+  checks?: 'unchecked' | 'checked' | 'not_evaluated'
+  checks_label?: string
+  /** One sentence saying what was and was not decided for the run. */
+  statement: string
+}
+
+/** The routine firing this session belongs to, as its row records it. */
+export interface RunAuditFiring {
+  routine_id: string
+  state: FiringState
+  label: string
+  detail?: string
+}
+
+/** What the export and its signed receipt cover (FR-8, story 3.2). Server-written; render as is. */
+export interface RunAuditCoverage {
+  /** The verifier's coverage statement, computed from the envelope at export time. */
+  statement: string
+  run_id?: string
+  receipt_steps?: number
+  receipt_tools: string[]
+  /** How this export's step list relates to the signed receipt. */
+  export: string
+}
+
+export interface RunAuditResponse {
+  session_id: string
+  generated_at: string
+  goal: string
+  summary: RunAuditSummary
+  steps: RunAuditStep[]
+  note: string
+  coverage: RunAuditCoverage
+  /** The sealed run's signed ``model`` verdicts; absent when no receipt was read. */
+  models?: string[]
+  /** The session's latest sealed run: a firing's run, else the newest sealed envelope. */
+  run_id?: string
+  gate?: RunAuditGate
+  /** Firing sessions only. */
+  settlement?: RunAuditSettlement
+  firing?: RunAuditFiring
+}
+
 // ── Interrupt types (manually synced with internal_commons.interrupts) ─────────
 
 export type InterruptType =
@@ -75,6 +176,13 @@ export interface HitlApprovalMetadata {
   risk_level: 'low' | 'medium' | 'high'
   agent_display_name: string
   capability_name: string
+  // Scope gate (story 1.5): a write or destructive call on a connection.
+  scope_class?: 'read' | 'write' | 'destructive' | null
+  connection_id?: string | null
+  connection_name?: string | null
+  target?: string | null
+  call_id?: string | null
+  capability_id?: string | null
 }
 
 export interface HitlClarificationMetadata {
@@ -232,6 +340,8 @@ export type SSEEvent =
       session_id: string
       run_id?: string
       attestation_path?: string
+      /** "<route>/<model id>" the server recorded for the turn (story 3.3). */
+      model?: string
     }
   | { type: 'stopped'; session_id: string }
   | {
@@ -259,6 +369,80 @@ export interface WorkflowResponse {
   run_count: number
   created_at: string
   updated_at: string
+  // Routine fields (story 2.1); empty on a template saved from a chat.
+  schedule_cron?: string | null
+  schedule_tz?: string | null
+  schedule_enabled?: boolean
+  model?: string | null
+  scope_allow?: string[]
+  criteria?: Record<string, boolean>
+  criteria_operands?: Record<string, Record<string, string | number | boolean>>
+  // Story 2.2: when the schedule next fires, and how the last firing ended.
+  next_run_at?: string | null
+  last_firing?: FiringResponse | null
+}
+
+/** AD-22: the one firing state vocabulary every pane and export uses. */
+export type FiringState =
+  | 'scheduled'
+  | 'running'
+  | 'attested_unsettled'
+  | 'settled'
+  | 'refused'
+  | 'paused'
+  | 'skipped'
+  | 'error'
+
+export interface FiringResponse {
+  id: string
+  slot: string
+  state: FiringState
+  detail: string | null
+  /** The firing's session: a paused firing's approval card waits there. */
+  session_id: string | null
+  run_id: string | null
+  created_at: string
+  updated_at: string
+  // Story 2.5: every field below is computed by the server. The pane renders
+  // them and never derives words from `state`.
+  /** The state in words, e.g. "refused — counts_match"; read from the row. */
+  label: string
+  /** Error/skipped/paused detail, or the unsettled note (story 2.6). */
+  note?: string | null
+  /** AD-12: the deciding ledger row's kind; set only on settled/refused. */
+  gate?: 'verdict_only' | 'charged' | null
+  /** "verdict only, nothing charged" when the deciding row moved no money. */
+  gate_label?: string | null
+  /** The deciding ledger row's failed-check ids. */
+  gate_checks?: string[]
+  /** A sealed envelope is stored for this run, in the firing's session. */
+  receipt_available?: boolean
+  /** The viewer owns that session, so the receipt route lets them through. */
+  receipt_downloadable?: boolean
+  /** Declared criteria against the signed verdicts; null when no envelope was read. */
+  checks?: 'unchecked' | 'checked' | 'not_evaluated' | null
+  /** "recorded, unchecked" / "checked: …" / "declared, not evaluated: …". */
+  checks_label?: string | null
+}
+
+export interface CreateRoutineRequest {
+  name: string
+  description?: string
+  goal: string
+  connections: string[]
+  /** `<connection DID>#<capability>`; destructive capabilities are refused at save. */
+  scope_allow: string[]
+  model: string
+  criteria: Record<string, boolean>
+  criteria_operands: Record<string, Record<string, string | number | boolean>>
+  cron: string
+  timezone: string
+}
+
+/** A refused routine save: the field at fault and a reason naming it. */
+export interface RoutineRejection {
+  field: string
+  reason: string
 }
 
 // ── Dev Agents ────────────────────────────────────────────────────────────────
@@ -390,6 +574,9 @@ export interface ChatMessage {
   runId?: string
   /** SuperAgent-relative fetch path; Gateway prefixes ``/api/v1``. */
   attestationPath?: string
+  /** The model that ran the turn, "<route>/<model id>", as the server recorded
+   *  it (SSE ``done`` event, or the transcript row's ``tool_inputs.model``). */
+  model?: string
 }
 
 export interface Artifact {

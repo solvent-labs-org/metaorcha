@@ -12,6 +12,8 @@ import type {
   WalletTransactionsResponse,
   WithdrawRequest,
   WorkflowResponse,
+  CreateRoutineRequest,
+  FiringResponse,
   WorkflowStatus,
 } from '../types'
 import type { PaginatedSessionsDTO, TranscriptEntryDTO } from '../types/transcript'
@@ -272,6 +274,12 @@ export const workflows = {
       body: JSON.stringify({ session_id, name, description }),
     }),
 
+  createRoutine: (body: CreateRoutineRequest) =>
+    apiFetch<WorkflowResponse>('/api/v1/workflows/routines', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   update: (id: string, patch: { name?: string; description?: string; status?: WorkflowStatus }) =>
     apiFetch<WorkflowResponse>(`/api/v1/workflows/${id}`, {
       method: 'PATCH',
@@ -280,6 +288,9 @@ export const workflows = {
 
   delete: (id: string) =>
     apiFetch<void>(`/api/v1/workflows/${id}`, { method: 'DELETE' }),
+
+  firings: (id: string, limit = 20) =>
+    apiFetch<FiringResponse[]>(`/api/v1/workflows/${id}/firings?limit=${limit}`),
 }
 
 // ── Dev Agents ────────────────────────────────────────────────────────────────

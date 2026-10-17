@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import UTC, datetime
 
-from jose import JWTError
+import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -101,7 +101,11 @@ class SandboxGuardMiddleware(BaseHTTPMiddleware):
                             "SandboxGuard: guest limit check failed — bypassing",
                             exc_info=True,
                         )
-            except (ValueError, JWTError):
+            except (ValueError, jwt.PyJWTError):
+                # A token this guard cannot read is not a guest's: no guest cap
+                # applies, and the daily cap below still counts the request.
+                # Rejecting it is the route's auth dependency's job, not this
+                # middleware's.
                 pass
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")

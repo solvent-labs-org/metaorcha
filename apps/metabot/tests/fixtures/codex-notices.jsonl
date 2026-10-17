@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000003"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Skill descriptions were shortened to fit the skills context budget."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'echo metabot-live'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'echo metabot-live'","aggregated_output":"metabot-live\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"metabot-live"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":3}}

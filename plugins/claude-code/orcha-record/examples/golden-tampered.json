@@ -1,0 +1,45 @@
+{
+  "format": "orcha.run-attestation/v1",
+  "run_id": "run-9c2e-example",
+  "agent_dids": [
+    "did:orcha:agent:example-support-bot"
+  ],
+  "charter_hash": null,
+  "policy_version": "example-policy/1.0",
+  "steps": [
+    {
+      "seq": 0,
+      "call_id": "call-7f3a",
+      "tool": "search_docs",
+      "args_hash": "cfb7b9e24993e2079be817f26458fbfe854c97ecca332a83bf03bc33912064a0",
+      "output_hash": "b53a450afe33a989f27439fb2832a7258f4dd4ed2b883c82d34571d9c8b713e6",
+      "success": true,
+      "latency_ms": 133
+    },
+    {
+      "seq": 1,
+      "call_id": "call-7f3b",
+      "tool": "summarize",
+      "args_hash": "49d58a9a2fde08cd152b791aaa7ab455d90019dffcc646c7fef87c9e25762134",
+      "output_hash": "32cd234e055db6061fb557f3d4dafdbccad80c904b9342b52b53f8870d0a80bd",
+      "success": true,
+      "latency_ms": 481,
+      "cdv_bp": 910
+    }
+  ],
+  "steps_root": "8de66de79f1eeab8c984588fd82aaab604a018ead0f04af43102ea2baab2557e",
+  "steps_merkle_root": "96267180943447e517b2698c400a785f69bb67bff99abd1c3f9738512f9e4362",
+  "verdicts": [
+    {
+      "check": "authorized_scope",
+      "result": "pass"
+    }
+  ],
+  "started_at": "2026-08-06T00:58:21Z",
+  "finished_at": "2026-08-06T00:58:24Z",
+  "signer": {
+    "did": "did:orcha:system:validator",
+    "public_key_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+  },
+  "signature": "Xwbefu8AXyI9wXgHapNu/GXGhinwF9jWlfnoi8qsevpzi3T0E+pHmymBEqO4/iJ9hMBKXEb7NTHQyEPirxDgDw=="
+}

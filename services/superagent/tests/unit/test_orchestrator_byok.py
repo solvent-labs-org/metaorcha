@@ -56,3 +56,32 @@ def test_make_chat_llm_byok_gemini_openai_compatible_stays_on_chatopenai():
     )
     assert isinstance(llm, ChatOpenAI)
     assert llm.model_name == "gemini-3-flash-preview"
+
+
+def test_make_chat_llm_byok_routes_by_host_not_by_substring():
+    # the native host string in a proxy's path or query is not the native host:
+    # the key goes to the endpoint the user configured
+    for base_url in (
+        "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/openai",
+        "https://proxy.example.com/v1?via=generativelanguage.googleapis.com",
+        "https://generativelanguage.googleapis.com.example.com/v1beta",
+    ):
+        llm = _make_chat_llm(
+            byok={
+                "base_url": base_url,
+                "api_key": "goog_test_key",
+                "model": "gemini-3-flash-preview",
+            }
+        )
+        assert isinstance(llm, ChatOpenAI), base_url
+        assert str(llm.openai_api_base) == base_url
+
+
+def test_host_is_compares_the_parsed_host():
+    from superagent.nodes.orchestrator import _host_is
+
+    assert _host_is("https://a.example/v1", "a.example")
+    assert _host_is("https://A.EXAMPLE:443/v1", "a.example")
+    assert not _host_is("https://a.example.evil/v1", "a.example")
+    assert not _host_is("https://evil/a.example", "a.example")
+    assert not _host_is("", "a.example")

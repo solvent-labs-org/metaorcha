@@ -152,6 +152,9 @@ export function useSSE() {
               attestationPath: event.attestation_path,
             })
           }
+          if (typeof event.model === 'string' && event.model) {
+            s.attachModelToLastTurn(event.model)
+          }
           break
         }
         case 'stopped': {

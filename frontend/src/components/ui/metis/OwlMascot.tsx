@@ -74,7 +74,8 @@ function WingLayer({ side, cells }: { side: 'left' | 'right'; cells: ReturnType<
   )
 }
 
-export type OwlState = 'idle' | 'executing' | 'verified' | 'error'
+/** `complete` means the session finished — no check gated it (FR-14). */
+export type OwlState = 'idle' | 'executing' | 'complete' | 'error'
 
 export interface OwlMascotProps {
   readonly state?: OwlState

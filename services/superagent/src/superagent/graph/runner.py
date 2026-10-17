@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from internal_commons.interrupts.events import InterruptEvent
+from internal_commons.interrupts.types import InterruptType
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
@@ -24,16 +25,19 @@ from ..runtime.session_cancel import (
     signal_cancel,
     unregister_run,
 )
-from .state import default_state
+from .state import SESSION_CREDENTIALS_CONFIG_KEY, default_state
 
 logger = logging.getLogger(__name__)
 
 
-def _done_event(session_id: str) -> dict[str, Any]:
-    """Turn-finished SSE payload. Adds a fetch path when a receipt was sealed."""
+def _done_event(session_id: str, model: Any = None) -> dict[str, Any]:
+    """Turn-finished SSE payload. Adds a fetch path when a receipt was sealed,
+    and the model that ran the turn when one did (story 3.3)."""
     from ..middleware.observers import peek_published_run_id
 
     event: dict[str, Any] = {"type": "done", "session_id": session_id}
+    if isinstance(model, str) and model:
+        event["model"] = model
     run_id = peek_published_run_id(session_id)
     if run_id:
         event["run_id"] = run_id
@@ -270,6 +274,8 @@ async def _yield_multistream_events(
                     vm = chunk.get("messages")
                     if vm is not None:
                         values_messages_sink["messages"] = vm
+                    if "_turn_model" in chunk:
+                        values_messages_sink["_turn_model"] = chunk["_turn_model"]
                 try:
                     for event in _extract_events(
                         chunk,
@@ -379,6 +385,62 @@ class SessionRunner:
             task.cancel()
         return {"ok": True, "status": "stopping"}
 
+    async def _detach_submitted_credential(
+        self, value: dict[str, Any], config: dict[str, Any], user_id: str
+    ) -> dict[str, Any]:
+        """Store a credential submitted on resume; never let it into the graph.
+
+        A ``Command(resume=value)`` is checkpointed with the run, so an
+        AUTH_FORM_SUBMISSION answer carrying ``credential_value`` would put the
+        token in Redis for the life of the thread (AD-14). The value is
+        written to the vault here — under the agent's own scope
+        ``agent:<DID>:env:<VAR>`` (AD-15), the key the auth cascade reads —
+        and removed from the payload whatever the pending interrupt is. The
+        agent and the variable come from the checkpoint's own interrupt
+        record, never from the client. Never raises.
+        """
+        if not isinstance(value, dict) or "credential_value" not in value:
+            return value
+        value = dict(value)
+        credential = str(value.pop("credential_value") or "").strip()
+        try:
+            pending = await _pending_interrupt_event(self._graph, config)
+            if not isinstance(pending, dict):
+                logger.warning(
+                    "resume: credential submitted with no readable pending "
+                    "interrupt — dropped, not stored"
+                )
+                return value
+            if pending.get("interrupt_type") != InterruptType.AUTH_FORM_SUBMISSION:
+                logger.warning(
+                    "resume: credential submitted on a %s interrupt — dropped",
+                    pending.get("interrupt_type"),
+                )
+                return value
+            agent_id = str(pending.get("agent_id") or "").strip()
+            metadata = pending.get("metadata") or {}
+            vault_key = str(metadata.get("vault_key") or "").strip()
+            if not (credential and agent_id and vault_key and user_id):
+                logger.warning(
+                    "resume: credential for agent=%s key=%s not stored "
+                    "(missing user, key or value)",
+                    agent_id,
+                    vault_key,
+                )
+                return value
+            from ..vault.client import VaultClient
+
+            await VaultClient().save_agent_env(user_id, agent_id, vault_key, credential)
+            logger.info(
+                "resume: stored submitted credential agent=%s key=%s user=%s",
+                agent_id,
+                vault_key,
+                user_id,
+            )
+        except Exception:
+            logger.exception("resume: submitted credential could not be stored")
+        return value
+
     async def _persist_transcript(
         self,
         session_id: str,
@@ -396,7 +458,7 @@ class SessionRunner:
             {
                 "configurable": {
                     "thread_id": session_id,
-                    "session_credentials": session_credentials or {},
+                    SESSION_CREDENTIALS_CONFIG_KEY: session_credentials or {},
                 }
             }
         )
@@ -463,6 +525,7 @@ class SessionRunner:
         model: str | None = None,
         custom_instructions: str | None = None,
         acceptance_criteria: dict[str, Any] | None = None,
+        routine_context: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:  # noqa: UP006
         """
         Execute one turn of the ReAct loop, yielding streaming events.
@@ -484,7 +547,7 @@ class SessionRunner:
             or {
                 "configurable": {
                     "thread_id": session_id,
-                    "session_credentials": session_credentials or {},
+                    SESSION_CREDENTIALS_CONFIG_KEY: session_credentials or {},
                 }
             }
         )
@@ -545,31 +608,17 @@ class SessionRunner:
             state_update["custom_instructions"] = custom_instructions
         # Per-turn: overwrite so a later turn without criteria is today's envelope.
         state_update["_declared_criteria"] = acceptance_criteria
+        # Story 2.2: a routine firing's bounds (the scope gate reads them);
+        # per-turn, so a chat turn in the firing's session is a chat turn.
+        state_update["routine_context"] = routine_context
+        # Story 3.3: the model is the turn's own, never the last turn's.
+        state_update["_turn_model"] = None
 
-        # Keep session credentials visible in both configurable and state paths.
-        state_update["_session_credentials"] = session_credentials or {}
-
-        # Permanent BYOK fallback: if the caller supplied no session-scoped
-        # __llm__ override, hydrate one from the vault (keys written via
-        # POST /api/v1/credentials scope=permanent). Session creds win.
-        if "__llm__" not in state_update["_session_credentials"]:
-            try:
-                from ..vault.client import VaultClient
-
-                vault = VaultClient()
-                byok: dict[str, str] = {}
-                for var in ("api_key", "base_url", "model"):
-                    value = await vault.get_agent_env(user_id, "__llm__", var)
-                    if value:
-                        byok[var] = value
-                if byok.get("api_key"):
-                    state_update["_session_credentials"]["__llm__"] = byok
-                    logger.info(
-                        "run_turn: hydrated permanent BYOK __llm__ creds for user %s",
-                        user_id,
-                    )
-            except Exception:
-                logger.debug("run_turn: BYOK vault hydration failed", exc_info=True)
+        # AD-14 (story 1.6b): session credentials ride on the run config only
+        # (SESSION_CREDENTIALS_CONFIG_KEY above) — never on graph state, which
+        # the checkpointer persists. The permanent BYOK key is likewise no
+        # longer hydrated here: the orchestrator resolves it from the vault
+        # into a local at call time (nodes/orchestrator.resolve_byok).
 
         await register_run(session_id)
         values_messages_sink: dict[str, Any] = {}
@@ -601,7 +650,7 @@ class SessionRunner:
             await self._clear_active_stream_task(session_id, current_task)
             await unregister_run(session_id)
             # Persist even on error/cancel: a failed run is exactly what the
-            # run audit (Verified Runs) is for. Never let a persist failure
+            # run audit (run evidence) is for. Never let a persist failure
             # break stream teardown.
             stream_msgs = values_messages_sink.get("messages")
             stream_list = stream_msgs if isinstance(stream_msgs, list) else None
@@ -641,7 +690,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield _done_event(session_id)
+        yield _done_event(session_id, values_messages_sink.get("_turn_model"))
 
     async def resume_from_interrupt(
         self,
@@ -649,24 +698,29 @@ class SessionRunner:
         value: dict[str, Any],
         session_credentials: dict[str, dict[str, str]] | None = None,
         thread_config: dict[str, Any] | None = None,
+        user_id: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Resume a graph that is paused at an interrupt node.
 
         Args:
             session_id: The session / LangGraph thread to resume.
-            value: The resume value dict — forwarded verbatim as the return value
-                   of the ``interrupt()`` call that suspended the node.
+            value: The resume value dict — forwarded as the return value of
+                   the ``interrupt()`` call that suspended the node, minus a
+                   submitted credential (see ``_detach_submitted_credential``).
                    Typically ``ResumePayload.value`` from ``internal_commons``.
+            user_id: The Gateway-verified user the credential is stored for.
         """
         config = _merge_graph_config(
             thread_config
             or {
                 "configurable": {
                     "thread_id": session_id,
-                    "session_credentials": session_credentials or {},
+                    SESSION_CREDENTIALS_CONFIG_KEY: session_credentials or {},
                 }
             }
         )
+
+        value = await self._detach_submitted_credential(value, config, user_id)
 
         await register_run(session_id)
         values_messages_sink = {}
@@ -703,7 +757,7 @@ class SessionRunner:
             await self._clear_active_stream_task(session_id, current_task)
             await unregister_run(session_id)
             # Persist even on error/cancel: a failed run is exactly what the
-            # run audit (Verified Runs) is for. Never let a persist failure
+            # run audit (run evidence) is for. Never let a persist failure
             # break stream teardown.
             stream_msgs = values_messages_sink.get("messages")
             stream_list = stream_msgs if isinstance(stream_msgs, list) else None
@@ -736,7 +790,7 @@ class SessionRunner:
 
             await emit_run_complete(session_id)
 
-        yield _done_event(session_id)
+        yield _done_event(session_id, values_messages_sink.get("_turn_model"))
 
     async def get_status(
         self, session_id: str, thread_config: dict[str, Any] | None = None

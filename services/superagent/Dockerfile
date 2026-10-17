@@ -28,6 +28,10 @@ COPY common/proto ./common/proto
 COPY common/utils ./common/utils
 COPY common/internal-commons ./common/internal-commons
 COPY common/emerge-tools ./common/emerge-tools
+# orcha-sdk is a declared dependency (AD-20: the SDK is the one implementation
+# of the step pre-image and the receipt); it is an editable workspace member,
+# so its tree must be present here to resolve and at runtime to import.
+COPY sdk ./sdk
 
 COPY services/superagent/pyproject.toml ./services/superagent/
 
@@ -69,6 +73,7 @@ RUN useradd -m -u 1000 appuser && \
 
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appuser /app/common /app/common
+COPY --from=builder --chown=appuser:appuser /app/sdk /app/sdk
 COPY --from=builder --chown=appuser:appuser /app/.cache /app/.cache
 
 # Chromium headless shell + system deps for the computer-use Playwright backend

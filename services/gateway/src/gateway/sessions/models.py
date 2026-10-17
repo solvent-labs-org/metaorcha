@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 # Keep in sync with superagent.middleware.criteria.SUPPORTED_CRITERIA.
-_SUPPORTED_CRITERIA = frozenset({"citations_required"})
+_SUPPORTED_CRITERIA = frozenset({"citations_required", "exit_zero"})
 _MAX_CRITERIA_KEYS = 8
 
 

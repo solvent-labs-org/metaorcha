@@ -51,8 +51,10 @@ from pathlib import Path
 from typing import Any
 
 from emerge.run_attestation import (
+    COVERAGE_STATEMENT,
     RUN_ATTESTATION_FORMAT,
     compute_envelope_digest,
+    coverage_statement,
     verify_run_attestation,
 )
 
@@ -148,6 +150,11 @@ def write_package(
                 "run_id": envelope.get("run_id"),
                 "envelope": env_name,
                 "record": rec_name,
+                "coverage": {
+                    k: v
+                    for k, v in coverage_statement(envelope).items()
+                    if k != "statement"
+                },
             }
         )
     manifest = {
@@ -156,6 +163,8 @@ def write_package(
         "source": source,
         "head": head,
         "verifier": "emerge.run_attestation (vendored, offline)",
+        # FR-8: what each envelope covers travels with the package.
+        "coverage": COVERAGE_STATEMENT,
         "legs": manifest_legs,
     }
     if synthetic_reason:
@@ -268,6 +277,13 @@ def verify_package(package: Path) -> PackageReport:
         report.fail(f"manifest source {source!r} is not one of {SOURCES}")
     report.synthetic = source == "synthetic"
     report.synthetic_reason = manifest.get("synthetic_reason")
+    stated = manifest.get("coverage")
+    if stated is None:
+        report.note("no coverage statement in the manifest (written before FR-8)")
+    elif stated != COVERAGE_STATEMENT:
+        # A stored statement is trusted only where it is the verifier's own
+        # (the spine: export text is produced from the envelope, never kept).
+        report.fail("manifest coverage statement differs from the verifier's")
     if report.synthetic and not report.synthetic_reason:
         report.fail("synthetic package states no synthetic_reason")
     if source == "dual-run" and manifest.get("synthetic_reason"):
@@ -309,6 +325,19 @@ def verify_package(package: Path) -> PackageReport:
         if missing:
             report.fail(f"{label}: record lacks {missing}")
             continue
+
+        # FR-8: a leg's stored coverage reading is recomputed from the envelope.
+        stated_leg = entry.get("coverage")
+        if stated_leg is not None:
+            read = {
+                k: v
+                for k, v in coverage_statement(envelope).items()
+                if k != "statement"
+            }
+            if stated_leg != read:
+                report.fail(
+                    f"{label}: manifest coverage {stated_leg!r} != envelope {read!r}"
+                )
 
         verdict = verify_run_attestation(envelope)
         unknown = sorted(set(verdict.checks) - set(VERIFIER_CHECKS))

@@ -1,4 +1,4 @@
-"""{{AGENT_NAME}} — your first Orcha agent.
+"""{{AGENT_NAME}} — your first Metaorcha agent.
 
 An agent is just a function that takes a natural-language `task` string and
 returns a result string. The `@emerge.agent` decorator does the rest:

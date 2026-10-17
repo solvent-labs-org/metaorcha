@@ -12,11 +12,12 @@ import copy
 import importlib.util
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from emerge.run_attestation import COVERAGE_STATEMENT
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "scripts" / "kya_evidence_package.py"
@@ -63,6 +64,11 @@ def test_synthetic_package_verifies_and_says_it_is_synthetic(pkg, synthetic):
     assert manifest["format"] == pkg.PACKAGE_FORMAT
     assert manifest["source"] == "synthetic"
     assert [leg["expected"] for leg in manifest["legs"]] == ["settled", "refused"]
+    # FR-8: the package states what its envelopes cover
+    assert manifest["coverage"] == COVERAGE_STATEMENT
+    for leg in manifest["legs"]:
+        envelope = _load(synthetic / leg["envelope"])
+        assert leg["coverage"]["steps"] == len(envelope["steps"])
     for name in (
         "leg1-envelope.json",
         "leg1-settlement.json",
@@ -193,6 +199,33 @@ def test_a_manifest_relabelled_as_dual_run_is_caught(pkg, synthetic):
     )
 
 
+def test_an_altered_coverage_statement_fails_a_missing_one_is_noted(pkg, synthetic):
+    # stored text is trusted only where it is the verifier's own (FR-8)
+    manifest = _load(synthetic / "manifest.json")
+    manifest["coverage"] = (
+        "This receipt is a complete record of everything the agent did."
+    )
+    _dump(synthetic / "manifest.json", manifest)
+    report = pkg.verify_package(synthetic)
+    assert not report.ok
+    assert any("coverage statement differs" in f for f in report.failures)
+
+    del manifest["coverage"]
+    _dump(synthetic / "manifest.json", manifest)
+    report = pkg.verify_package(synthetic)
+    assert report.ok
+    assert any("no coverage statement" in line for line in report.lines)
+
+
+def test_a_legs_stored_coverage_is_recomputed_from_its_envelope(pkg, synthetic):
+    manifest = _load(synthetic / "manifest.json")
+    manifest["legs"][0]["coverage"]["steps"] = 99
+    _dump(synthetic / "manifest.json", manifest)
+    report = pkg.verify_package(synthetic)
+    assert not report.ok
+    assert any("leg 1: manifest coverage" in f for f in report.failures)
+
+
 def test_absent_package_and_missing_envelopes_are_not_present(
     pkg, tmp_path: Path, synthetic
 ):
@@ -214,7 +247,7 @@ def test_write_package_projects_orm_rows(pkg, tmp_path: Path):
     """The slice passes ORM rows: a Json-wrapped failed_checks and a datetime."""
     vectors = pkg._load_generator().build_vectors()
     valid, tampered = vectors["valid"], vectors["tampered"]
-    when = datetime(2026, 9, 5, 4, 0, tzinfo=UTC)
+    when = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
     settled = SimpleNamespace(
         run_id=valid["run_id"],
         session_id="sess-1",

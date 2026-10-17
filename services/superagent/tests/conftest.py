@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-from superagent.graph.builder import build_superagent_graph
+# The repo root, so ``common.*`` imports as it does in the image (WORKDIR /app)
+# and in the Gateway's tests. Appended, never prepended: nothing at the root
+# may shadow an installed package.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.append(_PROJECT_ROOT)
+
+import pytest  # noqa: E402
+from superagent.graph.builder import build_superagent_graph  # noqa: E402
 from superagent.graph.state import default_state
 from superagent.pnd.models import (
     CandidateCapability,

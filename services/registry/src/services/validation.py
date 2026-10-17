@@ -1,6 +1,15 @@
 """Validation service for emerge.yaml and agent data."""
 
+import re
+from collections.abc import Iterable
+from typing import Any
+
 from ..models.emerge_config import EmergeConfig
+
+# AD-17: a capability id becomes the ``<connection DID>#<capability>`` half of
+# a recorded step's ``tool`` string, so it may never contain ``#`` or anything
+# outside this charset. Mirrors superagent.middleware.scope_classes.
+CAPABILITY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
 class ValidationError(Exception):
@@ -115,6 +124,26 @@ class ValidationService:
                 "identity.version", "Version parts must be integers"
             )
 
+        return True, None
+
+    @staticmethod
+    def validate_capability_ids(
+        capabilities: Iterable[Any],
+    ) -> tuple[bool, ValidationError | None]:
+        """Every harvested capability id must fit ``[A-Za-z0-9_.:-]+`` (AD-17).
+
+        Rejects an id containing ``#``, whitespace or non-ASCII before the
+        agent is saved, so no recorded step can ever carry an ambiguous
+        ``tool`` string. Never raises on a malformed capability object.
+        """
+        for cap in capabilities:
+            cap_id = getattr(cap, "id", None)
+            if not isinstance(cap_id, str) or not CAPABILITY_ID_PATTERN.match(cap_id):
+                return False, ValidationError(
+                    "capabilities.id",
+                    f"Capability id {cap_id!r} must match [A-Za-z0-9_.:-]+ "
+                    "(no '#', whitespace or non-ASCII)",
+                )
         return True, None
 
     @staticmethod

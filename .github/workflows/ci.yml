@@ -34,6 +34,7 @@ jobs:
       validator: ${{ steps.filter.outputs.validator }}
       frontend: ${{ steps.filter.outputs.frontend }}
       apps: ${{ steps.filter.outputs.apps }}
+      metabot: ${{ steps.filter.outputs.metabot }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -69,6 +70,9 @@ jobs:
               - 'frontend/**'
             apps:
               - 'apps/**'
+            metabot:
+              - 'apps/metabot/**'
+              - 'sdk/**'
 
   # ============================================================================
   # Registry Service Tests
@@ -539,6 +543,90 @@ jobs:
         run: uv run pytest apps/attestation-playground/tests/ --verbose
 
   # ============================================================================
+  # MetaBot (apps/metabot): lint, format, types and tests, in its own locked
+  # environment, with the SDK from this tree
+  # ============================================================================
+  metabot:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.metabot == 'true' }}
+    runs-on: ubuntu-latest
+    name: MetaBot (Lint, Format, Types, Test)
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/metabot
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # --locked, not --frozen: a lock that no longer matches the tree fails here
+      - name: Install dependencies
+        run: uv sync --locked --package orcha-metabot
+
+      # Proves the package builds, and caches the build backend the wheel
+      # test then uses offline, so that test runs here and never skips.
+      - name: Build the wheel
+        run: uv build --package orcha-metabot --wheel --out-dir "$RUNNER_TEMP/metabot-dist"
+
+      - name: Lint with ruff
+        run: uv run --frozen --package orcha-metabot ruff check src tests
+
+      - name: Format check with ruff
+        run: uv run --frozen --package orcha-metabot ruff format --check src tests
+
+      - name: Type check with mypy
+        run: uv run --frozen --package orcha-metabot mypy
+
+      - name: Run MetaBot tests
+        run: uv run --frozen --package orcha-metabot pytest -rs -W error::ResourceWarning
+
+  # ============================================================================
+  # MetaBot at its Python floor, 3.11. The workspace lock needs 3.12 or newer,
+  # so this installs the SDK and MetaBot from their declared ranges, as a
+  # user's install resolves them
+  # ============================================================================
+  metabot-floor:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.metabot == 'true' }}
+    runs-on: ubuntu-latest
+    name: MetaBot on Python 3.11 (Test)
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install from the declared ranges
+        run: |
+          uv venv --no-project --python 3.11 "$RUNNER_TEMP/floor"
+          uv pip install --python "$RUNNER_TEMP/floor/bin/python" \
+            ./sdk ./apps/metabot pytest pytest-asyncio
+
+      - name: Run MetaBot tests
+        working-directory: apps/metabot
+        run: '"$RUNNER_TEMP/floor/bin/python" -m pytest -rs -W error::ResourceWarning'
+
+  # ============================================================================
   # SuperAgent — lint + execution-pipeline seam tests
   # ============================================================================
   superagent-service:
@@ -577,10 +665,45 @@ jobs:
 
       - name: Test the ExecutionObserver seam (open/closed boundary)
         working-directory: services/superagent
+        # Dummy, non-secret values: Settings() refuses to import without them,
+        # and every file after the first three imports it. Port 1 connects
+        # nowhere; the vault key is all zero bytes. test_revoke_connection
+        # seals a receipt with validator, which imports emerge_node: both are
+        # workspace members the root sync does not put on the path (same
+        # shape as the attestation-playground job).
+        env:
+          PYTHONPATH: .:${{ github.workspace }}/services/validator/src:${{ github.workspace }}/node/src
+          DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
+          VAULT_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          PND_SERVICE_URL: http://127.0.0.1:1
+          OPENROUTER_API_KEY: test-not-a-key
+          REDIS_URL: redis://127.0.0.1:1/0
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
         run: |
           uv run pytest tests/unit/test_observers.py \
             tests/unit/test_step_events.py \
-            tests/unit/test_settlement_three_way.py --verbose
+            tests/unit/test_settlement_three_way.py \
+            tests/unit/test_canary.py \
+            tests/unit/test_connections.py \
+            tests/unit/test_scope_gate.py \
+            tests/unit/test_revoke_connection.py \
+            tests/unit/test_routine_rules.py \
+            tests/unit/test_session_office.py \
+            tests/unit/test_routine_scheduler.py \
+            tests/unit/test_routine_firing_scope.py \
+            tests/unit/test_settle_gate.py \
+            tests/unit/test_settle_gate_flow.py \
+            tests/unit/test_step65_defer.py \
+            tests/unit/test_run_audit.py \
+            tests/unit/test_routine_firing_gate.py \
+            tests/unit/test_routine_evidence.py \
+            tests/unit/test_routine_counts_match.py \
+            tests/unit/test_citation_verify.py \
+            tests/unit/test_criterion_step_coverage.py \
+            tests/unit/test_export_coverage.py \
+            tests/unit/test_turn_model.py \
+            tests/unit/test_flags_off_parity.py --verbose
 
   # ============================================================================
   # emerge-node — signed envelope helpers
@@ -739,7 +862,7 @@ jobs:
 
       - name: Run Gateway unit tests
         working-directory: services/gateway
-        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py --verbose
+        run: uv run pytest tests/unit/test_auth_routes.py tests/unit/test_jwt.py tests/unit/test_run_attestation_route.py tests/unit/test_plugins_mcp.py tests/unit/test_mcp_manifest.py tests/unit/test_canary.py tests/unit/test_revoke_connection.py tests/unit/test_save_routine.py tests/unit/test_offices.py tests/unit/test_routine_firings.py --verbose
 
   # ============================================================================
   # Frontend — lint, typecheck, build. Had no CI at all until 2026-08-25.
@@ -951,6 +1074,8 @@ jobs:
       - planning-discovery-service
       - sdk
       - attestation-playground
+      - metabot
+      - metabot-floor
       - superagent-service
       - emerge-node
       - validator

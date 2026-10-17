@@ -67,6 +67,65 @@ def pop_deferred_settle(session_id: str) -> dict[str, Any] | None:
     return _deferred_settles.pop(session_id, None)
 
 
+def defer_charge(
+    *,
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+    call_id: str,
+    base_fee: Decimal,
+    latency_ms: int,
+    execution_success: bool,
+    platform_tokens: int = 0,
+) -> bool:
+    """Store a charged call for the post-seal gate. Synchronous (AD-12).
+
+    Returns True when the charge was deferred: ``SETTLEMENT_REQUIRE_ATTESTATION``
+    is on and the call succeeded. Pipeline step 6.5 calls this before it
+    returns, so when the run seals the gate already knows whether the run
+    charged anything — it never has to wait for a background task, and never
+    judges a run "verdict only" while a charge is still on its way. Returns
+    False, writing nothing, in every other case.
+    """
+    from ..config import settings  # noqa: PLC0415 — read at call time
+
+    if not (settings.settlement_require_attestation and execution_success):
+        return False
+    _store_deferred(
+        session_id,
+        {
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "call_id": call_id,
+            "base_fee": base_fee,
+            "latency_ms": latency_ms,
+            "platform_tokens": platform_tokens,
+            "execution_success": execution_success,
+        },
+    )
+    return True
+
+
+async def release_reserve(session_id: str, call_id: str) -> None:
+    """Release the call's Redis reserve. Never raises."""
+    from ..config import settings  # noqa: PLC0415
+
+    try:
+        import redis.asyncio as aioredis
+
+        redis_client = aioredis.from_url(
+            settings.redis_url, encoding="utf-8", decode_responses=True
+        )
+        async with redis_client as r:
+            await r.delete(f"reserve:{session_id}:{call_id}")
+    except Exception:
+        logger.warning(
+            "settle_invocation: Redis unavailable — reserve not released call_id=%s",
+            call_id,
+        )
+
+
 def read_share_bps() -> tuple[int, int]:
     """Return ``(coordinator_bps, validator_bps)`` from the environment.
 
@@ -148,38 +207,23 @@ async def settle_invocation(
     """
     from ..config import settings
 
-    # (1) Sync flag-check + defer — FIRST, before any await (FIFO race guard).
+    # (1) Sync flag-check + defer — FIRST, before any await. Pipeline step 6.5
+    # defers through ``defer_charge`` itself (AD-12); this keeps a direct
+    # mid-run call honest too.
     gate_required = settings.settlement_require_attestation and execution_success
-    deferred = gate_required and run_id is None
-    if deferred:
-        _store_deferred(
-            session_id,
-            {
-                "user_id": user_id,
-                "agent_id": agent_id,
-                "session_id": session_id,
-                "call_id": call_id,
-                "base_fee": base_fee,
-                "latency_ms": latency_ms,
-                "platform_tokens": platform_tokens,
-                "execution_success": execution_success,
-            },
-        )
+    deferred = run_id is None and defer_charge(
+        user_id=user_id,
+        agent_id=agent_id,
+        session_id=session_id,
+        call_id=call_id,
+        base_fee=base_fee,
+        latency_ms=latency_ms,
+        execution_success=execution_success,
+        platform_tokens=platform_tokens,
+    )
 
     # ── Release Redis reserve (always — success or failure) ───────────────────
-    try:
-        import redis.asyncio as aioredis
-
-        redis_client = aioredis.from_url(
-            settings.redis_url, encoding="utf-8", decode_responses=True
-        )
-        async with redis_client as r:
-            await r.delete(f"reserve:{session_id}:{call_id}")
-    except Exception:
-        logger.warning(
-            "settle_invocation: Redis unavailable — reserve not released call_id=%s",
-            call_id,
-        )
+    await release_reserve(session_id, call_id)
 
     # (3) Deferred mid-run settle: envelope not yet sealed — nothing to do.
     if deferred:

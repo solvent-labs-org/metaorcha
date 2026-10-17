@@ -5,7 +5,7 @@ POST /sessions/{id}/message     → SSE stream
 POST /sessions/{id}/resume      → SSE stream
 PATCH /sessions/{id}/context      → merge lead_gen_options / email_campaign_context
 GET  /sessions/{id}/status      → { status, pending_interrupt }
-GET  /sessions/{id}/audit       → Verified Runs evidence package
+GET  /sessions/{id}/audit       → run evidence package
 GET  /sessions/{id}/attestation → latest RFC 0003 envelope (bytes only)
 GET  /runs/{run_id}/attestation → RFC 0003 envelope by run_id (bytes only)
 GET  /health                    → { status: "ok" }
@@ -79,7 +79,9 @@ async def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
 
     session_id = str(uuid.uuid4())
     try:
-        await upsert_conversation_session(session_id, body.user_id, body.title)
+        await upsert_conversation_session(
+            session_id, body.user_id, body.title, body.office_id
+        )
     except Exception:
         logger.exception("create_session: DB upsert failed for %s", session_id)
         raise HTTPException(
@@ -97,10 +99,16 @@ async def list_sessions(
     user_id: str = Query(..., description="Owner user id (set by Gateway from JWT)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
+    office_id: str | None = Query(None, description="Office filter (set by Gateway)"),
+    include_unassigned: bool = Query(
+        False, description="Also list sessions with no office (personal office only)"
+    ),
 ) -> PaginatedSessionsResponse:
     from ..persistence.transcript_store import list_sessions_paginated
 
-    rows, total = await list_sessions_paginated(user_id, page, page_size)
+    rows, total = await list_sessions_paginated(
+        user_id, page, page_size, office_id, include_unassigned
+    )
     items = [
         ConversationSessionSummaryDTO(
             session_id=r.id,
@@ -121,12 +129,14 @@ async def list_sessions(
 
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
 async def get_session(session_id: str) -> SessionDetailResponse:
-    from ..persistence.transcript_store import get_session_meta
+    from ..persistence.transcript_store import get_session_office
 
-    meta = await get_session_meta(session_id)
-    if meta is None or meta[1] is None:
+    found = await get_session_office(session_id)
+    if found is None or found[0] is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return SessionDetailResponse(session_id=session_id, user_id=meta[1])
+    return SessionDetailResponse(
+        session_id=session_id, user_id=found[0], office_id=found[1]
+    )
 
 
 @router.get("/sessions/{session_id}/transcript", response_model=TranscriptListResponse)
@@ -160,12 +170,13 @@ async def get_run_audit(
         load_transcript_rows,
         verify_session_owner,
     )
-    from .audit import build_run_audit
+    from .audit import build_run_audit, load_settlement
 
     if not await verify_session_owner(session_id, user_id):
         raise HTTPException(status_code=404, detail="Session not found")
     rows = await load_transcript_rows(session_id)
-    return build_run_audit(session_id, rows)
+    evidence = await load_settlement(session_id)
+    return build_run_audit(session_id, rows, evidence=evidence)
 
 
 def _attestation_response(run_id: str, envelope: dict[str, Any]) -> JSONResponse:
@@ -291,16 +302,30 @@ async def resume_session(
     value.setdefault("authoriser_user_id", body.user_id)
 
     async def gen() -> AsyncIterator[str]:
+        from ..workflow.firing_rules import END_EVENTS
+        from ..workflow.scheduler import record_resume
+
+        ended: list[dict[str, Any]] = []
         try:
             async for event in runner.resume_from_interrupt(
                 session_id=session_id,
                 value=value,
                 session_credentials=body.session_credentials,
+                user_id=body.user_id,
             ):
+                if isinstance(event, dict) and event.get("type") in END_EVENTS:
+                    ended.append(event)
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception:
-            logger.exception("resume_session SSE gen failed for session %s", session_id)
+            logger.exception(
+                "resume_session SSE gen failed for session %s",
+                session_id.replace("\r", "\\r").replace("\n", "\\n"),  # path value
+            )
+            ended.append({"type": "error", "category": "internal"})
             yield f"data: {json.dumps({'type': 'error', 'error': 'Unexpected server error'})}\n\n"
+        # Story 2.2: a paused routine firing resumed from its session moves on
+        # to the state this turn ended in. A no-op for any other session.
+        await record_resume(session_id, ended)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -435,3 +460,54 @@ async def delete_agent_env(
 
     vault = VaultClient()
     await vault.delete_agent_env(user_id, agent_id, var_name)
+
+
+@router.post("/routines/validate")
+async def validate_routine(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Decide whether a routine may be saved (story 2.1, AD-18, AD-19).
+
+    The Gateway calls this before it persists anything. Returns
+    ``{"classes": {"<DID>#<capability>": "read" | "write"}}``, or 422 with
+    ``{"field", "reason"}`` naming what was refused — a destructive allow, an
+    allow the class rules do not recognise (unknown resolves to destructive),
+    a connection that is not current, or criteria outside the vocabulary.
+    """
+    from ..middleware.manifest_cache import MANIFEST_CACHE
+    from ..workflow.routine_rules import RoutineRejected, check_routine
+
+    async def read_manifest(did: str) -> dict[str, Any]:
+        return await MANIFEST_CACHE.get_manifest(did, fresh=True)
+
+    try:
+        classes = await check_routine(
+            connections=body.get("connections"),
+            scope_allow=body.get("scope_allow", []),
+            criteria=body.get("criteria", {}),
+            criteria_operands=body.get("criteria_operands", {}),
+            read_manifest=read_manifest,
+        )
+    except RoutineRejected as exc:
+        raise HTTPException(
+            status_code=422, detail={"field": exc.field, "reason": exc.reason}
+        ) from None
+    return {"classes": classes}
+
+
+@router.delete("/secrets/agent-env/{agent_id}")
+async def delete_all_agent_env(agent_id: str, user_id: str) -> dict[str, int]:
+    """
+    Delete every stored credential this user holds for one agent.
+
+    Removing a whole connection (story 1.7): only rows keyed
+    ``agent:<agent_id>:env:*`` under ``user_id`` — no other agent's, no other
+    user's, and never a bare legacy row. A database error is a 500, never a
+    silent success.
+
+    Query params:
+        user_id — the user whose vault entries to delete
+    """
+    from ..vault.client import VaultClient
+
+    vault = VaultClient()
+    return {"deleted": await vault.delete_all_agent_env(user_id, agent_id)}

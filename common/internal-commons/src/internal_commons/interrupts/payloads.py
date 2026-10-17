@@ -108,6 +108,28 @@ class HitlApprovalMetadata(BaseModel):
     decided_at: str | None = None
     """ISO-8601 timestamp of the decision (set at resume)."""
 
+    # ── Scope gate (story 1.5, AD-18; additive optional) ────────────────────
+    # Populated by superagent.middleware.scope_gate when a write or a
+    # destructive connector call pauses. The card names the capability, the
+    # target and the connection; the approval is recorded per AD-21.
+    scope_class: Literal["read", "write", "destructive"] | None = None
+    """Effective scope class of the paused call."""
+
+    connection_id: str | None = None
+    """DID of the connection (the registered agent) the call goes to."""
+
+    connection_name: str | None = None
+    """Display name of that connection."""
+
+    target: str | None = None
+    """What the call acts on, summarised from its arguments."""
+
+    call_id: str | None = None
+    """The tool call this approval covers; the receipt's verdict names it."""
+
+    capability_id: str | None = None
+    """Capability id as the manifest lists it (``capability_name`` may differ)."""
+
 
 class HitlClarificationMetadata(BaseModel):
     """Metadata for HITL_CLARIFICATION interrupts."""

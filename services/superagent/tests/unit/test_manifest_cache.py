@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from superagent.middleware.manifest_cache import ManifestCache
+from superagent.middleware.manifest_cache import ManifestCache, ManifestUnavailable
 
 
 @pytest.fixture
@@ -65,3 +66,39 @@ async def test_fetch_failure_returns_empty_manifest(cache):
         result = await cache._fetch("missing-agent")
     assert result.get("agent_id") == "missing-agent"
     assert result.get("capabilities") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_id",
+    ["did:orcha:agent:../../admin", "agent?x=1", "agent#frag", "a b", "", "x" * 257],
+)
+async def test_an_id_that_is_not_one_path_segment_never_becomes_a_request(
+    cache, agent_id, caplog
+):
+    client = MagicMock()
+    client.get = AsyncMock()
+    with patch.object(cache, "_get_client", return_value=client):
+        with caplog.at_level(
+            logging.WARNING, logger="superagent.middleware.manifest_cache"
+        ):
+            result = await cache._fetch(agent_id)
+        with pytest.raises(ManifestUnavailable):
+            await cache._fetch(agent_id, strict=True)
+    client.get.assert_not_awaited()
+    assert result == {"agent_id": agent_id, "capabilities": [], "security": {}}
+    if agent_id:
+        assert agent_id not in caplog.text  # the id is not echoed into the log
+
+
+@pytest.mark.asyncio
+async def test_a_did_is_one_path_segment(cache):
+    client = MagicMock()
+    resp = MagicMock()
+    resp.json.return_value = {"data": {"identity": {}, "metadata": {}, "protocol": {}}}
+    client.get = AsyncMock(return_value=resp)
+    with patch.object(cache, "_get_client", return_value=client):
+        await cache._fetch("did:orcha:agent:docs-mcp-0a1b2c3d")
+    client.get.assert_awaited_once_with(
+        "/api/v1/agents/did:orcha:agent:docs-mcp-0a1b2c3d"
+    )

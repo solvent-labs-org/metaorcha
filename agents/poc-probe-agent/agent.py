@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import urllib.error
@@ -75,6 +76,12 @@ def probe(task: str) -> str:
 _flaky_lock = threading.Lock()
 _flaky_armed = True
 
+# Only an origin-form request target ("/path?query") is forwarded. The URL is
+# the loopback address with the target appended, so a target that does not
+# start with "/" runs on into the port: after port 601, "0/x" is port 6010,
+# another service on this host.
+_ORIGIN_FORM = r"/[!-~]*"
+
 
 class _FlakyProxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -83,9 +90,15 @@ class _FlakyProxy(BaseHTTPRequestHandler):
         pass
 
     def _forward(self, body: bytes | None) -> None:
-        url = f"http://127.0.0.1:{INTERNAL_PORT}{self.path}"
+        target = self.path
+        if re.fullmatch(_ORIGIN_FORM, target):
+            self._send_to_internal(target, body)
+        else:
+            self.send_error(400, "request target must be a path")
+
+    def _send_to_internal(self, target: str, body: bytes | None) -> None:
         req = urllib.request.Request(
-            url,
+            f"http://127.0.0.1:{INTERNAL_PORT}{target}",
             data=body,
             method=self.command,
             headers={"Content-Type": self.headers.get("Content-Type", "application/json")},

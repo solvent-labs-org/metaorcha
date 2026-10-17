@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from superagent.graph.state import SESSION_CREDENTIALS_CONFIG_KEY
 from superagent.middleware.pipeline import ExecutionMiddleware
 
 
@@ -19,9 +20,12 @@ async def test_pipeline_uses_config_session_credentials_when_state_missing():
             return {"manifest": {"transport": {}}, "headers": {}, "resolved_env": None}
 
     state = {"user_id": "u1", "session_id": "s1"}
+    # AD-14 (story 1.6b): the credentials ride on the run config under the
+    # double-underscore key LangGraph keeps out of checkpoint metadata; graph
+    # state never carries them.
     config = {
         "configurable": {
-            "session_credentials": {"did:agent:test": {"API_KEY": "secret"}}
+            SESSION_CREDENTIALS_CONFIG_KEY: {"did:agent:test": {"API_KEY": "secret"}}
         }
     }
 

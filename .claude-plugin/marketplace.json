@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "metaorcha",
+  "description": "Metaorcha plugins: signed, offline-verifiable receipts of agent work (RFC 0003 run attestation).",
+  "owner": {
+    "name": "Metaorcha"
+  },
+  "plugins": [
+    {
+      "name": "orcha-record",
+      "description": "Turn a Claude Code session into a signed, offline-verifiable receipt of what ran. Journaled on your machine, sealed on Stop with a key you hold; nothing hosted.",
+      "source": "./plugins/claude-code/orcha-record",
+      "category": "productivity"
+    }
+  ]
+}

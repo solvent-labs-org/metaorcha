@@ -71,6 +71,7 @@ def test_a2a_http_still_probes():
 async def test_sse_mcp_skips_health_and_still_harvests():
     from unittest.mock import AsyncMock, MagicMock
 
+    from services.registry.src.adapters.base import CapabilityData
     from services.registry.src.services.registration import RegistrationService
 
     cfg = _cfg()
@@ -81,7 +82,12 @@ async def test_sse_mcp_skips_health_and_still_harvests():
     svc._assert_agent_not_exists = AsyncMock()
     svc._verify_health_endpoint = AsyncMock()
     harvest = MagicMock()
-    harvest.capabilities = ["tools/list"]
+    # A real harvest yields CapabilityData, whose id must fit AD-17's charset.
+    harvest.capabilities = [
+        CapabilityData(
+            type="tool", id="search_docs", name="search_docs", description=""
+        )
+    ]
     svc._harvest_capabilities = AsyncMock(return_value=harvest)
     agent = MagicMock()
     agent.id = "did:orcha:agent:docs-mcp"

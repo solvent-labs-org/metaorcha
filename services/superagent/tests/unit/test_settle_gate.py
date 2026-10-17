@@ -512,17 +512,23 @@ def _clean_deferred_map():
     settlement._deferred_settles.clear()
 
 
-@pytest.fixture(autouse=True)
-def _fast_defer_recheck(monkeypatch: pytest.MonkeyPatch):
-    """Shrink the observer's bounded re-check so no-defer tests stay fast."""
+@pytest.fixture()
+def verdict_only_spy(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Record the observer's verdict-only evaluations instead of running them."""
     from superagent.pricing import settle_gate
 
-    monkeypatch.setattr(settle_gate, "DEFER_RECHECKS", 2)
-    monkeypatch.setattr(settle_gate, "DEFER_RECHECK_DELAY_S", 0.01)
+    calls: list[dict] = []
+
+    async def _spy(**kwargs):
+        calls.append(kwargs)
+        return {"outcome": "settled", "failed_checks": [], "envelope_digest": ""}
+
+    monkeypatch.setattr(settle_gate, "gate_verdict_only", _spy)
+    return calls
 
 
 async def test_observer_replays_deferred_settle_post_seal(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, verdict_only_spy: list[dict]
 ) -> None:
     from superagent.config import settings
     from superagent.pricing import settlement
@@ -551,11 +557,15 @@ async def test_observer_replays_deferred_settle_post_seal(
     assert calls[0]["user_id"] == "u1"
     assert settlement._deferred_settles == {}  # popped exactly once
     assert attestation_obs.last_sealed == {}  # binding consumed, not reusable
+    # One evaluation per run (AD-12): the charge is it, never a verdict-only
+    # row as well.
+    assert verdict_only_spy == []
 
 
-async def test_observer_noop_without_deferred_entry(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_observer_noop_when_nothing_charged_and_nothing_sealed(
+    monkeypatch: pytest.MonkeyPatch, verdict_only_spy: list[dict]
 ) -> None:
+    """A run with no steps seals no envelope: there is no run to judge."""
     from superagent.config import settings
     from superagent.pricing import settlement
     from superagent.pricing.settle_gate import SettlementGateObserver
@@ -567,6 +577,50 @@ async def test_observer_noop_without_deferred_entry(
     observer = SettlementGateObserver(_FakeAttestationObserver({}))
     await observer.on_run_complete("sess-1")
     assert calls == []
+    assert verdict_only_spy == []
+
+
+async def test_observer_judges_a_sealed_run_that_charged_nothing(
+    monkeypatch: pytest.MonkeyPatch, verdict_only_spy: list[dict]
+) -> None:
+    """AD-12: the early return is gone — an uncharged sealed run is judged,
+    at once (no re-check wait), and never through the credit path."""
+    import time
+
+    from superagent.config import settings
+    from superagent.pricing import settlement
+    from superagent.pricing.settle_gate import SettlementGateObserver
+
+    monkeypatch.setattr(settings, "settlement_require_attestation", True)
+    calls: list[dict] = []
+    monkeypatch.setattr(settlement, "settle_invocation", lambda **kw: calls.append(kw))
+    attestation_obs = _FakeAttestationObserver(
+        {}, last_sealed={"sess-1": "sess-1-mcp001"}
+    )
+
+    started = time.monotonic()
+    await SettlementGateObserver(attestation_obs).on_run_complete("sess-1")
+
+    assert verdict_only_spy == [{"run_id": "sess-1-mcp001", "session_id": "sess-1"}]
+    assert calls == []
+    assert attestation_obs.last_sealed == {}
+    assert time.monotonic() - started < 0.05
+
+
+async def test_observer_flag_off_judges_nothing(
+    monkeypatch: pytest.MonkeyPatch, verdict_only_spy: list[dict]
+) -> None:
+    from superagent.config import settings
+    from superagent.pricing.settle_gate import SettlementGateObserver
+
+    monkeypatch.setattr(settings, "settlement_require_attestation", False)
+    attestation_obs = _FakeAttestationObserver(
+        {}, last_sealed={"sess-1": "sess-1-mcp001"}
+    )
+    await SettlementGateObserver(attestation_obs).on_run_complete("sess-1")
+    assert verdict_only_spy == []
+    # Flag off leaves the binding where it was, as before.
+    assert attestation_obs.last_sealed == {"sess-1": "sess-1-mcp001"}
 
 
 async def test_observer_drops_deferred_when_no_sealed_envelope(
@@ -635,36 +689,146 @@ async def test_observer_discard_run_drops_deferred(
     assert calls == []
 
 
-async def test_observer_recheck_catches_late_defer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A defer that lands after run-complete dispatch is still settled."""
-    import asyncio
+# ── Verdict-only evaluation (Story 2.7, AD-12) ────────────────────────────────
 
+
+def _rows_for(gate_db: FakeGateDB, run_id: str) -> list[SimpleNamespace]:
+    return [r for r in gate_db.attestedsettlement.rows if r.run_id == run_id]
+
+
+@pytest.mark.parametrize("charter_hash", [None, WRONG_CHARTER, CHARTER])
+async def test_verdict_only_settles_without_a_charter_bind(
+    make_envelope, gate_db, mock_lookup, charter_hash
+) -> None:
+    """One row: settled, claiming the run, call_id NULL. The charter binds the
+    credit (AD-9) and this path moves none, so no charter is required."""
+    from superagent.pricing.settle_gate import gate_verdict_only
+
+    mock_lookup["envelope"] = make_envelope("run-v", charter_hash=charter_hash)
+
+    result = await gate_verdict_only(run_id="run-v", session_id="sess-1", db=gate_db)
+
+    assert result["outcome"] == "settled"
+    (row,) = _rows_for(gate_db, "run-v")
+    assert (row.outcome, row.settled_run_id, row.call_id) == ("settled", "run-v", None)
+    assert row.session_id == "sess-1"
+    assert row.charter_hash == charter_hash
+    # FakeGateDB has no users or transactions table: a credit write would
+    # have raised and turned the outcome into a refusal.
+    assert vars(gate_db).keys() == {"attestedsettlement"}
+
+
+async def test_charged_settle_still_requires_the_charter(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    """The verdict-only relaxation does not reach the settling path."""
+    from superagent.pricing.settle_gate import CHECK_CHARTER, gate_attested_settle
+
+    mock_lookup["envelope"] = make_envelope("run-c", charter_hash=None)
+    result = await gate_attested_settle(
+        run_id="run-c", expected_charter_hash=CHARTER, db=gate_db, call_id="c1"
+    )
+    assert result["failed_checks"] == [CHECK_CHARTER]
+
+
+async def test_verdict_only_refuses_a_fail_verdict_and_sdk_still_valid(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from emerge.run_attestation import verify_run_attestation
+    from superagent.pricing.settle_gate import CHECK_VERDICT_FAIL, gate_verdict_only
+
+    envelope = make_envelope(
+        "run-f",
+        charter_hash=None,
+        verdicts=[
+            {"check": "criteria.sync", "result": "fail", "detail": "left=11 right=10"}
+        ],
+    )
+    mock_lookup["envelope"] = envelope
+
+    result = await gate_verdict_only(run_id="run-f", db=gate_db)
+
+    assert verify_run_attestation(envelope).valid is True
+    assert result["failed_checks"] == [CHECK_VERDICT_FAIL]
+    (row,) = _rows_for(gate_db, "run-f")
+    assert (row.outcome, row.settled_run_id, row.call_id) == ("refused", None, None)
+    assert _failed_checks(row) == [CHECK_VERDICT_FAIL]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "check"),
+    [
+        ({"tamper": True}, "steps_root"),
+        ({"signer_did": "did:orcha:system:rogue"}, "signer_did"),
+    ],
+)
+async def test_verdict_only_keeps_every_other_check(
+    make_envelope, gate_db, mock_lookup, kwargs, check
+) -> None:
+    from superagent.pricing.settle_gate import gate_verdict_only
+
+    mock_lookup["envelope"] = make_envelope("run-x", **kwargs)
+    result = await gate_verdict_only(run_id="run-x", db=gate_db)
+    assert result["failed_checks"] == [check]
+    _assert_refusal_audited(gate_db, "run-x", [check])
+
+
+async def test_verdict_only_missing_envelope_is_refused_not_skipped(
+    gate_db, mock_lookup
+) -> None:
+    """AD-6: a sealed run whose envelope cannot be read is refused on record."""
+    from superagent.pricing.settle_gate import CHECK_MISSING, gate_verdict_only
+
+    mock_lookup["envelope"] = None
+    result = await gate_verdict_only(run_id="run-gone", db=gate_db)
+    assert result["failed_checks"] == [CHECK_MISSING]
+    _assert_refusal_audited(gate_db, "run-gone", [CHECK_MISSING])
+
+
+async def test_verdict_only_replay_claims_the_run_once(
+    make_envelope, gate_db, mock_lookup
+) -> None:
+    from superagent.pricing.settle_gate import CHECK_ALREADY_SETTLED, gate_verdict_only
+
+    mock_lookup["envelope"] = make_envelope("run-r")
+    first = await gate_verdict_only(run_id="run-r", db=gate_db)
+    again = await gate_verdict_only(run_id="run-r", db=gate_db)
+
+    assert first["outcome"] == "settled"
+    assert again["failed_checks"] == [CHECK_ALREADY_SETTLED]
+    rows = _rows_for(gate_db, "run-r")
+    assert [r.outcome for r in rows] == ["settled", "refused"]
+    assert [r.settled_run_id for r in rows] == ["run-r", None]
+
+
+async def test_observer_verdict_only_writes_one_row_end_to_end(
+    make_envelope, gate_db, mock_lookup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observer → real gate → one row, on a client the test owns."""
     from superagent.config import settings
-    from superagent.pricing import settlement
+    from superagent.pricing import settle_gate
     from superagent.pricing.settle_gate import SettlementGateObserver
 
     monkeypatch.setattr(settings, "settlement_require_attestation", True)
-    attestation_obs = _FakeAttestationObserver(
-        {}, last_sealed={"sess-1": "sess-1-late01"}
+    real = settle_gate.gate_verdict_only
+
+    async def _on_test_db(**kwargs):
+        return await real(db=gate_db, **kwargs)
+
+    monkeypatch.setattr(settle_gate, "gate_verdict_only", _on_test_db)
+    mock_lookup["envelope"] = make_envelope("sess-9-abc", charter_hash=None)
+
+    await SettlementGateObserver(
+        _FakeAttestationObserver({}, last_sealed={"sess-9": "sess-9-abc"})
+    ).on_run_complete("sess-9")
+
+    (row,) = gate_db.attestedsettlement.rows
+    assert (row.outcome, row.run_id, row.call_id, row.session_id) == (
+        "settled",
+        "sess-9-abc",
+        None,
+        "sess-9",
     )
-    calls: list[dict] = []
-
-    async def _spy_settle(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr(settlement, "settle_invocation", _spy_settle)
-
-    async def _late_defer():
-        await asyncio.sleep(0.005)
-        settlement._store_deferred("sess-1", {"user_id": "u1", "session_id": "sess-1"})
-
-    observer = SettlementGateObserver(attestation_obs)
-    await asyncio.gather(observer.on_run_complete("sess-1"), _late_defer())
-
-    assert len(calls) == 1
-    assert calls[0]["run_id"] == "sess-1-late01"
 
 
 # ── Gate policy + hardening (2.1 review findings) ─────────────────────────────
