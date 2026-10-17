@@ -174,7 +174,7 @@ def test_named_here_finds_the_files_and_folders_a_prompt_names(tmp_path):
     assert receipts.named_here(prompt, tmp_path) == ["calc.py", "sub/x.txt", ".gitignore", "sub/"]
     assert receipts.named_here("what is two plus two?", tmp_path) == []
     assert receipts.named_here("look at sub. then stop.", tmp_path) == []  # full stops only
-    assert receipts.named_here("look in sub/.. and sub/../..", tmp_path) == []  # the folder, then out
+    assert receipts.named_here("look in sub/.. and sub/../..", tmp_path) == []  # itself, then out
 
 
 @pytest.mark.parametrize(
