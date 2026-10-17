@@ -197,7 +197,7 @@ CAVEAT = "The answer may say otherwise; the receipt's steps are what happened."
 
 
 def declined_and_failed(steps: Sequence[Any], verdicts: Sequence[Any]) -> tuple[int, int]:
-    """How many calls the record says were declined, and how many others failed.
+    """How many calls the record says were declined, and how many others did not succeed.
 
     A declined call's step failed too, so it is counted once, as declined.
     Read from a journal, so an item that is not an object counts for nothing.
@@ -228,8 +228,8 @@ def answer_caveat(declined: int, failed: int) -> str | None:
     said = []
     if declined:
         said.append("1 call was declined" if declined == 1 else f"{declined} calls were declined")
-    if failed:
-        said.append("1 call failed" if failed == 1 else f"{failed} calls failed")
+    if failed:  # not "failed": a test run that exits 1, or a call never answered, counts here
+        said.append("1 call did not succeed" if failed == 1 else f"{failed} calls did not succeed")
     return f"{' and '.join(said)}. {CAVEAT}" if said else None
 
 
