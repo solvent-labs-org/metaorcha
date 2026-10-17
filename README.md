@@ -29,15 +29,12 @@ server on your machine, and keeps a signed record of what happened.
 
 ## Install
 
-From a checkout of this repository:
-
 ```sh
-uv tool install ./apps/metabot
+uv tool install orcha-metabot
 ```
 
-It is not on a package index yet. It needs Python 3.11 or newer and a POSIX
-system, and it is tested on Linux. Sign in to each agent you want it to drive,
-the same way you do without it.
+It needs Python 3.11 or newer and a POSIX system, and it is tested on Linux.
+Sign in to each agent you want it to drive, the same way you do without it.
 
 ## Start
 
