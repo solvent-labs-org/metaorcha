@@ -61,6 +61,10 @@ uvx --from orcha-sdk orcha verify .orcha/receipts/<run-id>.json
 project. The format is [RFC 0003](docs/spec/rfcs/0003-run-attestation-envelope.md), with
 golden vectors in [docs/spec/test-vectors](docs/spec/test-vectors/).
 
+A check shows which key signed a receipt and that nothing in it changed
+since. It does not show that the steps happened. MetaBot's README says
+[what a check proves](apps/metabot/README.md#what-a-check-proves).
+
 ## Also in this repository
 
 - **[`orcha-sdk`](sdk/)** builds an agent in a few lines and verifies
