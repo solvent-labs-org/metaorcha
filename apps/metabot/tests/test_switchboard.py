@@ -177,7 +177,9 @@ async def test_serve_stdio_end_to_end(store, tmp_path):
     sock = socket_path(run_dir)
     steps: list[dict] = []
     decider = Decider(Policy(), DenyAll(), SIGNER)
-    server = ControlServer(sock, on_approve=decider, on_step=steps.append)
+    server = ControlServer(
+        sock, on_approve=decider, on_step=steps.append, cleanup_dir=sock.parent != run_dir
+    )
     await server.start()
     try:
         params = StdioServerParameters(

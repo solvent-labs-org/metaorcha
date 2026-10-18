@@ -234,7 +234,9 @@ async def test_serve_opens_only_the_connections_it_is_given(tmp_path):
     run.mkdir(mode=0o700)
     sock = socket_path(run)
     decider = Decider(Policy(), DenyAll(), "did:orcha:agent:key-0000000000000000")
-    server = ControlServer(sock, on_approve=decider, on_step=lambda step: None)
+    server = ControlServer(
+        sock, on_approve=decider, on_step=lambda step: None, cleanup_dir=sock.parent != run
+    )
     await server.start()
     try:
         params = StdioServerParameters(

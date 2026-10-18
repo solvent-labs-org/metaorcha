@@ -188,7 +188,9 @@ async def test_serve_reads_the_skills_file_and_opens_no_connection_when_told(tmp
     sock = socket_path(run)
     steps: list[dict] = []
     decider = Decider(Policy(), DenyAll(), "did:orcha:agent:key-0000000000000000")
-    server = ControlServer(sock, on_approve=decider, on_step=steps.append)
+    server = ControlServer(
+        sock, on_approve=decider, on_step=steps.append, cleanup_dir=sock.parent != run
+    )
     await server.start()
     try:
         params = StdioServerParameters(

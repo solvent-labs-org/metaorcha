@@ -190,33 +190,36 @@ async def _events(
     switchboard in this process.
     """
     if isinstance(engine, CliEngine):
-        await server.start()
         try:
+            await server.start()
             async with contextlib.aclosing(run_cli(engine, job)) as stream:
                 yield stream
         finally:
-            await server.close()
+            await server.close()  # also when it never started: it gives back its folder
         return
 
     async def record(step: dict[str, Any]) -> None:
         run.on_step(step)
 
-    async with contextlib.AsyncExitStack() as stack:
-        board = None
-        if switchboard:
-            assert job.work_dir is not None  # run_job gives every run its directory
-            board = await stack.enter_async_context(
-                _switchboard(
-                    job.work_dir / "switchboard.log",
-                    approve=approve,
-                    record=record,
-                    skills=skills,
-                    connections=connections,
-                    only=only,
-                )  # fmt: skip
-            )
-        stream = engine.run(job, board=board, approve=approve)
-        yield await stack.enter_async_context(contextlib.aclosing(stream))
+    try:
+        async with contextlib.AsyncExitStack() as stack:
+            board = None
+            if switchboard:
+                assert job.work_dir is not None  # run_job gives every run its directory
+                board = await stack.enter_async_context(
+                    _switchboard(
+                        job.work_dir / "switchboard.log",
+                        approve=approve,
+                        record=record,
+                        skills=skills,
+                        connections=connections,
+                        only=only,
+                    )  # fmt: skip
+                )
+            stream = engine.run(job, board=board, approve=approve)
+            yield await stack.enter_async_context(contextlib.aclosing(stream))
+    finally:
+        await server.close()  # never served here, but its socket's folder is given back
 
 
 NEW_ID_TRIES = 5
@@ -307,6 +310,13 @@ async def run_job(
             return {"allow": False, "reason": run.limit}
         return await decider(msg)
 
+    # Every token the person keeps, also when no connection is in this run: an
+    # engine can still read one from disk, and it must not reach the record.
+    secrets = {**ConnectionStore().redaction_map(), **(secrets or {})}
+    if board and skills:
+        write_skills(rdir, skills)
+    # The socket may take a temp folder, which closing the server gives back,
+    # so the work above that can fail is done before it is taken.
     sock = socket_path(rdir)
     server = ControlServer(
         sock, on_approve=approve, on_step=run.on_step, cleanup_dir=sock.parent != rdir
@@ -325,12 +335,7 @@ async def run_job(
             "hook", "pre-tool-use", "--control", str(sock), "--prefix", cli.tool_prefix,
             *(["--switchboard"] if board else []),
         )  # fmt: skip
-    # Every token the person keeps, also when no connection is in this run: an
-    # engine can still read one from disk, and it must not reach the record.
-    secrets = {**ConnectionStore().redaction_map(), **(secrets or {})}
     if board:
-        if skills:
-            write_skills(rdir, skills)
         only = [a for did in connection_ids or [] for a in ("--only", did)]
         job.switchboard = _metabot_command(
             "mcp", "serve", "--home", str(metabot_home()), "--run-dir", str(rdir),

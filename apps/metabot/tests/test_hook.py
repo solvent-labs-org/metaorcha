@@ -38,7 +38,9 @@ async def runner_socket(tmp_path):
         return {"allow": False, "reason": "destructive declined"}
 
     sock = socket_path(tmp_path)
-    srv = ControlServer(sock, on_approve=on_approve, on_step=lambda s: None)
+    srv = ControlServer(
+        sock, on_approve=on_approve, on_step=lambda s: None, cleanup_dir=sock.parent != tmp_path
+    )
     await srv.start()
     yield str(sock), asks
     await srv.close()
