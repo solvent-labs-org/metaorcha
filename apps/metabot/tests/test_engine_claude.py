@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shlex
+import threading
+from pathlib import Path
+
+import pytest
 
 from conftest import FIXTURES
 from fake_engines import wrap
@@ -29,6 +34,8 @@ def test_argv_minimal(tmp_path):
         "--output-format",
         "stream-json",
         "--verbose",
+        "--setting-sources",
+        "",
         "--permission-prompts",
         "none",
         "--strict-mcp-config",
@@ -94,6 +101,209 @@ def test_argv_never_skips_permissions(tmp_path):
     job = EngineJob(prompt="hi", cwd=tmp_path, read_only=False, gate_hook=["x"])
     argv = ClaudeEngine().argv(job)
     assert not any("dangerously" in a or a == "bypassPermissions" for a in argv)
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        {},
+        {"read_only": True},
+        {"resume": "sess-1"},
+        {"model": "m", "gate_hook": ["gate"], "switchboard": ["sb"], "plugin_dirs": [Path("/p")]},
+    ],
+)
+def test_no_settings_file_loads(tmp_path, job):
+    # A repo's committed .claude settings can run hooks and a key helper, and
+    # their env can send the model calls, with the login, somewhere else.
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path, **job))
+    assert argv.count("--setting-sources") == 1
+    i = argv.index("--setting-sources")
+    assert argv[i + 1] == ""
+    assert i < argv.index("--")
+
+
+def _write_settings(folder: Path, data: object) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "settings.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _settings(argv: list[str]) -> dict:
+    return json.loads(argv[argv.index("--settings") + 1])
+
+
+TELEMETRY = (
+    "DISABLE_TELEMETRY",
+    "DISABLE_ERROR_REPORTING",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+)
+PERSON = {
+    "model": "claude-sonnet-5-5",
+    "effortLevel": "low",  # read differently from a flag, so it is left out
+    "modelSettings": {
+        "claude-sonnet-5-5": {"effortLevel": "xhigh", "aSettingOfTheirs": "x"},
+        "claude-opus-5-5": {"effortLevel": "high"},
+        "claude-haiku-5-5": {"aSettingOfTheirs": "x"},
+    },
+    "env": {
+        **{name: "1" for name in TELEMETRY},
+        "ANTHROPIC_API_KEY": "a-key-that-stays-in-the-file",
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:9/elsewhere",
+        "A_VARIABLE_OF_THEIRS": "a-variable-of-theirs",
+    },
+    "apiKeyHelper": "echo a-helper-that-never-runs",
+    "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "a-hook-of-theirs"}]}]},
+    "permissions": {
+        "allow": ["Write(an-allow-rule-of-theirs)"],
+        "ask": ["Bash(an-ask-rule-of-theirs)"],
+        "deny": ["Write(//etc/**)", 7, "Read(~/.ssh/**)"],
+        "defaultMode": "bypassPermissions",
+    },
+    "aSettingOfTheirs": "a-setting-of-theirs",
+}
+
+
+def test_the_person_keeps_their_named_choices_and_nothing_else(tmp_path, claude_config):
+    _write_settings(claude_config, PERSON)
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert _settings(argv) == {
+        "model": "claude-sonnet-5-5",
+        "modelSettings": {
+            "claude-sonnet-5-5": {"effortLevel": "xhigh"},
+            "claude-opus-5-5": {"effortLevel": "high"},
+        },
+        "env": {name: "1" for name in TELEMETRY},
+        "permissions": {"deny": ["Write(//etc/**)", "Read(~/.ssh/**)"]},
+    }
+    text = json.dumps(argv)
+    for kept_out in (
+        "a-key-that-stays",
+        "/elsewhere",
+        "a-variable-of-theirs",
+        "a-helper",
+        "a-hook-of",
+        "an-allow-rule",
+        "an-ask-rule",
+        "bypassPermissions",
+        "aSettingOfTheirs",
+        "a-setting-of-theirs",
+    ):
+        assert kept_out not in text
+
+
+def test_a_model_on_the_run_wins_over_the_persons(tmp_path, claude_config):
+    _write_settings(claude_config, PERSON)
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path, model="claude-haiku-5-5"))
+    assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
+    settings = _settings(argv)
+    assert "model" not in settings
+    assert settings["modelSettings"]["claude-opus-5-5"] == {"effortLevel": "high"}
+
+
+def test_the_gate_hook_and_the_persons_choices_share_one_settings(tmp_path, claude_config):
+    _write_settings(claude_config, {"permissions": {"deny": ["Bash(rm:*)"]}})
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path, gate_hook=["gate"]))
+    assert argv.count("--settings") == 1
+    settings = _settings(argv)
+    assert settings["permissions"] == {"deny": ["Bash(rm:*)"]}
+    assert settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "gate"
+
+
+def test_without_a_config_folder_the_settings_come_from_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    monkeypatch.setenv("HOME", str(tmp_path / "person"))
+    _write_settings(tmp_path / "person" / ".claude", {"model": "from-home"})
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert _settings(argv) == {"model": "from-home"}
+
+
+def test_with_cowork_plugins_the_cowork_settings_file_is_read(tmp_path, claude_config, monkeypatch):
+    _write_settings(claude_config, {"model": "from-settings"})
+    (claude_config / "cowork_settings.json").write_text(
+        '{"model": "from-cowork"}', encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_CODE_USE_COWORK_PLUGINS", "1")
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert _settings(argv) == {"model": "from-cowork"}
+
+
+def test_the_repositorys_own_settings_are_never_carried(tmp_path):
+    for name in ("settings.json", "settings.local.json"):
+        _write_settings(tmp_path / ".claude", {"model": "from-the-repo"})
+        (tmp_path / ".claude" / name).write_text(
+            json.dumps({"model": "from-the-repo", "permissions": {"deny": ["Write"]}}),
+            encoding="utf-8",
+        )
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert "--settings" not in argv
+    assert "from-the-repo" not in json.dumps(argv)
+
+
+@pytest.mark.parametrize("raw", ["cfg", "", "~/cfg", "~nosuchuser42/cfg", "./cfg"])
+def test_a_config_folder_that_is_not_absolute_carries_nothing(tmp_path, monkeypatch, raw):
+    # The engine would look for it inside the run's folder, which the
+    # repository controls; it expands no "~".
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", raw)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    _write_settings(tmp_path / "cfg", {"model": "from-the-repo"})
+    _write_settings(tmp_path, {"model": "from-the-repo"})
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert "--settings" not in argv
+    assert argv[argv.index("--setting-sources") + 1] == ""
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("a folder", id="folder"),
+        pytest.param(b"{not json", id="bad-json"),
+        pytest.param(b"\xff\xfe not text", id="not-utf8"),
+        pytest.param(b"[1, 2]", id="a-list"),
+        pytest.param(
+            b'{"model": 7, "modelSettings": {"m": {"effortLevel": 1}, "n": "high"},'
+            b' "env": {"DISABLE_TELEMETRY": 1}, "permissions": {"deny": [1, null]}}',
+            id="not-strings",
+        ),
+        pytest.param(
+            b'{"modelSettings": ["m"], "env": ["DISABLE_TELEMETRY"],'
+            b' "permissions": {"deny": "Write"}}',
+            id="wrong-shapes",
+        ),
+        pytest.param(b'{"permissions": ["deny"]}', id="permissions-a-list"),
+        pytest.param(
+            b'{"model": "past the cap", "pad": "' + b"x" * (1 << 20) + b'"}', id="past-the-cap"
+        ),
+    ],
+)
+def test_settings_that_cannot_be_read_carry_nothing(tmp_path, claude_config, content):
+    claude_config.mkdir()
+    if content == "a folder":
+        (claude_config / "settings.json").mkdir()
+    elif isinstance(content, bytes):
+        (claude_config / "settings.json").write_bytes(content)
+    argv = ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))
+    assert "--settings" not in argv
+    assert argv[argv.index("--setting-sources") + 1] == ""
+
+
+def test_a_settings_path_that_is_not_a_file_is_never_opened(tmp_path, claude_config):
+    # opening a FIFO waits for a writer; a run must not wait on one
+    claude_config.mkdir()
+    fifo = claude_config / "settings.json"
+    os.mkfifo(fifo)
+    done: list[list[str]] = []
+    worker = threading.Thread(
+        target=lambda: done.append(ClaudeEngine().argv(EngineJob(prompt="hi", cwd=tmp_path))),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(5)
+    if worker.is_alive():  # let the stuck open go, then fail
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(5)
+        pytest.fail("argv() opened the FIFO and waited")
+    assert "--settings" not in done[0]
 
 
 def test_parse_echo_fixture():

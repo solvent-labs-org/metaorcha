@@ -10,13 +10,28 @@ headless run never waits on a prompt nobody can see.
 switchboard, or none. Servers from the person's config, a plugin or the
 project's ``.mcp.json`` never load, so none is gated by its tool names alone.
 
-Tested against ``claude`` 2.1.296.
+``--setting-sources ""`` is always passed: neither the person's nor the
+repository's settings files load. A repository's committed
+``.claude/settings.json`` or ``settings.local.json`` would otherwise run its
+hooks and key helper with no gate decision, and its ``env`` could send the
+model calls, with the person's login, to another address. Managed settings
+that an administrator installs still load. MetaBot passes what a run needs
+itself: the gate hook, the plugins and the MCP config. From the person's own
+settings file it carries a few keys by name: ``model``, the effort for each
+model in ``modelSettings``, the telemetry and error-reporting opt-outs in
+``env``, and ``permissions.deny``, which can stop a call but never allow one.
+Nothing else in that file is kept or passed on, so a key or a helper in it
+is never copied.
+
+Tested against ``claude`` 2.1.302.
 """
 
 from __future__ import annotations
 
 import json
 import shlex
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from metabot.engines.base import CliEngine, EngineJob
@@ -24,6 +39,83 @@ from metabot.events import ErrorEvent, Event, Final, Started, TextEvent, ToolCal
 
 HOOK_TIMEOUT_S = 900  # an approval can wait this long for a human
 SILENT = frozenset({"rate_limit_event", "stream_event", "keep_alive"})
+SETTINGS_LIMIT = 1 << 20  # a settings file bigger than this is not read
+CARRIED_ENV = (
+    "DISABLE_TELEMETRY",
+    "DISABLE_ERROR_REPORTING",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+)
+
+
+def user_settings_path(env: Mapping[str, str]) -> Path | None:
+    """The person's own settings file, where the engine looks for it.
+
+    ``CLAUDE_CONFIG_DIR`` moves it, taken as given: the engine expands no
+    ``~``. A relative one would point into the run's folder, a folder the
+    repository controls, so it gives no file. With
+    ``CLAUDE_CODE_USE_COWORK_PLUGINS`` set, the engine's file is
+    ``cowork_settings.json``.
+    """
+    name = "cowork_settings.json" if env.get("CLAUDE_CODE_USE_COWORK_PLUGINS") else "settings.json"
+    raw = env.get("CLAUDE_CONFIG_DIR")
+    if raw is None:
+        return Path.home() / ".claude" / name
+    folder = Path(raw)
+    return folder / name if folder.is_absolute() else None
+
+
+def _read_settings(path: Path) -> dict[str, Any]:
+    try:
+        if not path.is_file():  # a FIFO or a device could keep a read waiting
+            return {}
+        with path.open("rb") as fh:
+            raw = fh.read(SETTINGS_LIMIT + 1)
+        if len(raw) > SETTINGS_LIMIT:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def carried_settings(env: Mapping[str, str], *, model_set: bool) -> dict[str, Any]:
+    """The person's own choices a run keeps, each read by name.
+
+    ``model``, unless the run sets one; ``effortLevel`` for each model in
+    ``modelSettings``, where the engine keeps the effort chosen with
+    ``/effort``; the telemetry and error-reporting opt-outs in ``env``; and
+    ``permissions.deny``. A top-level ``effortLevel`` is left out: the engine
+    reads it from a person's file and from a flag in different ways. A file
+    that is missing, too big, not text or not a JSON object carries nothing.
+    """
+    path = user_settings_path(env)
+    data = _read_settings(path) if path else {}
+    kept: dict[str, Any] = {}
+    if isinstance(data.get("model"), str) and not model_set:
+        kept["model"] = data["model"]
+    models = data.get("modelSettings")
+    if isinstance(models, dict):
+        efforts = {
+            name: {"effortLevel": entry["effortLevel"]}
+            for name, entry in models.items()
+            if isinstance(name, str)
+            and isinstance(entry, dict)
+            and isinstance(entry.get("effortLevel"), str)
+        }
+        if efforts:
+            kept["modelSettings"] = efforts
+    env_block = data.get("env")
+    if isinstance(env_block, dict):
+        kept_env = {k: env_block[k] for k in CARRIED_ENV if isinstance(env_block.get(k), str)}
+        if kept_env:
+            kept["env"] = kept_env
+    permissions = data.get("permissions")
+    deny = permissions.get("deny") if isinstance(permissions, dict) else None
+    if isinstance(deny, list):
+        rules = [rule for rule in deny if isinstance(rule, str)]
+        if rules:
+            kept["permissions"] = {"deny": rules}
+    return kept
 
 
 def hook_settings(gate_hook: list[str]) -> dict[str, Any]:
@@ -81,9 +173,15 @@ class ClaudeEngine(CliEngine):
 
     def argv(self, job: EngineJob) -> list[str]:
         argv = [self.binary, "-p", "--output-format", "stream-json", "--verbose"]
+        # No settings file loads, the repository's or the person's: one that is
+        # committed could run hooks outside the gate or send the calls elsewhere.
+        argv += ["--setting-sources", ""]
         argv += ["--permission-prompts", "none"]
+        settings = carried_settings(self.env(), model_set=bool(job.model))
         if job.gate_hook:
-            argv += ["--settings", json.dumps(hook_settings(job.gate_hook))]
+            settings.update(hook_settings(job.gate_hook))
+        if settings:
+            argv += ["--settings", json.dumps(settings)]
         if job.model:
             argv += ["--model", job.model]
         if job.switchboard:

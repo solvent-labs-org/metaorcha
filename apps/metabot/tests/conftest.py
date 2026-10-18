@@ -31,6 +31,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def claude_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The claude engine's config folder: empty, so no test reads this machine's settings."""
+    cfg = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    return cfg
+
+
+@pytest.fixture(autouse=True)
 def _nothing_installed_here(monkeypatch: pytest.MonkeyPatch) -> None:
     """The roster sees no engine CLI and no local model server unless a test says so."""
     nothing = {"claude": None, "codex": None, "cursor": None}
