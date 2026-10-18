@@ -27,7 +27,7 @@ from metabot.connections import Connection, ConnectionStore
 from metabot.console import Trace
 from metabot.engines import BINARIES, ENGINES, available, get_engine
 from metabot.gate import Policy
-from metabot.paths import metabot_home, receipts_dir, run_path, safe_id
+from metabot.paths import metabot_home, receipt_path, run_path
 from metabot.receipts import (
     answer_caveat,
     ensure_key,
@@ -483,7 +483,7 @@ def _receipt_path(ref: str) -> Path | None:
     if path.is_file():
         return path
     try:
-        path = receipts_dir() / f"{safe_id(ref)}.json"
+        path = receipt_path(ref)
     except ValueError:
         return None
     return path if path.is_file() else None
@@ -550,7 +550,7 @@ def cmd_receipts_verify(args: argparse.Namespace) -> int:
         return EXIT_FAILED
     run_id = verdict.run_id or ""
     try:
-        kept_here = (receipts_dir() / f"{safe_id(run_id)}.json").resolve() == path.resolve()
+        kept_here = receipt_path(run_id).resolve() == path.resolve()
     except ValueError:
         kept_here = False
     same = journal_matches(run_id) if kept_here else None
