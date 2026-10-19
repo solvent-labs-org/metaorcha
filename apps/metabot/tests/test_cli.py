@@ -437,6 +437,18 @@ def test_receipts_verify_exit_codes(echo, tmp_path, capsys):
     assert main(["receipts", "verify", "../../no-such/receipt"]) == 2
 
 
+def test_receipts_verify_creates_nothing_in_the_metabot_home(echo, tmp_path, capsys, monkeypatch):
+    run_id = _one_run(tmp_path, capsys)
+    shared = tmp_path / "shared.json"
+    shared.write_bytes((receipts_dir() / f"{run_id}.json").read_bytes())
+    fresh = tmp_path / "fresh-home"
+    monkeypatch.setenv("METABOT_HOME", str(fresh))
+    assert main(["receipts", "verify", str(shared)]) == 0
+    assert main(["receipts", "verify", run_id]) == 2  # not kept in this home
+    capsys.readouterr()
+    assert not fresh.exists()  # a check reads: it makes no home and no receipts folder
+
+
 def test_receipts_list_and_show(echo, tmp_path, capsys):
     assert main(["receipts", "list"]) == 0
     assert "no runs yet" in capsys.readouterr().out

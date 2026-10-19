@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,18 @@ def test_long_run_dir_gets_a_short_private_socket(tmp_path):
     assert len(os.fsencode(str(path))) <= control.SUN_PATH_LIMIT
     assert private_mode(path.parent) == 0o700
     path.parent.rmdir()
+
+
+def test_a_long_temp_folder_still_gives_a_socket_that_fits(tmp_path, monkeypatch):
+    long_tmp = tmp_path / ("t" * 100)
+    long_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(long_tmp))
+    path = socket_path(tmp_path / ("d" * 120))
+    try:
+        assert len(os.fsencode(str(path))) <= control.SUN_PATH_LIMIT
+        assert private_mode(path.parent) == 0o700
+    finally:
+        path.parent.rmdir()
 
 
 async def test_close_does_not_wait_on_a_pending_answer(tmp_path):

@@ -76,6 +76,11 @@ def run_path(run_id: str) -> Path:
     return _home_path() / "runs" / safe_id(run_id)
 
 
+def receipt_path(run_id: str) -> Path:
+    """A run's kept receipt for a lookup: nothing is created, so a check leaves no trace."""
+    return _home_path() / "receipts" / f"{safe_id(run_id)}.json"
+
+
 def receipts_dir() -> Path:
     return private_dir(metabot_home() / "receipts")
 

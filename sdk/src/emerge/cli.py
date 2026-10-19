@@ -305,8 +305,19 @@ def cmd_verify(args: argparse.Namespace) -> int:
         )
     else:
         _print_verdict(verdict)
-        _print_coverage(coverage_statement(envelope))
+        _print_coverage(coverage_statement(envelope), verdict.valid)
     return 0 if verdict.valid else 1
+
+
+def _as_text(value: str | None, valid: bool) -> str:
+    """A field read from the envelope, for the terminal.
+
+    A valid envelope holds printable ASCII alone; one that failed may hold
+    anything, so its control characters are shown as escapes, never sent.
+    """
+    if value is None:
+        return "n/a"
+    return value if valid else value.encode("unicode_escape").decode("ascii")
 
 
 def _print_verdict(verdict: AttestationVerdict) -> None:
@@ -314,8 +325,8 @@ def _print_verdict(verdict: AttestationVerdict) -> None:
         return "ok" if passed else "FAILED"
 
     print("Run attestation verification (orcha.run-attestation/v1, offline)")
-    print(f"  run_id:    {verdict.run_id or 'n/a'}")
-    print(f"  signer:    {verdict.signer_did or 'n/a'}")
+    print(f"  run_id:    {_as_text(verdict.run_id, verdict.valid)}")
+    print(f"  signer:    {_as_text(verdict.signer_did, verdict.valid)}")
     print(
         f"  steps:     {verdict.step_count if verdict.step_count is not None else 'n/a'}"
     )
@@ -326,12 +337,18 @@ def _print_verdict(verdict: AttestationVerdict) -> None:
     print(f"Verdict: {verdict.verdict.upper()}")
 
 
-def _print_coverage(coverage: dict[str, Any]) -> None:
-    """Say what the record covers, so a partial record is not read as whole."""
+def _print_coverage(coverage: dict[str, Any], valid: bool) -> None:
+    """Say what the record covers, so a partial record is not read as whole.
+
+    The tools are listed from a record that verifies: one that failed may name
+    tools that never ran.
+    """
     print("Coverage:")
     for line in textwrap.wrap(coverage["statement"], width=72):
         print(f"  {line}")
-    if coverage["tools"]:
+    if not valid:
+        print("  tools in steps: not shown, the receipt did not verify")
+    elif coverage["tools"]:
         print(f"  tools in steps: {', '.join(coverage['tools'])}")
 
 

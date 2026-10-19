@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import tempfile
+from pathlib import Path
 
 import pytest
 
 from conftest import FIXTURES
 from fake_engines import wrap
 from metabot.approvals import DenyAll, Scripted
+from metabot.control import ControlServer
 from metabot.engines.claude import ClaudeEngine
 from metabot.engines.codex import CodexEngine
-from metabot.events import Started
+from metabot.events import Final, Started
 from metabot.gate import Policy
 from metabot.paths import run_dir
 from metabot.receipts import journal_matches, verify_file
@@ -92,6 +96,49 @@ async def test_engine_crash_still_seals(tmp_path, monkeypatch):
     assert verify_file(result.receipt).valid is True
     [step] = _envelope(result)["steps"]
     assert step["success"] is False  # the call never got its result
+
+
+class _Answers:
+    """An in-process engine: it runs no subprocess, so no socket is ever served."""
+
+    name = "answers"
+    tool_prefix = "fake"
+    skip_tools = ()
+
+    async def run(self, job, *, board=None, approve):
+        yield Started("s-1", job.model)
+        yield Final("done", "s-1")
+
+
+@pytest.fixture
+def short_tmp(tmp_path, monkeypatch):
+    """A private temp folder, short enough for a socket, as the system's temp folder."""
+    path = Path(tempfile.mkdtemp(prefix="t-", dir="/tmp"))
+    monkeypatch.setattr(tempfile, "tempdir", str(path))
+    # a home this long puts the run's socket in a temp folder
+    monkeypatch.setenv("METABOT_HOME", str(tmp_path / ("h" * 60)))
+    yield path
+    shutil.rmtree(path)
+
+
+async def test_an_in_process_run_leaves_no_socket_folder(tmp_path, short_tmp):
+    result = await run_job(
+        engine=_Answers(), prompt="hi", cwd=tmp_path, policy=Policy(), approver=DenyAll()
+    )
+    assert result.ok
+    assert list(short_tmp.iterdir()) == []
+
+
+async def test_a_socket_that_cannot_be_served_leaves_no_folder(tmp_path, monkeypatch, short_tmp):
+    monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-echo.jsonl"))
+
+    async def refuse(self):
+        raise OSError("AF_UNIX path too long")
+
+    monkeypatch.setattr(ControlServer, "start", refuse)
+    with pytest.raises(OSError, match="too long"):
+        await _run(tmp_path)
+    assert list(short_tmp.iterdir()) == []
 
 
 async def test_external_step_lands_in_receipt(tmp_path, monkeypatch):

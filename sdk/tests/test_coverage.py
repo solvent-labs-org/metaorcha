@@ -97,7 +97,36 @@ def test_verify_prints_the_coverage_block(golden, tmp_path, capsys, which) -> No
     out = capsys.readouterr().out
     assert "\nCoverage:\n" in out
     assert COVERAGE_STATEMENT in _flat(out)
-    assert "tools in steps: search_docs, summarize" in out
+
+
+def test_verify_lists_the_tools_of_a_receipt_that_verifies(
+    golden, tmp_path, capsys
+) -> None:
+    main(["verify", _write(tmp_path, golden["valid"])])
+    assert "tools in steps: search_docs, summarize" in capsys.readouterr().out
+
+
+def test_verify_lists_no_tools_from_a_receipt_that_does_not_verify(
+    golden, tmp_path, capsys
+) -> None:
+    tampered = json.loads(json.dumps(golden["tampered"]))
+    tampered["steps"][0]["tool"] = "a_tool_that_never_ran"
+    main(["verify", _write(tmp_path, tampered)])
+    out = capsys.readouterr().out
+    assert "a_tool_that_never_ran" not in out and "search_docs" not in out
+    assert "tools in steps: not shown, the receipt did not verify" in out
+
+
+def test_verify_shows_control_characters_from_a_bad_receipt_as_text(
+    golden, tmp_path, capsys
+) -> None:
+    bad = json.loads(json.dumps(golden["valid"]))
+    bad["run_id"] = "run\x1b[8m"  # would hide everything the terminal prints after it
+    bad["signer"]["did"] = "did:orcha:agent:x\x07"
+    assert main(["verify", _write(tmp_path, bad)]) == 1
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "run\\x1b[8m" in out and "Verdict: INVALID" in out
 
 
 def test_verify_json_carries_coverage(golden, tmp_path, capsys) -> None:
