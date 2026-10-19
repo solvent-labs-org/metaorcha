@@ -128,12 +128,25 @@ A model can say a call worked when it was declined or did not succeed. So when
 a run has such calls, MetaBot says how many under the answer, in the terminal
 and on the run's page. When the prompt names files in the project and the run
 made no tool calls, it says the receipt shows no read of them. The steps in
-the receipt are what happened.
+the receipt are MetaBot's record of the calls. The answer is the model's word.
 
 The signing key is at `~/.orcha/key`, or where `ORCHA_KEY_PATH` points.
 `metabot config set project_receipts true`, or `--project-receipt` on one run,
 also copies each receipt into the project, under `.orcha/receipts/`. The copy
 in the MetaBot home is the one that counts.
+
+### What a check proves
+
+A check proves two things: the key named in the receipt signed it, and
+nothing in it changed after that. With the run's journal, which stays on the
+machine that ran it, `metabot receipts verify` also shows that the journal
+matches every hash.
+
+A check does not prove that the steps happened. Whoever holds the key can
+sign steps that never ran, and so can a changed copy of MetaBot. Any program
+with the key can write the same fields, so a receipt cannot show which
+program made it. Its times come from that machine's clock. So a receipt from
+someone else is as good as your trust in their key.
 
 ## Offices
 
@@ -323,6 +336,9 @@ folders.
 - **Reads never ask.** That includes a shell read of a credential file, such
   as an SSH key or a cloud credentials file. It also includes your signing
   key, and a key that leaves the machine can sign receipts as you.
+- **A receipt shows who signed it, not that its steps happened.** Whoever
+  holds the key can sign steps that never ran, with any program. Nothing in
+  the receipt shows which program made it.
 - **The `codex` and `cursor` engines run their own tools in their own
   sandbox.** MetaBot records those calls after they run, and its gate covers
   the calls to your connections. A routine runs these engines so they cannot
