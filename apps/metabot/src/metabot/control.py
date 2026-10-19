@@ -26,12 +26,24 @@ MAX_MESSAGE = 32 * 1024 * 1024
 SUN_PATH_LIMIT = 100  # sockaddr_un holds 104-108 bytes, platform dependent
 
 
+def _fits(path: Path) -> bool:
+    return len(os.fsencode(str(path))) <= SUN_PATH_LIMIT
+
+
 def socket_path(run_dir: Path) -> Path:
-    """The run's socket path; a private temp dir when the run dir's path is too long."""
+    """The run's socket path; a private temp dir when the run dir's path is too long.
+
+    The temp dir goes in the system's temp folder, or in /tmp when that
+    folder's own path is too long for a socket. Whoever serves the socket
+    removes the temp dir: ``ControlServer(..., cleanup_dir=True)``.
+    """
     candidate = run_dir / "control.sock"
-    if len(os.fsencode(str(candidate))) <= SUN_PATH_LIMIT:
+    if _fits(candidate):
         return candidate
-    return Path(tempfile.mkdtemp(prefix="mb-")) / "control.sock"  # mkdtemp is 0700
+    for base in dict.fromkeys((tempfile.gettempdir(), "/tmp")):
+        if os.path.isdir(base) and _fits(Path(base) / "mb-xxxxxxxx" / "control.sock"):
+            return Path(tempfile.mkdtemp(prefix="mb-", dir=base)) / "control.sock"  # 0700
+    raise ValueError(f"no folder has a path short enough for the run's socket: {candidate}")
 
 
 class ControlServer:

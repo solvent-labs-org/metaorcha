@@ -41,7 +41,15 @@ from emerge.record import (
 from emerge.run_attestation import AttestationVerdict, verify_run_attestation
 
 from metabot.gitcmd import toplevel
-from metabot.paths import metabot_home, receipts_dir, run_dir, run_path, safe_id, write_private
+from metabot.paths import (
+    metabot_home,
+    receipt_path,
+    receipts_dir,
+    run_dir,
+    run_path,
+    safe_id,
+    write_private,
+)
 from metabot.steps import ascii_text
 
 POLICY_VERSION = "metabot/1.0"
@@ -378,12 +386,12 @@ def seal_and_store(
         },
         key,
     )
-    receipt_path = receipts_dir() / f"{run_id}.json"
+    receipt_file = receipts_dir() / f"{run_id}.json"
     kept_meta = scrub(dict(meta or {}), secrets)
     journal = {
         "format": JOURNAL_FORMAT,
         "run_id": run_id,
-        "receipt": str(receipt_path),
+        "receipt": str(receipt_file),
         "signer": did,
         "started_at": started_at,
         "finished_at": finished_at,
@@ -394,7 +402,7 @@ def seal_and_store(
     }
     write_private(run_dir(run_id) / "journal.json", json.dumps(journal, indent=2) + "\n")
     receipt_text = json.dumps(envelope, indent=2) + "\n"
-    write_private(receipt_path, receipt_text)
+    write_private(receipt_file, receipt_text)
     _append_index(
         {
             **_index_meta(kept_meta),
@@ -403,11 +411,11 @@ def seal_and_store(
             "finished_at": finished_at,
             "steps": len(clean),
             "signer": did,
-            "receipt": str(receipt_path),
+            "receipt": str(receipt_file),
             "receipt_sha256": hashlib.sha256(receipt_text.encode("utf-8")).hexdigest(),
         }
     )
-    return receipt_path
+    return receipt_file
 
 
 def acceptance_of(receipt: Path | str) -> str | None:
@@ -540,8 +548,7 @@ def journal_matches(run_id: str) -> bool:
     """
     try:
         journal = json.loads((run_path(run_id) / "journal.json").read_text(encoding="utf-8"))
-        receipt = receipts_dir() / f"{safe_id(run_id)}.json"
-        envelope = json.loads(receipt.read_text(encoding="utf-8"))
+        envelope = json.loads(receipt_path(run_id).read_text(encoding="utf-8"))
         sealed = envelope["steps"]
         kept = journal["steps"]
         copies = [journal[k] == envelope[k] for k in _COPIED]

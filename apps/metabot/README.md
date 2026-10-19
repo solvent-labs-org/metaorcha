@@ -25,7 +25,8 @@ uv tool install orcha-metabot
 
 It needs Python 3.11 or newer and a POSIX system, and it is tested on Linux.
 Install and sign in to each engine you want to use, the same way you do
-without MetaBot.
+without MetaBot. For `claude`, sign in with `/login` or a key in the
+environment: a login set in its settings file is not read.
 
 ## Getting started
 
@@ -49,6 +50,14 @@ one object.
 | `codex` | the `codex` command | run in the engine's own sandbox, then recorded |
 | `cursor` | the `cursor-agent` command | run in the engine's own sandbox, then recorded |
 | `openai` | a server that speaks the chat completions API, at `http://127.0.0.1:11434/v1` by default | run by MetaBot, each after the gate |
+
+A `claude` run loads none of the engine's settings files, neither the
+project's nor yours, so their hooks, key helpers and `env` do not apply.
+MetaBot passes its gate hook and its plugins itself. From your own settings
+file it keeps your model, your effort for each model, your telemetry and
+error-reporting opt-outs, and your deny rules. `CLAUDE.md` files, skills,
+agents, commands and plugins from the project or your engine settings are
+not loaded, and your `sandbox` settings do not apply.
 
 `-m` picks the model. `metabot config show` lists the settings that
 `metabot config set` changes. A hosted endpoint is set by hand in

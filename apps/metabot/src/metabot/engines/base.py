@@ -5,8 +5,10 @@ newlines and ``$()`` reach the engine byte for byte. Stdin is closed (an
 engine waiting on stdin would hang a headless run). The engine runs in its
 own process group, so stopping a run stops everything the engine started.
 
-The engine signs in with its own login; MetaBot never reads, copies or logs
-an engine's credentials. Variables that belong to an enclosing coding-agent
+The engine signs in with its own login; MetaBot never copies, passes on or
+logs an engine's credentials. The ``claude`` engine opens the person's
+settings file for a few named keys, and a key that file holds is never kept.
+Variables that belong to an enclosing coding-agent
 session are dropped so the child starts a session of its own.
 """
 
