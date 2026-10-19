@@ -13,8 +13,21 @@ arrears_* on the User row.  All on-chain operations live here.
 from __future__ import annotations
 
 import os
+import re
 
 import httpx
+
+# Wallet and action ids are path segments of the API URLs below, which carry
+# the app's credentials. An id is placed in a URL only when it is one plain segment.
+_ID = r"[A-Za-z0-9_-]{1,128}"
+
+
+def checked_id(value: str) -> str:
+    """Return ``value`` if it is one plain path segment, else raise ValueError."""
+    if re.fullmatch(_ID, value):
+        return value
+    raise ValueError(f"not a wallet or action id: {value!r}")
+
 
 # ── Lazy singleton ────────────────────────────────────────────────────────────
 
@@ -70,6 +83,7 @@ async def create_wallet(display_name: str | None = None) -> dict[str, str]:
 
 async def get_wallet_address(privy_wallet_id: str) -> str:
     """Fetch the on-chain EVM address for a Privy wallet ID."""
+    privy_wallet_id = checked_id(privy_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.get(
@@ -95,6 +109,7 @@ async def get_wallet_balance(privy_wallet_id: str) -> dict:
     Returns the raw Privy response:
         {total: {value, currency}, assets: [{symbol, amount, price}]}
     """
+    privy_wallet_id = checked_id(privy_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.get(
@@ -130,6 +145,7 @@ async def transfer_usdc(
       - Daily settlement cron: platform wallet → developer wallet
       - Developer withdrawal: developer wallet → external address
     """
+    from_wallet_id = checked_id(from_wallet_id)
     app_id, app_secret = _creds()
     async with httpx.AsyncClient() as http:
         resp = await http.post(
@@ -176,6 +192,8 @@ async def get_transfer_status(wallet_id: str, action_id: str) -> tuple[str, str 
       status:  'pending' | 'succeeded' | 'rejected' | 'failed'
       tx_hash: on-chain transaction hash once succeeded, else None
     """
+    wallet_id, action_id = checked_id(wallet_id), checked_id(action_id)
+
     import logging as _logging
 
     _log = _logging.getLogger(__name__)

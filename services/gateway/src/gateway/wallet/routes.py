@@ -293,8 +293,15 @@ async def get_action_status(
             detail="Transfer status polling is disabled in mock mode.",
         )
 
-    from .privy_client import get_transfer_status
+    from .privy_client import checked_id, get_transfer_status
 
+    try:
+        checked_id(action_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a transfer action id",
+        ) from exc
     tx_status = await get_transfer_status(wallet_id, action_id)
     return {"action_id": action_id, "status": tx_status}
 
