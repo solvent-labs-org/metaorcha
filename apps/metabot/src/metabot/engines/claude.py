@@ -163,6 +163,24 @@ def _kind(block: Any) -> str:
     return str(block.get("type", "?")) if isinstance(block, dict) else type(block).__name__
 
 
+def _message_usage(obj: dict[str, Any], state: dict[str, Any]) -> list[Event]:
+    """A message's usage, the first time it is seen: claude repeats a message once per block.
+
+    It counts as the run goes, so a cap can act on it; the result's total replaces it.
+    """
+    message = obj.get("message")
+    usage = message.get("usage") if isinstance(message, dict) else None
+    if not isinstance(usage, dict):
+        return []
+    seen: set[str] = state.setdefault("usage_ids", set())
+    msg_id = message.get("id") if isinstance(message, dict) else None
+    if isinstance(msg_id, str):
+        if msg_id in seen:
+            return []
+        seen.add(msg_id)
+    return [Usage({"usage": usage})]
+
+
 class ClaudeEngine(CliEngine):
     name = "claude"
     binary = "claude"
@@ -206,7 +224,7 @@ class ClaudeEngine(CliEngine):
                 return [Started(obj.get("session_id"), obj.get("model"))]
             return []  # hook chatter, token estimates: never the user's text
         if kind == "assistant":
-            events: list[Event] = []
+            events: list[Event] = _message_usage(obj, state)
             for block in _blocks(obj):
                 if block.get("type") == "tool_use":
                     args = block.get("input")
@@ -237,7 +255,8 @@ class ClaudeEngine(CliEngine):
                         "usage": obj.get("usage") or {},
                         "total_cost_usd": obj.get("total_cost_usd"),
                         "num_turns": obj.get("num_turns"),
-                    }
+                    },
+                    total=True,
                 )
             ]
             if obj.get("is_error"):

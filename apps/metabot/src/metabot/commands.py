@@ -28,6 +28,7 @@ from metabot.console import Trace
 from metabot.engines import BINARIES, ENGINES, available, get_engine
 from metabot.gate import Policy
 from metabot.paths import metabot_home, receipt_path, run_path
+from metabot.prices import PRICES_AS_OF
 from metabot.receipts import (
     answer_caveat,
     ensure_key,
@@ -38,6 +39,7 @@ from metabot.receipts import (
     verify_file,
 )
 from metabot.roster import RosterError, fast_model, fill, local_status, pick
+from metabot.spend import dollars
 from metabot.suggest import Suggestion, reason, suggest_here
 from metabot.text import ascii_digits
 
@@ -175,6 +177,7 @@ async def ask_once(
     approver: Approver | None = None,
     run_id: str | None = None,
     engine: Any = None,
+    limits: Any = None,
 ) -> Any:
     """One run as ``ask`` makes it. ``approver`` answers the gate, by default this terminal;
     ``engine`` is the engine itself, for a caller that makes its own."""
@@ -206,7 +209,23 @@ async def ask_once(
         on_event=trace,
         meta=meta or None,
         project=cwd if project_receipts_on(project_receipt) else None,
+        limits=limits,
     )
+
+
+def cost_line(result: Any, engine_name: str) -> str:
+    """What a run cost, and where the figure comes from, for the line beside its receipt."""
+    cost, source = result.cost_musd, result.cost_source
+    if source == "engine" and cost is not None:
+        return f"[metabot] cost {dollars(cost)}, as {engine_name} reported it"
+    if source == "local":
+        return "[metabot] cost $0.00: the model runs on this machine"
+    if source in ("table", "config") and cost is not None:
+        whose = "the listed" if source == "table" else "your"
+        return f"[metabot] cost {dollars(cost)}, by {whose} rates"
+    if source == "plan":
+        return f"[metabot] {result.tokens} tokens on your {engine_name} plan; MetaBot has no price"
+    return f"[metabot] {result.tokens} tokens; no price for this model: add one under prices"
 
 
 def receipt_line(result: Any) -> tuple[str, bool]:
@@ -216,7 +235,7 @@ def receipt_line(result: Any) -> tuple[str, bool]:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    from metabot.runner import RunCancelled
+    from metabot.runner import Limits, NoPrice, RunCancelled
 
     trace = Trace(quiet=args.quiet)
     prompt: str | None = None
@@ -282,8 +301,12 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 role=role,
                 suggested=suggested.record() if suggested is not None else None,
                 project_receipt=args.project_receipt,
+                limits=Limits(max_cost_musd=args.max_cost) if args.max_cost else None,
             )
         )
+    except NoPrice as exc:
+        _err(str(exc))
+        return EXIT_USAGE
     except (RunCancelled, KeyboardInterrupt) as exc:
         cancelled = cancelled_result(exc)
         tail = f"; receipt {cancelled.receipt}" if cancelled is not None else ""
@@ -313,6 +336,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
             if unread:  # an earlier turn of a resumed run may have read them
                 trace.line(f"[metabot] {unread}")
         trace.note(line)
+        trace.note(cost_line(result, engine_name))
         if copy is not None:
             trace.note(f"[metabot] project copy {copy}")
     if result.project_error:  # asked for, so said even when quiet
@@ -498,6 +522,59 @@ def cmd_receipts_list(args: argparse.Namespace) -> int:
         status = str(row.get("status", "?"))
         when = row.get("finished_at", "?")
         print(f"{row['run_id']}  {when}  {engine:<7} {status:<9} {row.get('steps', 0)} steps")
+    return EXIT_OK
+
+
+# Where a run's cost came from, as ``metabot cost`` says it.
+COST_SOURCES = {
+    "engine": "as the engine reported it",
+    "table": "by the listed rates",
+    "config": "by your rates",
+    "local": "on this machine",
+    "plan": "on your plan, not priced",
+    "unknown": "no price",
+}
+
+
+def _whole(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def cmd_cost(args: argparse.Namespace) -> int:
+    """What past runs spent, from the run index, by engine and model."""
+    rows = list_index()
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    total = 0
+    for row in rows:
+        key = (_shown(row.get("engine", "?"), 40), _shown(row.get("model") or "default", 80))
+        group = groups.setdefault(
+            key, {"runs": 0, "tokens": 0, "cost_musd": None, "sources": set()}
+        )
+        group["runs"] += 1
+        group["tokens"] += _whole(row.get("tokens")) or 0
+        cost = _whole(row.get("cost_musd"))
+        if cost is not None:
+            group["cost_musd"] = (group["cost_musd"] or 0) + cost
+            total += cost
+        source = row.get("cost_source")
+        group["sources"].add(source if source in COST_SOURCES else "not recorded")
+    if args.json:
+        by_model = [
+            {"engine": e, "model": m, **g, "sources": sorted(g["sources"])}
+            for (e, m), g in groups.items()
+        ]
+        print(json.dumps({"runs": len(rows), "total_musd": total, "prices_as_of": PRICES_AS_OF,
+                          "by_model": by_model}))  # fmt: skip
+        return EXIT_OK
+    if not rows:
+        print("no runs yet")
+        return EXIT_OK
+    for (engine, model), g in groups.items():
+        spent = "-" if g["cost_musd"] is None else dollars(g["cost_musd"])
+        said = "; ".join(COST_SOURCES.get(s, s) for s in sorted(g["sources"]))
+        print(f"{engine}/{model}  {g['runs']} runs  {g['tokens']} tokens  {spent}  {said}")
+    print(f"total {dollars(total)} over {len(rows)} runs; prices as of {PRICES_AS_OF}")
+    print("from the run index; metabot receipts verify RUN checks a run's signed figure")
     return EXIT_OK
 
 

@@ -135,6 +135,33 @@ The signing key is at `~/.orcha/key`, or where `ORCHA_KEY_PATH` points.
 also copies each receipt into the project, under `.orcha/receipts/`. The copy
 in the MetaBot home is the one that counts.
 
+## Cost
+
+Every run records what it spent: its tokens of each kind, what they cost,
+and where that figure comes from. The receipt signs this as a `usage`
+verdict, with a digest of the rates the run was priced by.
+
+| The figure comes from | When |
+|---|---|
+| the engine | `claude` reports its own cost. Under a plan login, it is what the API would have charged. |
+| the listed rates | a model in MetaBot's table, on an engine that reports no cost |
+| your rates | a model you priced under `prices` in `config.json` |
+| this machine | the `openai` engine on a local server, at $0.00 |
+| your plan | `codex` and `cursor` bill their own login. MetaBot counts the tokens and gives no price. |
+
+`metabot ask --max-cost 0.50` ends the run at its next tool call once it has
+cost that much. The receipt signs the cap and what was spent as a `budget`
+verdict. A run that MetaBot cannot price never starts under a cap, until you
+give its model a price. `metabot cost` totals past runs by engine and model,
+from the run index.
+
+A price is set by hand in `config.json`, in dollars per million tokens.
+`cache_read` and `cache_write` default to the input rate:
+
+```json
+"prices": {"my-model": {"in": 0.05, "out": 0.2}}
+```
+
 ### What a check proves
 
 A check proves two things: the key named in the receipt signed it, and
@@ -356,6 +383,12 @@ folders.
   classed by the address it carries, or by where the page was last sent. A
   click or a redirect that moves the page to another site is not seen, so
   under `--allow-write` the typing after it runs unasked.
+- **A `claude` run's cost is counted message by message, and its result
+  replaces the count.** The running count can be lower than the result, so a
+  cap can stop a `claude` run later than the cap says. The receipt still
+  signs the result's figure and the cap that was passed.
+- **A `cursor` run reports what it used when it ends, and not before.** A cap
+  on one needs your price for its model, and it is checked at the end.
 - **Project copies of receipts show as untracked files** in your repository.
   Commit them or ignore them. MetaBot leaves `.gitignore` alone.
 - **Your browser sends the web UI's cookie to every port on 127.0.0.1** while

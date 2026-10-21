@@ -110,6 +110,21 @@ def _model_name(value: str) -> str:
     return value
 
 
+def _dollars(value: str) -> int:
+    """``--max-cost``: dollars, as whole micro-dollars; never rounded up past what was given."""
+    from decimal import Decimal, InvalidOperation
+
+    from metabot.spend import MUSD
+
+    try:
+        amount = Decimal(value)
+    except InvalidOperation:
+        amount = Decimal("NaN")
+    if not amount.is_finite() or int(amount * MUSD) < 1:
+        raise argparse.ArgumentTypeError(f"{value[:60]!r} is not an amount of dollars")
+    return int(amount * MUSD)
+
+
 def _run_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("-e", "--engine", choices=list(ENGINES), help="default: metabot engines")
     p.add_argument(
@@ -163,6 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask = add("ask", help="run one prompt and print the answer")
     _run_options(ask)
     ask.add_argument("--resume", metavar="SESSION", help="continue an engine session")
+    ask.add_argument(
+        "--max-cost",
+        type=_dollars,
+        metavar="DOLLARS",
+        help="end the run once it has cost this much; a run MetaBot cannot price never starts",
+    )
     ask.add_argument("--json", action="store_true", help="print the result as one JSON object")
     ask.add_argument("-q", "--quiet", action="store_true", help="no trace on stderr")
     ask.add_argument(
@@ -469,6 +490,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=0, help="the port on 127.0.0.1 (default: a free one)"
     )
     ui.set_defaults(func=_lazy("metabot.web_commands", "cmd_ui"))
+
+    cost = add("cost", help="what past runs spent, by engine and model")
+    cost.add_argument("--json", action="store_true", help="print the totals as one JSON object")
+    cost.set_defaults(func=_lazy("metabot.commands", "cmd_cost"))
 
     receipts = add("receipts", help="the receipts of past runs")
     rsub = receipts.add_subparsers(dest="receipts_command", metavar="ACTION", required=True)
