@@ -1,6 +1,6 @@
 [project]
 name = "orcha-sdk"
-version = "0.2.1"
+version = "0.2.2"
 description = "Build Metaorcha agents in a few lines, and verify signed run receipts offline."
 readme = "README.md"
 requires-python = ">=3.10"

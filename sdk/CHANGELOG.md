@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the package
 uses [Semantic Versioning](https://semver.org/). Releases are tagged
 `sdk-vX.Y.Z`. The repo's own releases are in the [root changelog](../CHANGELOG.md).
 
+## [0.2.2] — 2026-10-21
+
+### Fixed
+
+- `orcha verify` lists no tools from a receipt that does not verify. Its
+  Coverage block read the tools from the receipt's steps whatever the
+  verdict, so a tampered receipt showed the tools its tampering named. A
+  receipt that fails now says they are not shown.
+- `orcha verify` prints a failed receipt's run id and signer with control
+  characters escaped, so a receipt cannot send escape codes to the terminal.
+
 ## [0.2.1] — 2026-10-16
 
 ### Changed
