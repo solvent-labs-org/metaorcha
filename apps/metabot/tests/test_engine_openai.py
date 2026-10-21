@@ -16,7 +16,7 @@ from metabot.connections import ConnectionStore
 from metabot.engines import openai_compat
 from metabot.engines.openai_compat import OpenAIEngine
 from metabot.gate import Policy
-from metabot.paths import run_dir
+from metabot.paths import metabot_home, run_dir
 from metabot.receipts import verify_file
 from metabot.runner import run_job
 
@@ -127,6 +127,34 @@ async def test_key_comes_from_the_environment_at_call_time(chat, tmp_path, monke
     fake = chat([_answer("ok")])
     await _run(fake, tmp_path, key_env="TINY_KEY")
     assert fake.headers[0]["Authorization"] == "Bearer k-live"
+
+
+def _everything_kept(result) -> str:
+    """Every file the run left behind, as one string."""
+    files = [p for p in run_dir(result.run_id).rglob("*") if p.is_file()]
+    index = metabot_home() / "runs.jsonl"
+    kept = [*files, result.receipt, *([index] if index.exists() else [])]
+    return "\n".join(p.read_text(errors="replace") for p in kept)
+
+
+async def test_the_shell_never_sees_the_key(chat, tmp_path, monkeypatch):
+    monkeypatch.setenv("TINY_KEY", "k-live-7f3a9c")
+    fake = chat([_call("shell", {"command": "env"}), _answer("ok")])
+    result = await _run(fake, tmp_path, key_env="TINY_KEY")
+    assert fake.headers[0]["Authorization"] == "Bearer k-live-7f3a9c"
+    told = fake.requests[1]["messages"][-1]["content"]
+    assert "PATH=" in told  # the command ran and printed its environment
+    assert "k-live-7f3a9c" not in told
+    assert "k-live-7f3a9c" not in _everything_kept(result)
+
+
+async def test_a_key_read_from_a_file_stays_out_of_the_record(chat, tmp_path, monkeypatch):
+    monkeypatch.setenv("TINY_KEY", "k-live-7f3a9c")
+    (tmp_path / "notes.txt").write_text("the key is k-live-7f3a9c\n")
+    fake = chat([_call("read_file", {"path": "notes.txt"}), _answer("it says k-live-7f3a9c")])
+    result = await _run(fake, tmp_path, key_env="TINY_KEY")
+    assert verify_file(result.receipt).valid
+    assert "k-live-7f3a9c" not in _everything_kept(result)
 
 
 async def test_bad_arguments_are_a_failed_step(chat, tmp_path):

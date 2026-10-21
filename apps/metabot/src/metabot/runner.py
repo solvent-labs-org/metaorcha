@@ -312,7 +312,9 @@ async def run_job(
 
     # Every token the person keeps, also when no connection is in this run: an
     # engine can still read one from disk, and it must not reach the record.
-    secrets = {**ConnectionStore().redaction_map(), **(secrets or {})}
+    # So does the key an engine sends to its model.
+    engine_keys: dict[str, str] = getattr(cli, "redaction_map", dict)()
+    secrets = {**ConnectionStore().redaction_map(), **engine_keys, **(secrets or {})}
     if board and skills:
         write_skills(rdir, skills)
     # The socket may take a temp folder, which closing the server gives back,
