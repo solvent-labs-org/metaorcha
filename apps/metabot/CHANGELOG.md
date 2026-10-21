@@ -19,12 +19,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 - `metabot cost` totals past runs by engine and model.
 - `prices` in `config.json` gives a model its rates, in dollars per million
   tokens.
+- `metabot doctor --models` checks whether each local model can call
+  MetaBot's tools: by itself, by text that MetaBot reads, or held to a schema
+  one step at a time. It keeps what it finds, and the engine asks each model
+  the way that works.
 
 ### Changed
 
 - A `claude` run counts its tokens message by message as it goes, so a token
   budget can stop it before it ends. The result's count replaces the running
   one.
+- When a local model writes its tool call as text, in a code fence or in
+  tags, MetaBot makes the call, through the gate like any other. A tool name
+  that is nearly right runs the one tool it can mean. The journal notes each
+  of these. An answer that is a call MetaBot cannot read fails the run, where
+  it was shown as the answer.
 
 ## [0.1.2] — 2026-10-21
 

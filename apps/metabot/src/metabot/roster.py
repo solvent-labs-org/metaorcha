@@ -13,6 +13,7 @@ the default, and the roster shows which is which.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import urllib.request
 from collections.abc import Mapping
@@ -50,6 +51,20 @@ def local_status(base_url: str) -> str:
             return "reachable" if resp.status == 200 else f"answered {resp.status}"
     except OSError:
         return "not reachable (is the local model server running?)"
+
+
+def listed_models(base_url: str) -> list[str]:
+    """The models a loopback server lists; none for a remote one, which is never contacted."""
+    if urlparse(base_url).hostname not in LOCAL_HOSTS:
+        return []
+    try:
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=5) as resp:
+            data = json.loads(resp.read(1_000_000).decode("utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = data.get("data") if isinstance(data, dict) else None
+    ids = [row.get("id") for row in rows or [] if isinstance(row, dict)]
+    return [i for i in ids if isinstance(i, str) and MODEL_RE.match(i)]
 
 
 def stays_here(entry: Mapping[str, str], cfg: Config) -> bool:

@@ -22,11 +22,22 @@ import httpx2
 
 from metabot.config import Config, load_config
 from metabot.engines.base import EngineJob
-from metabot.events import ErrorEvent, Event, Final, Started, TextEvent, ToolCall, ToolResult, Usage
+from metabot.events import (
+    ErrorEvent,
+    Event,
+    Final,
+    Notice,
+    Started,
+    TextEvent,
+    ToolCall,
+    ToolResult,
+    Usage,
+)
 from metabot.paths import metabot_home, private_dir, safe_id, write_private
 from metabot.scope_classes import ScopeClass
 from metabot.shell import TIMEOUT_EXIT, run_shell, stop_group
 from metabot.shell_policy import classify_shell
+from metabot.toolcalls import call_shaped, calls_in_text, parse_args, resolve_name, step_in_text
 
 MAX_TURNS = 20
 HTTP_TIMEOUT_S = 300.0
@@ -34,6 +45,7 @@ SHELL_TIMEOUT_S = 120.0
 READ_LIMIT = 200_000
 OUTPUT_LIMIT = 20_000
 LIST_LIMIT = 500
+NUDGE_LIMIT = 2_000  # how much of the request is said again after each step, in JSON mode
 SWITCHBOARD_PREFIX = "mcp__metabot__"
 
 SYSTEM = (
@@ -77,7 +89,9 @@ WRITERS = frozenset({"write_file", "shell"})
 
 
 class EngineHTTPError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status  # the HTTP status the server answered with, if it answered
 
 
 def _inside(cwd: Path, raw: Any) -> Path:
@@ -139,11 +153,17 @@ class OpenAIEngine:
         model: str | None = None,
         key_env: str | None = None,
         config: Config | None = None,
+        tool_mode: str | None = None,
+        save_sessions: bool = True,
     ) -> None:
         cfg = config if config is not None else load_config()
         self.base_url = (base_url or cfg.openai_base_url).rstrip("/")
         self.model = model or cfg.openai_model
         self.key_env = key_env if key_env is not None else cfg.openai_key_env
+        # native: the model's own tool calls, repaired when it writes them as text;
+        # json: one step at a time by schema. None: what the last probe found.
+        self.tool_mode = tool_mode
+        self.save_sessions = save_sessions
 
     def redaction_map(self) -> dict[str, str]:
         """``{VAR: key}`` for the model's key, so no copy of it reaches the record."""
@@ -177,7 +197,9 @@ class OpenAIEngine:
             raise EngineHTTPError(f"cannot reach {self.base_url}: {reason}") from None
         if response.status_code >= 400:
             body = response.text[:500]
-            raise EngineHTTPError(f"{self.base_url} answered {response.status_code}: {body}")
+            raise EngineHTTPError(
+                f"{self.base_url} answered {response.status_code}: {body}", response.status_code
+            )
         return json.loads(response.content.decode("utf-8"))
 
     # ── sessions (for resume) ───────────────────────────────────────────────
@@ -194,6 +216,8 @@ class OpenAIEngine:
         return data if isinstance(data, list) else []
 
     def _save_session(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        if not self.save_sessions:
+            return
         write_private(self._session_path(session_id), json.dumps(messages) + "\n")
 
     # ── built-in tools ──────────────────────────────────────────────────────
@@ -289,31 +313,109 @@ class OpenAIEngine:
         finally:
             await shells.close()  # nothing a run started outlives it
 
+    def _mode(self, model: str) -> str:
+        if self.tool_mode is not None:
+            return self.tool_mode
+        from metabot.models import cached_mode
+
+        return "json" if cached_mode(self.base_url, model) == "json" else "native"
+
     async def _loop(
         self, job: EngineJob, board: Any, approve: Approve, shells: _Shells
     ) -> AsyncGenerator[Event, None]:
         model = job.model or self.model
+        mode = self._mode(model)
         session_id = job.resume or str(uuid.uuid4())
+        tools = self._tools(job, board)
+        names = [t["function"]["name"] for t in tools]
         messages = self._load_session(session_id) if job.resume else []
         if not messages:
-            messages = [{"role": "system", "content": SYSTEM.format(cwd=job.cwd)}]
+            system = SYSTEM.format(cwd=job.cwd)
+            if mode == "json":
+                system += _json_prompt(tools)
+            messages = [{"role": "system", "content": system}]
         messages.append({"role": "user", "content": job.prompt})
         yield Started(session_id, model)
-        tools = self._tools(job, board)
         last_text = ""
+        schema = mode == "json"  # dropped once, if the server refuses it
+        steps = 0
         for turn in range(MAX_TURNS):
-            payload = {"model": model, "messages": messages, "tools": tools}
+            payload: dict[str, Any] = {"model": model, "messages": messages}
+            if mode != "json":
+                payload["tools"] = tools
+            elif schema:
+                payload["response_format"] = _step_format(tools)
             try:
                 response = await self._post(payload)
                 message = response["choices"][0]["message"]
-            except (EngineHTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            except EngineHTTPError as exc:
+                if schema and exc.status == 400:
+                    schema = False
+                    yield Notice(
+                        f"openai: {self.base_url} refused the response schema; asking without it"
+                    )
+                    continue
+                yield ErrorEvent(f"openai: {exc}")
+                yield Final(last_text, session_id)
+                self._save_session(session_id, messages)
+                return
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
                 yield ErrorEvent(f"openai: {exc}")
                 yield Final(last_text, session_id)
                 self._save_session(session_id, messages)
                 return
             yield Usage(response.get("usage") or {})  # every turn's, before its calls run
             content = message.get("content") or ""
+            if mode == "json":
+                step = step_in_text(content, names)
+                messages.append({"role": "assistant", "content": content})
+                if step is None or step[0] == "answer":
+                    if step is None:
+                        yield ErrorEvent(
+                            "openai: the model's step did not read as a tool or an answer"
+                        )
+                    text = content if step is None else _answer_text(step[1])
+                    if text:
+                        yield TextEvent(text)
+                    yield Final(text, session_id)
+                    self._save_session(session_id, messages)
+                    return
+                call_id, steps = f"step-{steps}", steps + 1
+                output, ok = None, False
+                async for event in self._one_call(
+                    call_id, step[0], step[1], job, board, approve, shells
+                ):
+                    if isinstance(event, ToolResult):
+                        output, ok = event.output, event.ok
+                    yield event
+                failed = "" if ok else "\n(this call did not succeed)"
+                result = f"Result of {step[0]}:\n{str(output)[:OUTPUT_LIMIT]}{failed}"
+                messages.append({"role": "user", "content": result + _nudge(job.prompt)})
+                continue
             calls = message.get("tool_calls") or []
+            if not calls and content:
+                read = calls_in_text(content, names)
+                if read:
+                    calls = [
+                        {
+                            "id": f"text-{turn}-{i}",
+                            "type": "function",
+                            "function": {"name": tool, "arguments": json.dumps(args)},
+                        }
+                        for i, (tool, args, _asked) in enumerate(read)
+                    ]
+                    content = ""
+                    yield Notice(
+                        f"openai: read {_count(len(calls), 'tool call')} the model wrote as text"
+                    )
+                elif call_shaped(content):
+                    messages.append({"role": "assistant", "content": content})
+                    yield ErrorEvent(
+                        "openai: the model answered with a tool call MetaBot could not read"
+                    )
+                    yield Final(content, session_id)
+                    self._save_session(session_id, messages)
+                    return
             messages.append(
                 {
                     "role": "assistant",
@@ -330,24 +432,98 @@ class OpenAIEngine:
                 return
             for i, call in enumerate(calls):
                 fn = call.get("function") or {}
-                name = str(fn.get("name") or "")
+                asked = str(fn.get("name") or "")
                 call_id = str(call.get("id") or f"call-{turn}-{i}")
-                try:
-                    args = json.loads(fn.get("arguments") or "{}")
-                    if not isinstance(args, dict):
-                        raise ValueError("arguments are not an object")
-                except ValueError as exc:
+                name = asked
+                if asked not in names:
+                    name = resolve_name(asked, names) or asked
+                    if name != asked:
+                        yield Notice(f"openai: the model asked for {asked!r}; ran {name}")
+                args = parse_args(fn.get("arguments"))
+                output = None
+                if args is None:
                     yield ToolCall(call_id, name, {"raw": str(fn.get("arguments"))[:2000]})
-                    output, ok = f"error: bad arguments: {exc}", False
-                    yield ToolResult(call_id, output, ok)
+                    output = "error: bad arguments: they are not a JSON object"
+                    yield ToolResult(call_id, output, False)
                 else:
-                    recorded = f"{SWITCHBOARD_PREFIX}{name}" if board and board.has(name) else name
-                    yield ToolCall(call_id, recorded, args)
-                    output, ok = await self._call(call_id, name, args, job, board, approve, shells)
-                    yield ToolResult(call_id, output, ok)
+                    async for event in self._one_call(
+                        call_id, name, args, job, board, approve, shells
+                    ):
+                        if isinstance(event, ToolResult):
+                            output = event.output
+                        yield event
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": str(output)[:OUTPUT_LIMIT]}
                 )
         yield ErrorEvent(f"openai: stopped after {MAX_TURNS} turns without an answer")
         yield Final(last_text, session_id)
         self._save_session(session_id, messages)
+
+    async def _one_call(
+        self, call_id: str, name: str, args: dict[str, Any], job: EngineJob, board: Any,
+        approve: Approve, shells: _Shells,
+    ) -> AsyncGenerator[Event, None]:  # fmt: skip
+        """A call as two events: what was asked, recorded first, then what came of it."""
+        recorded = f"{SWITCHBOARD_PREFIX}{name}" if board and board.has(name) else name
+        yield ToolCall(call_id, recorded, args)
+        output, ok = await self._call(call_id, name, args, job, board, approve, shells)
+        yield ToolResult(call_id, output, ok)
+
+
+def _nudge(prompt: str) -> str:
+    """After a step's result: what was asked, so a small model keeps to it."""
+    return (
+        f"\n\nThe request: {prompt[:NUDGE_LIMIT]}\n"
+        "Reply with the next step, or with answer as soon as you can answer the request."
+    )
+
+
+def _count(n: int, thing: str) -> str:
+    return f"{n} {thing}" if n == 1 else f"{n} {thing}s"
+
+
+def _answer_text(args: dict[str, Any]) -> str:
+    """The answer in a constrained step: its ``text``, else the first text it holds."""
+    text = args.get("text")
+    if isinstance(text, str):
+        return text
+    return next((v for v in args.values() if isinstance(v, str)), "")
+
+
+def _json_prompt(tools: list[dict[str, Any]]) -> str:
+    """The tools, for a model that answers one JSON step at a time."""
+    lines = [
+        "",
+        "",
+        'Reply with one JSON object, the next step: {"tool": NAME, "arguments": {...}}.',
+        "The tools:",
+    ]
+    for tool in tools:
+        fn = tool["function"]
+        keys = ", ".join((fn.get("parameters") or {}).get("properties") or {})
+        lines.append(f"- {fn['name']} {{{keys}}}: {fn.get('description') or ''}".rstrip())
+    lines.append("- answer {text}: your final answer to the user.")
+    return "\n".join(lines)
+
+
+_ANSWER = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+
+
+def _step_format(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    """A ``response_format`` that holds the model to one step: a tool, or the answer."""
+
+    def branch(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        arguments = {"type": "object", **params, "additionalProperties": False}
+        return {
+            "type": "object",
+            "properties": {"tool": {"const": name}, "arguments": arguments},
+            "required": ["tool", "arguments"],
+            "additionalProperties": False,
+        }
+
+    branches = [branch(t["function"]["name"], t["function"].get("parameters") or {}) for t in tools]
+    branches.append(branch("answer", _ANSWER))
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "step", "strict": True, "schema": {"anyOf": branches}},
+    }

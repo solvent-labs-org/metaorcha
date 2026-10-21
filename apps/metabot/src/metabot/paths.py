@@ -81,6 +81,11 @@ def receipt_path(run_id: str) -> Path:
     return _home_path() / "receipts" / f"{safe_id(run_id)}.json"
 
 
+def models_path() -> Path:
+    """The kept model probes, for a lookup: nothing is created."""
+    return _home_path() / "models.json"
+
+
 def receipts_dir() -> Path:
     return private_dir(metabot_home() / "receipts")
 
