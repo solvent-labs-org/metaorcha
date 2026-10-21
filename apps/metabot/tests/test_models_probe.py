@@ -102,9 +102,7 @@ def test_doctor_models_probes_each_model_the_server_lists(chat, capsys):
 
 
 def test_doctor_models_takes_names(chat, capsys, monkeypatch):
-    import metabot.models as models
-
-    monkeypatch.setattr(models, "_word", lambda: WORD)
+    monkeypatch.setattr("metabot.models._word", lambda: WORD)
     fake = chat([call("read_file", {"path": "probe.txt"}), answer(WORD)])
     save_config(Config(openai_base_url=fake.url))
     assert main(["doctor", "--models", "tiny"]) == 0
