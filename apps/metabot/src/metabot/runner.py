@@ -118,7 +118,7 @@ class _Run:
     tokens: int = 0  # summed over every usage report
     tool_calls: int = 0
     limit: str | None = None
-    price_of: Callable[[str, str | None], Price] = _no_price
+    price_of: Callable[[str, str | None], Price] = field(default_factory=lambda: _no_price)
     spend: Spend = field(default_factory=Spend)
     estimate: int = 0  # micro-dollars, by the rate, report by report
     prices: str = ""  # the digest of the rates it was priced by
