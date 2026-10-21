@@ -83,6 +83,19 @@ the default engine, with the `fast` role's model when that role runs there and
 no model is set for the engine. The run's journal keeps what was suggested
 beside what ran, and the receipt signs what ran.
 
+`metabot ask --ladder` starts on the cheapest rung, and climbs to the next
+one when the record shows the rung failed. `metabot ladder` shows the rungs.
+With no `ladder` set in `config.json`, they are the local model, once
+`metabot doctor --models` has found it can call tools, and then the `build`
+role. A rung climbs when its run ended in an error, when a call did not
+succeed, or when its declared acceptance failed. The ladder stops instead after
+a declined call, after a write went through, at a limit, or when `codex` or
+`cursor` failed, because their own tools may have changed the project. A task
+that reads as private skips every rung that sends the work off this machine.
+`--max-cost` covers the whole ladder. Each rung is a run with its own receipt,
+and its journal names the ladder and the run before it. At most three rungs
+run for one task, and `metabot config set ladder_attempts` changes that.
+
 ## Connections and approvals
 
 A connection is an MCP server you add once and MetaBot gates on every run.
@@ -357,6 +370,7 @@ folders.
 | `plugins.json`, `marketplaces.json`, `plugins/` | plugins and where they come from |
 | `routines.json`, `firings.jsonl`, `serve.lock` | routines and what each firing did |
 | `offices/`, `desks/`, `trust/` | office runs, desk worktrees, and the checks you trusted |
+| `ladders/` | each ladder's rungs, and how each one ended |
 | `kits/` | the desks' kits, while their office run goes |
 | `mail/` | each mailbox's notes, and `read/` for the ones read |
 

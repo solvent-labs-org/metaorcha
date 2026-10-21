@@ -51,8 +51,9 @@ def test_a_config_path_that_is_a_folder_is_named():
 
 
 def test_every_setting_has_a_type_it_is_read_as():
-    # the roster is left out on purpose: a hand-edited roster that is not a table counts as none
-    assert set(SETTING_TYPES) | {"roster"} == {f.name for f in fields(Config)}
+    # the roster is left out on purpose: a hand-edited roster that is not a table counts as none;
+    # so is the ladder: the command that runs it reads it (metabot.ladder)
+    assert set(SETTING_TYPES) | {"roster", "ladder"} == {f.name for f in fields(Config)}
 
 
 def test_a_key_it_does_not_know_and_a_roster_of_another_shape_still_read():
@@ -93,7 +94,9 @@ def test_every_command_names_the_config_file(capsys, monkeypatch):
 def test_config_set_names_a_bad_key_or_value_once(capsys):
     assert main(["config", "set", "nope", "1"]) == 2
     said = capsys.readouterr().err
-    assert said == "metabot: no setting 'nope'; one of: project_receipts, fan_cap\n"
+    assert (
+        said == "metabot: no setting 'nope'; one of: project_receipts, fan_cap, ladder_attempts\n"
+    )
     assert main(["config", "set", "fan_cap", "9"]) == 2
     assert capsys.readouterr().err == "metabot: fan_cap takes a whole number from 1 to 5\n"
 

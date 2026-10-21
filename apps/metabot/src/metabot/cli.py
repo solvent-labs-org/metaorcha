@@ -213,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DOLLARS",
         help="end the run once it has cost this much; a run MetaBot cannot price never starts",
     )
+    ask.add_argument(
+        "--ladder",
+        action="store_true",
+        help="run on the cheapest rung of metabot ladder first; climb only on a recorded failure",
+    )
     ask.add_argument("--json", action="store_true", help="print the result as one JSON object")
     ask.add_argument("-q", "--quiet", action="store_true", help="no trace on stderr")
     ask.add_argument(
@@ -237,9 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
         func=_lazy("metabot.commands", "cmd_config_show")
     )
     c_set = csub.add_parser("set", allow_abbrev=False, help="change one setting")
-    c_set.add_argument("key", help="project_receipts or fan_cap")
+    c_set.add_argument("key", help="project_receipts, fan_cap or ladder_attempts")
     c_set.add_argument("value")
     c_set.set_defaults(func=_lazy("metabot.commands", "cmd_config_set"))
+
+    add("ladder", help="the rungs ask --ladder climbs, cheapest first").set_defaults(
+        func=_lazy("metabot.ladder", "cmd_ladder")
+    )
 
     sug = add("suggest", help="which role, engine and model suit a task, and the rule that says so")
     sug.add_argument("task", nargs="+", help="the task; '-' reads it from stdin")
