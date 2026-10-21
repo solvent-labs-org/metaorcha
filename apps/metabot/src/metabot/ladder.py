@@ -235,6 +235,15 @@ def let_through(receipt: Path | str) -> int:
     )
 
 
+def declined_why(receipt: Path | str) -> str:
+    """Why the receipt's first declined call was declined: by a person, or by the run's policy."""
+    for v in verdicts_of(receipt):
+        if str(v.get("check")).startswith("scope_approval:") and v.get("result") == "warn":
+            detail = str(v.get("detail") or "declined")
+            return "by the person" if detail == "declined" else detail
+    return "declined"
+
+
 def judge(result: Any, gated: bool) -> tuple[str, str]:
     """What a rung's run means for the ladder: answered, climb, or stop, and why.
 
@@ -246,7 +255,11 @@ def judge(result: Any, gated: bool) -> tuple[str, str]:
     if result.ok and not result.failed and acceptance_of(result.receipt) != "fail":
         return ANSWERED, ""  # a declined call leaves the answer standing, with its caveat
     if result.declined:
-        return STOPPED, f"{result.declined} call(s) declined; a costlier model would ask the same"
+        why = declined_why(result.receipt)
+        return (
+            STOPPED,
+            f"{result.declined} call(s) declined ({why}); every rung meets the same gate",
+        )
     wrote = let_through(result.receipt)
     if wrote:
         return STOPPED, f"it failed after {wrote} write(s) went through; see {result.run_id} first"

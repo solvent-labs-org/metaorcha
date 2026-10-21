@@ -195,10 +195,19 @@ def test_a_failed_declared_acceptance_climbs(tmp_path):
     assert judge(_ran(tmp_path, failed), gated=True) == (CLIMBED, "its declared acceptance failed")
 
 
-def test_a_declined_call_in_a_failed_run_stops_the_ladder(tmp_path):
+def test_a_declined_call_in_a_failed_run_stops_the_ladder_and_says_who_declined(tmp_path):
     declined = {"check": "scope_approval:c1", "result": "warn", "detail": "declined"}
     outcome, why = judge(_ran(tmp_path, declined, ok=False, declined=1), gated=True)
-    assert outcome == STOPPED and "1 call(s) declined" in why
+    assert outcome == STOPPED
+    assert why == "1 call(s) declined (by the person); every rung meets the same gate"
+    policy = {
+        "check": "scope_approval:c2",
+        "result": "warn",
+        "detail": "declined: no human present",
+    }
+    outcome, why = judge(_ran(tmp_path, policy, ok=False, declined=1), gated=True)
+    assert outcome == STOPPED
+    assert why == "1 call(s) declined (declined: no human present); every rung meets the same gate"
 
 
 @pytest.mark.parametrize(
