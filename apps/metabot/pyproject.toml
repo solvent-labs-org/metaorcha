@@ -1,6 +1,6 @@
 [project]
 name = "orcha-metabot"
-version = "0.1.1"
+version = "0.1.2"
 description = "A local bot for the coding agents you already use. Every connection gated, every run signed, every receipt checkable offline."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -6,6 +6,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-21
+
 ### Security
 
 - A `claude` run no longer loads the engine's settings files. In 0.1.0 and
@@ -16,6 +18,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   gate hook and plugins itself. From your own settings file it keeps your
   model, your effort for each model, your telemetry and error-reporting
   opt-outs, and your deny rules. Nothing else in that file is passed on.
+- The `openai` engine's key no longer reaches its shell or the run's record.
+  In 0.1.0 and 0.1.1, its shell tool ran with your whole environment, so a
+  model that ran `env` was shown the key that `openai_key_env` names, and the
+  record could keep it. The shell now runs without that variable, and the
+  key is replaced in the steps, the journal, the receipt and the run index,
+  also when the model reads it from a file or repeats it in its answer.
 
 ### Changed
 
@@ -23,6 +31,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   commands, hooks and plugins from the project or your engine settings. A
   login set in the settings file is not read: sign in with `/login` or a key
   in the environment. Your `sandbox` settings do not apply in a `claude` run.
+
+### Fixed
+
+- A run whose folder path is too long for a Unix socket puts the socket in a
+  temp folder. Three paths left that `mb-*` folder behind; every run now
+  gives it back.
+- `metabot receipts verify` no longer creates `~/.metabot` and its receipts
+  folder on a machine that has none.
 
 ## [0.1.1] — 2026-10-18
 
