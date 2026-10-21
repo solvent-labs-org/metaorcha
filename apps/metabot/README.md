@@ -65,6 +65,14 @@ not loaded, and your `sandbox` settings do not apply.
 Its key stays in the environment variable that `openai_key_env` names, and
 MetaBot reads it at call time and never stores it.
 
+`metabot doctor --models` checks whether each model on a local server can call
+MetaBot's tools. Through the engine itself, it asks each model to read a file
+and say what is in it, and it keeps what it finds. A model that calls tools by
+itself runs as it is. When a model writes its call as text, MetaBot reads the
+call, and the journal says so. A model that does neither is asked for one step
+at a time, held to a schema of the tools. A server on another machine is not
+checked, because a check there costs money.
+
 Roles map kinds of work to an engine and a model: `fast`, `build`, `review`,
 `second` and `private`. `metabot roster` shows them, `metabot roster set
 build --engine codex` changes one, and `metabot roster unset build` gives it
@@ -374,8 +382,11 @@ folders.
 - **A plugin's hooks, once you allow them, run outside the gate.**
 - **A routine cannot run a project's own test command.** A shell command is a
   write, and a routine's allows name connection tools, so it declines.
-- **Some local models answer tool calls as text** and never act. The roster
-  checks that a local server answers, not that its model can call tools.
+- **Some local models answer tool calls as text.** MetaBot makes such a call
+  when the whole answer is the call, and fails the run when it cannot read
+  one. A small model held to a schema can still pick the wrong step. The gate
+  stops its writes, and `metabot doctor --models` says which models can call
+  tools at all.
 - **On a `claude` run, a shell step carries no exit code the `exit_zero`
   criterion can read.** A failed command is recorded as text, so a run on
   this engine that declares `exit_zero` fails it.

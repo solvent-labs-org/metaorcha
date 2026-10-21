@@ -40,7 +40,9 @@ def _binary_version(path: str) -> str:
     return line[0] if line else "version unknown"
 
 
-def cmd_doctor(_args: argparse.Namespace) -> int:
+def cmd_doctor(args: argparse.Namespace) -> int:
+    if getattr(args, "models", None) is not None:
+        return _doctor_models(args.models)
     from metabot.needs import doctor_lines
     from metabot.plugins import PluginError
     from metabot.receipts import key_problem, resolve_key_path
@@ -69,6 +71,33 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     for line in needs:
         print(line)
     return 1 if problem else 0
+
+
+def _doctor_models(names: list[str]) -> int:
+    """Probe each local model with a real tool call, and keep what each one can do."""
+    import asyncio
+
+    from metabot.approvals import printable
+    from metabot.config import load_config
+    from metabot.models import probe_model, save_probe
+    from metabot.prices import is_local
+    from metabot.roster import listed_models
+
+    cfg = load_config()
+    if not is_local(cfg.openai_base_url):
+        print(f"models   {cfg.openai_base_url} is remote; not probed: a probe there costs money")
+        return 0
+    names = names or listed_models(cfg.openai_base_url)
+    if not names:
+        print(f"models   {cfg.openai_base_url} lists no models, or does not answer")
+        return 0
+    print(f"models   probing {len(names)} on {cfg.openai_base_url}, on this machine")
+    for name in names:
+        probe = asyncio.run(probe_model(cfg.openai_base_url, name, key_env=cfg.openai_key_env))
+        if probe.mode != "unchecked":
+            save_probe(cfg.openai_base_url, name, probe.mode, probe.detail)
+        print(f"model    {name}  {probe.mode}: {printable(probe.detail, 200)}", flush=True)
+    return 0
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
@@ -532,6 +561,13 @@ def build_parser() -> argparse.ArgumentParser:
         parser_.set_defaults(func=_lazy("metabot.mail", f"cmd_mail_{action}"))
 
     doctor = add("doctor", help="check engines, key and home")
+    doctor.add_argument(
+        "--models",
+        nargs="*",
+        metavar="MODEL",
+        help="instead, check whether each local model can call MetaBot's tools, and how "
+        "(default: every model the local server lists)",
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     hook = sub.add_parser("hook", allow_abbrev=False)

@@ -163,7 +163,7 @@ def rate_for(model: str | None, mine: Mapping[str, Rate]) -> Rate | None:
     return None if key is None else {**ANTHROPIC, **mine}[key]
 
 
-def _local(base_url: str | None) -> bool:
+def is_local(base_url: str | None) -> bool:
     host = urlsplit(base_url or "").hostname or ""
     if host == "localhost":
         return True
@@ -181,7 +181,7 @@ def price_for(
         return Price("config", rate_for(model, mine))
     if engine == "claude":
         return Price("engine", rate_for(model, mine))
-    if engine == "openai" and _local(base_url):
+    if engine == "openai" and is_local(base_url):
         return Price("local", Rate(0, 0, 0, 0))
     if engine in ("codex", "cursor"):
         return Price("plan")
