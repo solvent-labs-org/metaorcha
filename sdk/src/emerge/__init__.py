@@ -19,7 +19,7 @@ import sys
 from .manifest import build_manifest, manifest_yaml
 from .sdk import AgentSpec, Skill, agent, registered_agents
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "agent",
