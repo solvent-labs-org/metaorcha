@@ -97,13 +97,20 @@ class _Shells:
     times out or is cancelled is stopped with everything it started, and
     whatever a call left running in the background is stopped when the run
     ends, as the command-line engines' process groups are.
+
+    A call never sees the variables named in *hidden*: the model's own key
+    is for the request to the model, not for the commands it asks to run.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hidden: frozenset[str] = frozenset()) -> None:
         self.left: set[int] = set()
+        self.hidden = hidden
 
     async def run(self, command: str, cwd: Path) -> tuple[str, bool]:
-        done = await run_shell(command, cwd, SHELL_TIMEOUT_S, limit=OUTPUT_LIMIT, merge_stderr=True)
+        env = {k: v for k, v in os.environ.items() if k not in self.hidden} if self.hidden else None
+        done = await run_shell(
+            command, cwd, SHELL_TIMEOUT_S, limit=OUTPUT_LIMIT, merge_stderr=True, env=env
+        )
         if done.timed_out:
             said = f"timed out after {SHELL_TIMEOUT_S:.0f} s"
             return json.dumps({"exit_code": TIMEOUT_EXIT, "timed_out": True, "output": said}), False
@@ -137,6 +144,11 @@ class OpenAIEngine:
         self.base_url = (base_url or cfg.openai_base_url).rstrip("/")
         self.model = model or cfg.openai_model
         self.key_env = key_env if key_env is not None else cfg.openai_key_env
+
+    def redaction_map(self) -> dict[str, str]:
+        """``{VAR: key}`` for the model's key, so no copy of it reaches the record."""
+        key = os.environ.get(self.key_env) if self.key_env else None
+        return {self.key_env: key} if self.key_env and key else {}
 
     # ── HTTP ────────────────────────────────────────────────────────────────
 
@@ -269,7 +281,7 @@ class OpenAIEngine:
     async def run(
         self, job: EngineJob, *, board: Any = None, approve: Approve
     ) -> AsyncGenerator[Event, None]:
-        shells = _Shells()
+        shells = _Shells(frozenset([self.key_env]) if self.key_env else frozenset())
         try:
             async with contextlib.aclosing(self._loop(job, board, approve, shells)) as events:
                 async for event in events:
