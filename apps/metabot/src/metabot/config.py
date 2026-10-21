@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 from metabot.paths import metabot_home, write_private
+from metabot.prices import read_prices
 
 # A model name as an engine takes it: never empty, never a flag.
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$")
@@ -34,6 +35,7 @@ class Config:
     fan_cap: int = 3  # desk runs at once; at most 5
     roster: dict[str, object] = field(default_factory=dict)  # role: engine, model; unchecked here
     project_receipts: bool = False  # also copy each receipt to <project>/.orcha/receipts/
+    prices: dict[str, object] = field(default_factory=dict)  # model: dollars per million tokens
 
 
 class ConfigError(ValueError):
@@ -51,6 +53,14 @@ def _models(value: Any) -> bool:
     )
 
 
+def _prices(value: Any) -> bool:
+    try:
+        read_prices(value)
+    except ValueError:
+        return False
+    return True
+
+
 # What each setting is read as, and how an error names it. The roster is not
 # here: a hand-edited roster that is not a table counts as none (metabot.roster).
 SETTING_TYPES: dict[str, tuple[Callable[[Any], bool], str]] = {
@@ -62,6 +72,7 @@ SETTING_TYPES: dict[str, tuple[Callable[[Any], bool], str]] = {
     "codex_ignore_user_config": (lambda v: isinstance(v, bool), "true or false"),
     "fan_cap": (lambda v: isinstance(v, int) and not isinstance(v, bool), "a whole number"),
     "project_receipts": (lambda v: isinstance(v, bool), "true or false"),
+    "prices": (_prices, "a table of model to its in and out dollars per million tokens"),
 }
 
 

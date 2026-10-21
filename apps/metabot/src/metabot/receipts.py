@@ -50,6 +50,7 @@ from metabot.paths import (
     safe_id,
     write_private,
 )
+from metabot.spend import Spend
 from metabot.steps import ascii_text
 
 POLICY_VERSION = "metabot/1.0"
@@ -172,6 +173,35 @@ def model_verdict(engine: str, model: str | None) -> dict[str, str]:
         "check": "model",
         "result": "pass",
         "detail": ascii_text(f"{engine}/{model or 'default'}"),
+    }
+
+
+def usage_verdict(spend: Spend, cost_musd: int | None, source: str, prices: str) -> dict[str, str]:
+    """What the run spent, signed: tokens of each kind, the cost, and what priced it."""
+    cost = "none" if cost_musd is None else str(cost_musd)
+    detail = (
+        f"in={spend.input};out={spend.output};cache_read={spend.cache_read};"
+        f"cache_write={spend.cache_write};cost_musd={cost};source={source};prices={prices}"
+    )
+    return {
+        "check": "usage",
+        "result": "warn" if source == "unknown" else "pass",
+        "detail": ascii_text(detail),
+    }
+
+
+def budget_verdict(cap_musd: int, spent_musd: int | None) -> dict[str, str]:
+    """The run's money cap, and whether it held."""
+    if spent_musd is None:
+        return {
+            "check": "budget",
+            "result": "warn",
+            "detail": f"cap_musd={cap_musd};spent_musd=none",
+        }
+    return {
+        "check": "budget",
+        "result": "fail" if spent_musd > cap_musd else "pass",
+        "detail": f"cap_musd={cap_musd};spent_musd={spent_musd}",
     }
 
 

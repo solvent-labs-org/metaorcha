@@ -21,6 +21,7 @@ from typing import Any
 from emerge.journal import utc_now
 
 from metabot.approvals import Approver
+from metabot.config import load_config
 from metabot.connections import ConnectionStore
 from metabot.control import ControlServer, socket_path
 from metabot.decisions import Decider
@@ -30,14 +31,18 @@ from metabot.events import ErrorEvent, Event, Final, Notice, Started, ToolCall, 
 from metabot.gate import Policy
 from metabot.paths import claim_run_dir, metabot_home, new_run_id, safe_id, write_private
 from metabot.plugins import plugin_skills
+from metabot.prices import Price, price_for, prices_digest, read_prices
 from metabot.receipts import (
     approval_verdict,
+    budget_verdict,
     declined_and_failed,
     ensure_key,
     model_verdict,
     project_copy,
     seal_and_store,
+    usage_verdict,
 )
+from metabot.spend import Spend, dollars, spend_of
 from metabot.steps import MAY_HAVE_RUN, NO_RESULT, StepRecorder
 from metabot.switchboard import Switchboard, write_skills
 
@@ -61,6 +66,12 @@ class RunResult:
     project_error: str | None = None  # why that copy is missing
     declined: int = 0  # calls the gate declined; the answer may say they ran
     failed: int = 0  # other calls that did not succeed
+    cost_musd: int | None = None  # None: no price for what ran
+    cost_source: str = "unknown"  # engine | table | config | local | plan | unknown
+
+
+class NoPrice(ValueError):
+    """A money cap on a run MetaBot cannot price: it would never act, so the run never starts."""
 
 
 @dataclass(frozen=True)
@@ -69,35 +80,19 @@ class Limits:
 
     max_tool_calls: int | None = None
     max_tokens: int | None = None
-
-
-def _count(usage: Mapping[str, Any], key: str) -> int:
-    value = usage.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+    max_cost_musd: int | None = None  # micro-dollars
 
 
 def usage_tokens(data: Mapping[str, Any]) -> int:
     """The tokens one usage report counts, the way Code Desks' meter counts them.
 
-    Input and output, with cache writes and cache reads. The ``codex`` and
-    ``openai`` engines already count cached input inside their input.
+    Input and output, with cache writes and cache reads, each counted once.
     """
-    usage = data.get("usage", data) if isinstance(data, Mapping) else None
-    if not isinstance(usage, Mapping):
-        return 0
+    return spend_of(data).tokens
 
-    def n(*keys: str) -> int:
-        return sum(_count(usage, key) for key in keys)
 
-    if "prompt_tokens" in usage or "completion_tokens" in usage:
-        return n("prompt_tokens", "completion_tokens")
-    if "inputTokens" in usage or "outputTokens" in usage:
-        return n("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")
-    if "cached_input_tokens" in usage:
-        return n("input_tokens", "cache_write_input_tokens", "output_tokens")
-    return n(
-        "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"
-    )
+def _no_price(engine: str, model: str | None) -> Price:
+    return Price("unknown")
 
 
 class RunCancelled(asyncio.CancelledError):
@@ -123,6 +118,20 @@ class _Run:
     tokens: int = 0  # summed over every usage report
     tool_calls: int = 0
     limit: str | None = None
+    price_of: Callable[[str, str | None], Price] = _no_price
+    spend: Spend = field(default_factory=Spend)
+    estimate: int = 0  # micro-dollars, by the rate, report by report
+    prices: str = ""  # the digest of the rates it was priced by
+    cap_musd: int | None = None
+
+    def cost(self) -> tuple[int | None, str]:
+        """What the run cost in micro-dollars, and where that comes from; None when unknown."""
+        if self.spend.reported_musd is not None:
+            return self.spend.reported_musd, "engine"
+        price = self.price_of(self.engine.name, self.model)
+        if price.rate is None:
+            return None, "plan" if price.source == "plan" else "unknown"
+        return self.estimate, "table" if price.source == "engine" else price.source
 
     def breach(self, limits: Limits | None) -> str | None:
         if limits is None:
@@ -131,7 +140,21 @@ class _Run:
             return f"limit: {limits.max_tool_calls} tool calls"
         if limits.max_tokens is not None and self.tokens > limits.max_tokens:
             return f"limit: {limits.max_tokens} tokens"
+        cap = limits.max_cost_musd
+        if cap is not None and (self.cost()[0] or self.estimate) > cap:
+            return f"limit: {dollars(cap)}"
         return None
+
+    def _on_usage(self, event: Usage) -> None:
+        self.usage = dict(event.data)
+        spend = spend_of(event.data)
+        rate = self.price_of(self.engine.name, self.model).rate
+        priced = rate.cost(spend) if rate else 0
+        if event.total:
+            self.spend, self.estimate = spend, priced
+        else:
+            self.spend, self.estimate = self.spend + spend, self.estimate + priced
+        self.tokens = self.spend.tokens
 
     def on_step(self, step: dict[str, Any]) -> None:
         if all(k in step for k in STEP_FIELDS):
@@ -150,8 +173,7 @@ class _Run:
         elif isinstance(event, Notice) and len(self.notices) < MAX_NOTICES:
             self.notices.append(event.text[:NOTICE_LIMIT])
         elif isinstance(event, Usage):
-            self.usage = dict(event.data)
-            self.tokens += usage_tokens(event.data)
+            self._on_usage(event)
         elif isinstance(event, ToolCall):
             self.tool_calls += 1
 
@@ -275,6 +297,16 @@ async def run_job(
     if run_id is not None:
         safe_id(run_id)
     cli = get_engine(engine) if isinstance(engine, str) else engine
+    mine = read_prices(load_config().prices)
+    base_url = getattr(cli, "base_url", None)
+
+    def price_of(name: str, ran: str | None) -> Price:
+        return price_for(name, ran or model or getattr(cli, "model", None), base_url, mine)
+
+    cap = limits.max_cost_musd if limits is not None else None
+    if cap is not None and price_of(cli.name, None).source in ("plan", "unknown"):
+        asked = model or getattr(cli, "model", None) or "default"
+        raise NoPrice(f"no price for {cli.name}/{asked}: add its rates under prices in config.json")
     # An engine that loads a plugin itself gets its folder; any other gets its
     # skills as two read tools on the switchboard, which then runs for them alone.
     loads = getattr(cli, "loads_plugins", False)
@@ -301,6 +333,9 @@ async def run_job(
         ),
         model=model,
         model_requested=model,
+        price_of=price_of,
+        prices=prices_digest(mine),
+        cap_musd=cap,
     )
 
     async def approve(msg: dict[str, Any]) -> dict[str, Any]:
@@ -401,10 +436,14 @@ def _seal(
     status = "cancelled" if cancelled else ("ok" if ok else "error")
     steps = run.recorder.steps()
     final_text = run.final.text if run.final else ""
+    cost, source = run.cost()
+    money = [usage_verdict(run.spend, cost, source, run.prices)]
+    if run.cap_musd is not None:
+        money.append(budget_verdict(run.cap_musd, cost))
     receipt = seal_and_store(
         run_id=run_id,
         steps=steps,
-        verdicts=[model_verdict(run.engine.name, run.model), *run.decider.verdicts],
+        verdicts=[model_verdict(run.engine.name, run.model), *money, *run.decider.verdicts],
         started_at=started_at,
         finished_at=utc_now(),
         key=key,
@@ -424,6 +463,9 @@ def _seal(
             "error": error,
             "usage": run.usage,
             "tokens": run.tokens,
+            "spend": run.spend.as_dict(),
+            "cost_musd": cost,
+            "cost_source": source,
             "tool_calls": run.tool_calls,
             "limit": run.limit,
             "notices": run.notices,
@@ -442,4 +484,6 @@ def _seal(
         limit=run.limit,
         declined=declined,
         failed=failed,
+        cost_musd=cost,
+        cost_source=source,
     )

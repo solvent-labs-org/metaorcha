@@ -6,6 +6,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 
 ## [Unreleased]
 
+### Added
+
+- Every run records what it spent: its tokens of each kind, what they cost,
+  and where the figure comes from. That is the engine's own report, the
+  listed rates, your rates, a local model at $0.00, or your plan, which is
+  not priced. The receipt signs it as a `usage` verdict, with a digest of the
+  rates, and `metabot ask` prints it beside the receipt.
+- `metabot ask --max-cost DOLLARS` ends the run once it has cost that much.
+  The receipt signs the cap as a `budget` verdict. A run MetaBot cannot price
+  does not start under a cap.
+- `metabot cost` totals past runs by engine and model.
+- `prices` in `config.json` gives a model its rates, in dollars per million
+  tokens.
+
+### Changed
+
+- A `claude` run counts its tokens message by message as it goes, so a token
+  budget can stop it before it ends. The result's count replaces the running
+  one.
+
 ## [0.1.2] — 2026-10-21
 
 ### Security

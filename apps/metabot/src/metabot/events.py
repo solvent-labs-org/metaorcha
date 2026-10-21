@@ -39,6 +39,7 @@ class ToolResult:
 @dataclass(frozen=True)
 class Usage:
     data: dict[str, Any] = field(default_factory=dict)
+    total: bool = False  # the run's whole spend so far, in place of the reports before it
 
 
 @dataclass(frozen=True)
