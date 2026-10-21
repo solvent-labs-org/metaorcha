@@ -163,7 +163,7 @@ def _receipt(tmp_path: Path, *verdicts: dict) -> Path:
 
 def _ran(tmp_path, *verdicts, **kw) -> SimpleNamespace:
     base = {"ok": True, "declined": 0, "failed": 0, "limit": None, "error": None, "run_id": "L.1",
-            "cost_musd": 0, "cost_source": "local"}  # fmt: skip
+            "cost_musd": 0, "cost_source": "local", "tokens": 10}  # fmt: skip
     return SimpleNamespace(**{**base, **kw, "receipt": _receipt(tmp_path, *verdicts)})
 
 
@@ -339,6 +339,7 @@ def test_the_ladder_record_is_private_and_lists_every_rung(tmp_path):
     assert record is not None and record["answered"] is True
     assert [r["outcome"] for r in record["rungs"]] == [CLIMBED, ANSWERED]
     assert record["unpriced"] == 1 and result.unpriced == 1
+    assert record["tokens"] == 20 and [r["tokens"] for r in record["rungs"]] == [10, 10]
 
 
 def test_a_ladder_id_in_use_is_refused(tmp_path):

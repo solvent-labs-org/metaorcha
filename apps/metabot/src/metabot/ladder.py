@@ -171,6 +171,7 @@ class RungRow:
     ok: bool | None = None
     cost_musd: int | None = None
     cost_source: str | None = None
+    tokens: int = 0
 
 
 @dataclass
@@ -182,6 +183,7 @@ class LadderResult:
     stopped: str | None = None  # why the ladder ended without an answer
     spent_musd: int = 0
     unpriced: int = 0  # rungs that ran with no price
+    tokens: int = 0  # every rung's, summed
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -190,6 +192,7 @@ class LadderResult:
             "stopped": self.stopped,
             "spent_musd": self.spent_musd,
             "unpriced": self.unpriced,
+            "tokens": self.tokens,
             "rungs": [asdict(row) for row in self.rows],
         }
 
@@ -313,6 +316,8 @@ async def run_ladder(
             result.final = ran_result
             row.run_id, row.ok = ran_result.run_id, ran_result.ok
             row.cost_musd, row.cost_source = ran_result.cost_musd, ran_result.cost_source
+            row.tokens = ran_result.tokens
+            result.tokens += ran_result.tokens
             if ran_result.cost_musd is None:
                 result.unpriced += 1
             else:
