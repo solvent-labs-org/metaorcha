@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -110,9 +111,18 @@ def _fan_cap(value: str) -> int:
     return int(value)
 
 
+def _attempts(value: str) -> int:
+    from metabot.ladder import ATTEMPTS_MAX
+
+    if not ascii_digits(value) or not 1 <= int(value) <= ATTEMPTS_MAX:
+        raise ValueError(f"a whole number from 1 to {ATTEMPTS_MAX}")
+    return int(value)
+
+
 SETTINGS = {
     "project_receipts": (_on_off, "also copy each receipt to <project>/.orcha/receipts/"),
     "fan_cap": (_fan_cap, "how many desk runs go at once"),
+    "ladder_attempts": (_attempts, "how many rungs of the ladder one task may run"),
 }
 
 
@@ -178,9 +188,11 @@ async def ask_once(
     run_id: str | None = None,
     engine: Any = None,
     limits: Any = None,
+    extra_meta: Mapping[str, Any] | None = None,
 ) -> Any:
     """One run as ``ask`` makes it. ``approver`` answers the gate, by default this terminal;
-    ``engine`` is the engine itself, for a caller that makes its own."""
+    ``engine`` is the engine itself, for a caller that makes its own; ``extra_meta`` joins
+    the run's meta."""
     from metabot.plugins import enabled_plugins
     from metabot.runner import run_job
 
@@ -194,6 +206,7 @@ async def ask_once(
         meta["role"] = role
     if suggested is not None:
         meta["suggested"] = dict(suggested)
+    meta.update(extra_meta or {})
     return await run_job(
         engine=engine,
         prompt=prompt,
@@ -238,6 +251,8 @@ def cmd_ask(args: argparse.Namespace) -> int:
     from metabot.runner import Limits, NoPrice, RunCancelled
 
     trace = Trace(quiet=args.quiet)
+    if args.ladder:
+        return _ask_ladder(args, trace)
     prompt: str | None = None
     suggested: Suggestion | None = None
     engine_name: str | None = None
@@ -312,6 +327,20 @@ def cmd_ask(args: argparse.Namespace) -> int:
         tail = f"; receipt {cancelled.receipt}" if cancelled is not None else ""
         trace.line(f"[metabot] cancelled{tail}")
         return EXIT_CANCELLED
+    valid = _show_result(args, trace, result, engine_name, prompt, cwd)
+    return EXIT_OK if result.ok and valid else EXIT_FAILED
+
+
+def _show_result(
+    args: argparse.Namespace,
+    trace: Trace,
+    result: Any,
+    engine_name: str,
+    prompt: str,
+    cwd: Path,
+    extra: Mapping[str, Any] | None = None,
+) -> bool:
+    """Print a run's answer and its lines as ``ask`` does; whether its receipt is valid."""
     line, valid = receipt_line(result)
     copy = result.project_receipt
     if args.json:
@@ -322,6 +351,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
                     "receipt": str(result.receipt),
                     "project_receipt": str(copy) if copy else None,
                     "valid": valid,
+                    **(extra or {}),
                 }
             )
         )
@@ -341,7 +371,116 @@ def cmd_ask(args: argparse.Namespace) -> int:
             trace.note(f"[metabot] project copy {copy}")
     if result.project_error:  # asked for, so said even when quiet
         trace.line(f"[metabot] {result.project_error}; the receipt in the MetaBot home counts")
-    return EXIT_OK if result.ok and valid else EXIT_FAILED
+    return valid
+
+
+def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
+    """``ask --ladder``: the cheapest rung first, climbing only on a failure the record shows."""
+    from metabot.engines import get_engine
+    from metabot.ladder import LadderError, Rung, attempts, effective_ladder, run_ladder, spent_line
+    from metabot.paths import new_run_id
+    from metabot.roster import RosterError
+    from metabot.runner import Limits, NoPrice, RunCancelled
+    from metabot.suggest import match
+
+    clash = [
+        flag
+        for flag, given in (
+            ("-e", args.engine),
+            ("-m", args.model),
+            ("--suggest", args.suggest),
+            ("--resume", args.resume),
+        )
+        if given
+    ]
+    if clash or args.role not in (None, "private"):
+        said = clash[0] if clash else f"--role {args.role}"
+        _err(f"--ladder picks each rung itself; {said} does not go with it (--role private does)")
+        return EXIT_USAGE
+    prompt = read_prompt(args.prompt)
+    if not prompt.strip():
+        _err("the prompt is empty")
+        return EXIT_USAGE
+    cwd = Path(args.cwd or os.getcwd()).resolve()
+    if not cwd.is_dir():
+        _err(f"{cwd} is not a directory")
+        return EXIT_USAGE
+    cfg = load_config()
+    try:
+        rungs, whose, note = effective_ladder(cfg)
+        most = attempts(cfg)
+    except (LadderError, RosterError) as exc:
+        _err(str(exc))
+        return EXIT_USAGE
+    if note:
+        trace.note(f"[metabot] {note}")
+    if not rungs:
+        _err("no rung here: install an engine CLI, or start and probe the local model server")
+        return EXIT_USAGE
+    rule, _word = match(prompt)
+    private = args.role == "private" or (rule is not None and rule.role == "private")
+    trace.note(
+        f"[metabot] ladder ({whose}): "
+        + " -> ".join(f"{r.tier} {r.label()}" for r in rungs[:most])
+        + ("; private, so only rungs on this machine" if private else "")
+    )
+
+    async def run_rung(rung: Rung, run_id: str, meta: dict[str, Any], cap: int | None) -> Any:
+        trace.note(f"[metabot] rung {meta['rung']}: {rung.label()} ({rung.tier})")
+        return await ask_once(
+            engine_name=rung.engine,
+            prompt=prompt,
+            cwd=cwd,
+            model=rung.model,
+            allow_write=args.allow_write,
+            allows=args.allow,
+            read_only=args.read_only,
+            connections=not args.no_connections,
+            plugins=not args.no_plugins,
+            trace=trace,
+            role=args.role,
+            project_receipt=args.project_receipt,
+            run_id=run_id,
+            limits=Limits(max_cost_musd=cap) if cap is not None else None,
+            extra_meta=meta,
+        )
+
+    def gated(engine: str) -> bool:
+        return bool(getattr(get_engine(engine), "own_tools_gated", False))
+
+    try:
+        ladder = asyncio.run(
+            run_ladder(
+                rungs,
+                run_rung,
+                cfg=cfg,
+                ladder_id=new_run_id(),
+                max_attempts=most,
+                max_cost_musd=args.max_cost,
+                private=private,
+                gated=gated,
+                on_line=lambda text: trace.note(f"[metabot] {text}"),
+                no_price=NoPrice,
+            )
+        )
+    except (RunCancelled, KeyboardInterrupt) as exc:
+        cancelled = cancelled_result(exc)
+        tail = f"; receipt {cancelled.receipt}" if cancelled is not None else ""
+        trace.line(f"[metabot] cancelled{tail}")
+        return EXIT_CANCELLED
+    result = ladder.final
+    if ladder.stopped:  # why there is no answer, so said even when quiet
+        trace.line(f"[metabot] the ladder stopped: {ladder.stopped}")
+    if result is None:
+        if args.json:
+            print(json.dumps({"ok": False, "ladder": ladder.to_json()}))
+        return EXIT_FAILED
+    engine_name = next(r.engine for r in ladder.rows if r.run_id == result.run_id)
+    valid = _show_result(
+        args, trace, result, engine_name, prompt, cwd, {"ladder": ladder.to_json()}
+    )
+    trace.note(f"[metabot] {spent_line(ladder)}")
+    return EXIT_OK if ladder.answered and valid else EXIT_FAILED
 
 
 # ── connect ─────────────────────────────────────────────────────────────────

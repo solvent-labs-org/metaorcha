@@ -448,14 +448,19 @@ def seal_and_store(
     return receipt_file
 
 
-def acceptance_of(receipt: Path | str) -> str | None:
-    """A receipt's ``declared_acceptance`` result, or None when it has none."""
+def verdicts_of(receipt: Path | str) -> list[dict[str, Any]]:
+    """A receipt's verdicts that are objects; none when it does not read."""
     try:
         verdicts = json.loads(Path(receipt).read_text(encoding="utf-8")).get("verdicts") or []
     except (OSError, ValueError, AttributeError):
-        return None
-    for verdict in verdicts:
-        if isinstance(verdict, dict) and verdict.get("check") == "declared_acceptance":
+        return []
+    return [v for v in verdicts if isinstance(v, dict)] if isinstance(verdicts, list) else []
+
+
+def acceptance_of(receipt: Path | str) -> str | None:
+    """A receipt's ``declared_acceptance`` result, or None when it has none."""
+    for verdict in verdicts_of(receipt):
+        if verdict.get("check") == "declared_acceptance":
             return str(verdict.get("result"))
     return None
 

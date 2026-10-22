@@ -36,6 +36,8 @@ class Config:
     roster: dict[str, object] = field(default_factory=dict)  # role: engine, model; unchecked here
     project_receipts: bool = False  # also copy each receipt to <project>/.orcha/receipts/
     prices: dict[str, object] = field(default_factory=dict)  # model: dollars per million tokens
+    ladder: list[object] = field(default_factory=list)  # rungs: engine, model, tier; metabot.ladder
+    ladder_attempts: int = 3  # rungs one task may run; at most 5
 
 
 class ConfigError(ValueError):
@@ -63,6 +65,7 @@ def _prices(value: Any) -> bool:
 
 # What each setting is read as, and how an error names it. The roster is not
 # here: a hand-edited roster that is not a table counts as none (metabot.roster).
+# Nor is the ladder: the command that runs it reads it, and stops (metabot.ladder).
 SETTING_TYPES: dict[str, tuple[Callable[[Any], bool], str]] = {
     "default_engine": (_text_or_null, "text or null"),
     "models": (_models, "a table of engine to model name"),
@@ -73,6 +76,10 @@ SETTING_TYPES: dict[str, tuple[Callable[[Any], bool], str]] = {
     "fan_cap": (lambda v: isinstance(v, int) and not isinstance(v, bool), "a whole number"),
     "project_receipts": (lambda v: isinstance(v, bool), "true or false"),
     "prices": (_prices, "a table of model to its in and out dollars per million tokens"),
+    "ladder_attempts": (
+        lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "a whole number",
+    ),
 }
 
 
