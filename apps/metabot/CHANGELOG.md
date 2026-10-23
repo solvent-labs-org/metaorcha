@@ -23,6 +23,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   MetaBot's tools: by itself, by text that MetaBot reads, or held to a schema
   one step at a time. It keeps what it finds, and the engine asks each model
   the way that works.
+- A local model that writes Python's triple quotes unescaped inside a JSON
+  tool call has the call read, with the quotes as text.
+- When a local model writes calls one after another and the last one breaks
+  off before its JSON ends, the complete ones are made and the broken one is
+  not.
+- A tool call a local model writes in a code fence inside a longer answer is
+  never made. MetaBot asks the model for the call alone, twice at most, and
+  then fails the run, so an answer that shows a call and makes none does not
+  end "ok".
 - `metabot ask --ladder` starts on the cheapest rung, and climbs only when
   the record shows the rung failed. It stops instead after a declined call or
   a write that went through. `metabot ladder` shows the rungs: by default the

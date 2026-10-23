@@ -398,7 +398,12 @@ folders.
   write, and a routine's allows name connection tools, so it declines.
 - **Some local models answer tool calls as text.** MetaBot makes such a call
   when the whole answer is the call, and fails the run when it cannot read
-  one. A small model held to a schema can still pick the wrong step. The gate
+  one. It reads Python's triple quotes left unescaped inside a JSON string as
+  text. When an answer is calls one after another and the last one breaks off
+  before its JSON ends, MetaBot makes the complete ones and never the broken
+  one. A call in a code fence inside a longer answer is never made: MetaBot
+  asks the model for the call alone, twice at most, and then fails the run.
+  A small model held to a schema can still pick the wrong step. The gate
   stops its writes, and `metabot doctor --models` says which models can call
   tools at all.
 - **On a `claude` run, a shell step carries no exit code the `exit_zero`
