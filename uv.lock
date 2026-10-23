@@ -2786,7 +2786,7 @@ wheels = [
 
 [[package]]
 name = "orcha-metabot"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "apps/metabot" }
 dependencies = [
     { name = "httpx2" },
