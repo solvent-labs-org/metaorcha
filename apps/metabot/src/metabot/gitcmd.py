@@ -44,9 +44,18 @@ def git_env() -> dict[str, str]:
 
 
 def git(
-    repo: Path, *args: str, check: bool = True, timeout: float = TIMEOUT_S
+    repo: Path,
+    *args: str,
+    check: bool = True,
+    timeout: float = TIMEOUT_S,
+    index: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run git in ``repo``. ``index`` is the one way an index other than the
+    repository's own is used: a leftover ``GIT_INDEX_FILE`` never is."""
     argv = ["git", "-C", str(repo), *NO_HOOKS, *args]
+    env = git_env()
+    if index is not None:
+        env["GIT_INDEX_FILE"] = str(index)
     try:
         proc = subprocess.run(
             argv,
@@ -55,7 +64,7 @@ def git(
             text=True,
             encoding="utf-8",
             errors="surrogateescape",
-            env=git_env(),
+            env=env,
             timeout=timeout,
             check=False,
         )
