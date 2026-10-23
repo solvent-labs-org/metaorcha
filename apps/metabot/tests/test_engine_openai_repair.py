@@ -112,6 +112,84 @@ async def test_fenced_arguments_are_read(chat, tmp_path):
     assert _steps(result) == [("c1", "metabot/read_file", True)]
 
 
+FENCED_CALL = "I will read it.\n\n```json\n" + json.dumps(READ) + "\n```\n\nThen I answer."
+
+
+async def test_a_call_inside_a_longer_answer_is_not_made_and_the_model_is_asked_for_it(
+    chat, tmp_path
+):
+    (tmp_path / "README.md").write_text("hello")
+    fake = chat([text_reply(FENCED_CALL), text_reply(json.dumps(READ)), answer("done")])
+    result = await _run(_engine(fake), tmp_path)
+    assert result.ok, result.error
+    assert result.final_text == "done"
+    assert _steps(result) == [("text-1-0", "metabot/read_file", True)]  # made once, when alone
+    asked = fake.requests[1]["messages"][-1]
+    assert asked["role"] == "user" and "so it was not made" in asked["content"]
+    assert "(read_file)" in asked["content"]
+    notices = _journal(result)["meta"]["notices"]
+    assert any("inside its answer; none was made" in n for n in notices)
+
+
+async def test_a_model_that_keeps_writing_calls_inside_its_answer_fails_the_run(chat, tmp_path):
+    (tmp_path / "README.md").write_text("hello")
+    fake = chat([text_reply(FENCED_CALL)] * 3)
+    result = await _run(_engine(fake), tmp_path)
+    assert result.ok is False
+    assert result.error == (
+        "openai: the model kept writing tool calls inside its answer; none was made"
+    )
+    assert _steps(result) == [] and len(fake.requests) == 3
+
+
+async def test_a_placeholder_write_inside_an_answer_is_never_made(chat, tmp_path):
+    (tmp_path / "stats.py").write_text("old\n")
+    write = {
+        "name": "write_file",
+        "arguments": {"path": "stats.py", "content": "updated_content_here"},
+    }
+    shown = (
+        "```json\n" + json.dumps(READ) + "\n```\nAfter reading, you can run:\n"
+        "```json\n" + json.dumps(write) + "\n```\nReplace the content with the code."
+    )
+    fake = chat([text_reply(shown), answer("I could not finish.")])
+    result = await _run(_engine(fake), tmp_path, policy=Policy(allow_write=True))
+    assert (tmp_path / "stats.py").read_text() == "old\n"
+    assert _steps(result) == []
+
+
+async def test_a_whole_answer_write_with_python_triple_quotes_is_made(chat, tmp_path):
+    content = 'def m(v):\n    """The middle."""\n    return v\n'
+    raw = (
+        '{"name": "write_file", "arguments": {"path": "stats.py", "content": "def m(v):\\n    '
+        '"""The middle."""\\n    return v\\n"}}'
+    )
+    fake = chat([text_reply(raw), answer("done")])
+    result = await _run(_engine(fake), tmp_path, policy=Policy(allow_write=True))
+    assert result.ok, result.error
+    assert (tmp_path / "stats.py").read_text() == content
+    assert _steps(result) == [("text-0-0", "metabot/write_file", True)]
+
+
+async def test_calls_before_one_that_broke_off_are_made_and_the_broken_one_is_not(chat, tmp_path):
+    (tmp_path / "README.md").write_text("hello")
+    write = {"name": "write_file", "arguments": {"path": "out.txt", "content": "fixed"}}
+    broken = '{"name": "shell", "arguments": {"command":"git commit -m \'msg\'}}'
+    text = f"{json.dumps(READ)}\n{json.dumps(write)}\n{broken}"
+    fake = chat([text_reply(text), answer("done")])
+    result = await _run(_engine(fake), tmp_path, policy=Policy(allow_write=True))
+    assert result.ok, result.error
+    assert (tmp_path / "out.txt").read_text() == "fixed"
+    assert _steps(result) == [
+        ("text-0-0", "metabot/read_file", True),
+        ("text-0-1", "metabot/write_file", True),
+    ]
+    assert (
+        "openai: read 2 tool calls the model wrote as text; "
+        "the call after them broke off and was not made"
+    ) in _journal(result)["meta"]["notices"]
+
+
 async def test_an_answer_that_is_an_unreadable_call_fails_the_run(chat, tmp_path):
     fake = chat([text_reply('{"name": "delete_all", "arguments": {"path": "/"}}')])
     result = await _run(_engine(fake), tmp_path)

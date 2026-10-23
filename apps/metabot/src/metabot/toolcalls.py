@@ -5,6 +5,14 @@ arguments in a code fence, or get a tool's name nearly right. These functions
 read such a call when it can be read without guessing, and read nothing
 otherwise: a call MetaBot is not sure of is never made. Every call that is
 read still goes through the gate as the tool it resolves to.
+
+Two repairs read what a model plainly meant. Python's triple quotes written
+inside a JSON string are read as text: valid JSON never holds three quotes in
+a row, so the repair is tried after a parse fails and cannot change a call
+that was valid. When an answer is calls one after another and the last one
+breaks off before its JSON ends, ``leading_calls`` reads the complete ones and
+never the broken one. A call in a code fence inside a longer answer is never
+made: ``calls_in_fences`` names it, so the engine can ask for the call alone.
 """
 
 from __future__ import annotations
@@ -42,6 +50,8 @@ ALIASES = {
 
 _FENCE = re.compile(r"^```[A-Za-z0-9_-]*\s*\n?(.*?)\n?```$", re.S)
 _TAGS = re.compile(r"^<tool_call>\s*(.*?)\s*</tool_call>$", re.S)
+_FENCES = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\n(.*?)```", re.S)  # each fence in a longer text
+_TRIPLE = re.compile(r'(?<!\\)"""')  # three quotes in a row: never in valid JSON
 
 
 def unwrap(text: str) -> str:
@@ -96,9 +106,8 @@ def parse_args(raw: Any) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _objects(text: str) -> list[Any] | None:
-    """The JSON values the whole text is made of, one after another; None if it is not only that."""
-    text = unwrap(text)
+def _values(text: str) -> list[Any] | None:
+    """The JSON values ``text`` is made of, one after another; None if it is not only that."""
     decoder = json.JSONDecoder()
     values: list[Any] = []
     at = 0
@@ -112,7 +121,16 @@ def _objects(text: str) -> list[Any] | None:
         except ValueError:
             return None
         values.append(value)
-    if len(values) == 1 and isinstance(values[0], list):
+    return values
+
+
+def _objects(text: str) -> list[Any] | None:
+    """The JSON values the whole text is made of, one after another; None if it is not only that."""
+    text = unwrap(text)
+    values = _values(text)
+    if values is None and '"""' in text:  # Python's docstring quotes, meant as text
+        values = _values(_TRIPLE.sub(r'\\"\\"\\"', text))
+    if values and len(values) == 1 and isinstance(values[0], list):
         values = values[0]
     return values or None
 
@@ -152,6 +170,58 @@ def calls_in_text(
             return None
         calls.append((tool, args, name))
     return calls
+
+
+def leading_calls(
+    text: str, offered: Sequence[str]
+) -> list[tuple[str, dict[str, Any], str]] | None:
+    """The complete calls before a call that breaks off, in an answer made of calls.
+
+    The answer must be calls one after another, every one read as
+    ``calls_in_text`` reads them, until the JSON of one breaks: what is left
+    starts as an object and never parses. That one and anything after it is
+    never read. None when the whole answer parses, or when anything before the
+    break is not a call to an offered tool.
+    """
+    text = unwrap(text)
+    if '"""' in text:
+        text = _TRIPLE.sub(r'\\"\\"\\"', text)
+    decoder = json.JSONDecoder()
+    calls: list[tuple[str, dict[str, Any], str]] = []
+    at = 0
+    while at < len(text):
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at == len(text):
+            return None  # it all parsed: calls_in_text decides
+        try:
+            value, at = decoder.raw_decode(text, at)
+        except ValueError:
+            return calls if calls and text[at] == "{" else None
+        name, raw, shaped = _name_and_args(value)
+        tool = resolve_name(name, offered) if shaped else None
+        args = parse_args(raw) if tool else None
+        if tool is None or args is None:
+            return None
+        calls.append((tool, args, name))
+    return None
+
+
+def calls_in_fences(text: str, offered: Sequence[str]) -> list[str]:
+    """The tools named by calls a model wrote in code fences inside a longer answer.
+
+    None of them is made: the answer is more than the call, so whether the
+    model meant to make it, or to show it, is a guess. The engine asks for the
+    call alone instead.
+    """
+    if calls_in_text(text, offered) is not None:
+        return []  # the whole answer is calls: read as calls, not here
+    named: list[str] = []
+    for block in _FENCES.findall(text):
+        read = calls_in_text(block, offered)
+        if read:
+            named.extend(tool for tool, _args, _asked in read)
+    return named
 
 
 def call_shaped(text: str) -> bool:

@@ -37,7 +37,15 @@ from metabot.paths import metabot_home, private_dir, safe_id, write_private
 from metabot.scope_classes import ScopeClass
 from metabot.shell import TIMEOUT_EXIT, run_shell, stop_group
 from metabot.shell_policy import classify_shell
-from metabot.toolcalls import call_shaped, calls_in_text, parse_args, resolve_name, step_in_text
+from metabot.toolcalls import (
+    call_shaped,
+    calls_in_fences,
+    calls_in_text,
+    leading_calls,
+    parse_args,
+    resolve_name,
+    step_in_text,
+)
 
 MAX_TURNS = 20
 HTTP_TIMEOUT_S = 300.0
@@ -46,6 +54,7 @@ READ_LIMIT = 200_000
 OUTPUT_LIMIT = 20_000
 LIST_LIMIT = 500
 NUDGE_LIMIT = 2_000  # how much of the request is said again after each step, in JSON mode
+CALL_ALONE_ASKS = 2  # how often a run asks a model to make a call it wrote inside its answer
 SWITCHBOARD_PREFIX = "mcp__metabot__"
 
 SYSTEM = (
@@ -339,6 +348,7 @@ class OpenAIEngine:
         last_text = ""
         schema = mode == "json"  # dropped once, if the server refuses it
         steps = 0
+        asked_alone = 0
         for turn in range(MAX_TURNS):
             payload: dict[str, Any] = {"model": model, "messages": messages}
             if mode != "json":
@@ -395,6 +405,9 @@ class OpenAIEngine:
             calls = message.get("tool_calls") or []
             if not calls and content:
                 read = calls_in_text(content, names)
+                broke = False
+                if read is None and (lead := leading_calls(content, names)):
+                    read, broke = lead, True
                 if read:
                     calls = [
                         {
@@ -405,8 +418,10 @@ class OpenAIEngine:
                         for i, (tool, args, _asked) in enumerate(read)
                     ]
                     content = ""
+                    rest = "; the call after them broke off and was not made" if broke else ""
                     yield Notice(
                         f"openai: read {_count(len(calls), 'tool call')} the model wrote as text"
+                        + rest
                     )
                 elif call_shaped(content):
                     messages.append({"role": "assistant", "content": content})
@@ -416,6 +431,25 @@ class OpenAIEngine:
                     yield Final(content, session_id)
                     self._save_session(session_id, messages)
                     return
+                elif fenced := calls_in_fences(content, names):
+                    # A call inside a longer answer is never made; the model is asked once
+                    # more for the call alone, and a run that keeps doing it fails.
+                    messages.append({"role": "assistant", "content": content})
+                    if asked_alone >= CALL_ALONE_ASKS:
+                        yield ErrorEvent(
+                            "openai: the model kept writing tool calls inside its answer; "
+                            "none was made"
+                        )
+                        yield Final(content, session_id)
+                        self._save_session(session_id, messages)
+                        return
+                    asked_alone += 1
+                    messages.append({"role": "user", "content": _call_alone(fenced)})
+                    yield Notice(
+                        f"openai: the model wrote {_count(len(fenced), 'tool call')} inside its "
+                        "answer; none was made, and it was asked for the call alone"
+                    )
+                    continue
             messages.append(
                 {
                     "role": "assistant",
@@ -475,6 +509,17 @@ def _nudge(prompt: str) -> str:
     return (
         f"\n\nThe request: {prompt[:NUDGE_LIMIT]}\n"
         "Reply with the next step, or with answer as soon as you can answer the request."
+    )
+
+
+def _call_alone(tools: list[str]) -> str:
+    """What a model hears when it wrote a tool call inside a longer answer."""
+    named = ", ".join(dict.fromkeys(tools))
+    return (
+        f"Your answer held a tool call inside its text ({named}), so it was not made. "
+        "To call a tool, reply with the call alone: one JSON object, "
+        '{"name": "<tool>", "arguments": {...}}, and no other text. '
+        "When the request is done, reply with your answer and no tool call."
     )
 
 
