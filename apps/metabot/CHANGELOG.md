@@ -22,7 +22,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 - `metabot doctor --models` checks whether each local model can call
   MetaBot's tools: by itself, by text that MetaBot reads, or held to a schema
   one step at a time. It keeps what it finds, and the engine asks each model
-  the way that works.
+  the way that works. A model that writes its calls as text is held to the
+  schema when it passes that way too.
 - A local model that writes Python's triple quotes unescaped inside a JSON
   tool call has the call read, with the quotes as text.
 - When a local model writes calls one after another and the last one breaks
@@ -33,10 +34,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   then fails the run, so an answer that shows a call and makes none does not
   end "ok".
 - `metabot ask --ladder` starts on the cheapest rung, and climbs only when
-  the record shows the rung failed. It stops instead after a declined call or
-  a write that went through. `metabot ladder` shows the rungs: by default the
-  local model, once probed, then the `build` role. `--max-cost` covers the
-  whole ladder, and each rung is a run with its own receipt.
+  the record shows the rung failed. It stops instead after a declined call.
+  `metabot ladder` shows the rungs: by default the local model, once probed,
+  then the `build` role. `--max-cost` covers the whole ladder, and each rung
+  is a run with its own receipt.
+- `metabot ask --ladder --check CMD` runs the command on each rung that
+  reaches its end within its limits, and the check judges the work: a failing
+  check climbs, and a passing one answers even when a call on the way did not
+  succeed. The checks are sealed as their own run.
+- In a git checkout, each rung of a ladder works in its own copy of the
+  project, so a failed rung's writes in its copy never reach the project.
+  The answering rung's work is applied to your working tree, and the patch
+  is kept. A copy is not a sandbox: a write the gate allows to an absolute
+  path reaches it.
+- In a copy, a call declined because no one was there to ask no longer
+  stops the ladder: the next rung meets the same gate. A person's no still
+  stops it.
 
 ### Changed
 
@@ -48,6 +61,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   that is nearly right runs the one tool it can mean. The journal notes each
   of these. An answer that is a call MetaBot cannot read fails the run, where
   it was shown as the answer.
+
+### Security
+
+- A desk's or a rung's work can rewrite its worktree's `.git` file, git's
+  link to the project's records; a search and replace over every file did.
+  MetaBot now keeps the file as git wrote it and puts it back before its own
+  git commits in the worktree or puts it back to its commit. In 0.1.x, a
+  desk's worktree whose `.git` file pointed at the project's own could have
+  the person's staged changes unstaged when MetaBot put the worktree back;
+  the files themselves stayed. A rung whose work still cannot be committed
+  in its copy climbs.
 
 ## [0.1.2] — 2026-10-21
 

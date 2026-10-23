@@ -218,6 +218,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run on the cheapest rung of metabot ladder first; climb only on a recorded failure",
     )
+    ask.add_argument(
+        "--check",
+        action="append",
+        metavar="CMD",
+        help="with --ladder: a command judged on each rung's work; a failing one climbs "
+        "(repeatable)",
+    )
     ask.add_argument("--json", action="store_true", help="print the result as one JSON object")
     ask.add_argument("-q", "--quiet", action="store_true", help="no trace on stderr")
     ask.add_argument(

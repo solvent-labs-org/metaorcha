@@ -240,7 +240,7 @@ def _fake_runs(tmp_path, outcomes: dict[int, dict], costs: dict[int, int | None]
     """A run_rung whose n-th rung ends as ``outcomes[n]`` says, recording what it was given."""
     given: list[tuple[Rung, str, dict, int | None]] = []
 
-    async def run_rung(rung, run_id, meta, cap):
+    async def run_rung(rung, run_id, meta, cap, where=None):
         given.append((rung, run_id, dict(meta), cap))
         n = meta["rung"]
         if outcomes.get(n) == "noprice":
@@ -298,7 +298,7 @@ def test_a_stop_never_starts_the_next_rung(tmp_path):
     declined = {"check": "scope_approval:c1", "result": "warn", "detail": "declined"}
     run_rung, given = _fake_runs(tmp_path, {})
 
-    async def declines(rung, run_id, meta, cap):
+    async def declines(rung, run_id, meta, cap, where=None):
         given.append((rung, run_id, meta, cap))
         return _ran(tmp_path, declined, ok=False, declined=1, run_id=run_id, cost_musd=0)
 
