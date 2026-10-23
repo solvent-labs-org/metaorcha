@@ -3,10 +3,13 @@
 A probe is a real round trip through the ``openai`` engine itself, in a
 read-only job in a temporary folder: the model is asked to read a file and
 reply with the word in it. It passes when the model read the file with a
-tool and answered with the word. It tries the model's own tool calls first,
-which MetaBot repairs when the model writes a call as text, and then
-constrained output. What it finds is kept per server and model in
-``models.json``, and the engine reads it to pick how it asks.
+tool and answered with the word. It tries the model's own tool calls, which
+MetaBot repairs when the model writes a call as text, and then constrained
+output. A model that calls tools cleanly by itself keeps its own calls. One
+that passed by text is held to the schema when it passes that way too: a call
+written as text breaks in more ways in real work than in a probe, and a
+schema leaves it no way to break. What it finds is kept per server and model
+in ``models.json``, and the engine reads it to pick how it asks.
 
 Only a server on this machine is probed: a probe of a hosted model costs money.
 """
@@ -120,13 +123,16 @@ async def probe_model(
         folder = Path(tmp)
         (folder / "probe.txt").write_text(word + "\n", encoding="utf-8")
         native = await _attempt(base_url, model, key_env, "native", folder, word)
-        if native.read and native.said:
-            if native.repaired:
-                return Probe("repaired", "wrote its call as text, and MetaBot read it")
+        by_text = native.read and native.said and native.repaired
+        if native.read and native.said and not native.repaired:
             return Probe("native", "called read_file and answered with the word")
         constrained = await _attempt(base_url, model, key_env, "json", folder, word)
         if constrained.read and constrained.said:
+            if by_text:
+                return Probe("json", "wrote its call as text, and passed held to a schema too")
             return Probe("json", "needs constrained output: read the file and answered by schema")
+        if by_text:
+            return Probe("repaired", "wrote its call as text, and MetaBot read it")
     unreachable = [e for e in native.errors + constrained.errors if "answered" in e or "reach" in e]
     if unreachable:
         return Probe("none", unreachable[-1].removeprefix("openai: ").strip()[:200])

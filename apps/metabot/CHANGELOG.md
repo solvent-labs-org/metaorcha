@@ -22,7 +22,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 - `metabot doctor --models` checks whether each local model can call
   MetaBot's tools: by itself, by text that MetaBot reads, or held to a schema
   one step at a time. It keeps what it finds, and the engine asks each model
-  the way that works.
+  the way that works. A model that writes its calls as text is held to the
+  schema when it passes that way too.
 - `metabot ask --ladder` starts on the cheapest rung, and climbs only when
   the record shows the rung failed. It stops instead after a declined call.
   `metabot ladder` shows the rungs: by default the local model, once probed,
