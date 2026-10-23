@@ -180,7 +180,8 @@ def test_relink_leaves_a_worktree_it_did_not_make_alone(repo, tmp_path):
     other = tmp_path / "other"
     _git(repo, "worktree", "add", "-q", "--detach", str(other))
     (other / ".git").write_text("gitdir: nowhere\n", encoding="utf-8")
-    assert relink(other) is False
+    put_back = relink(other)
+    assert put_back is False
     assert (other / ".git").read_text(encoding="utf-8") == "gitdir: nowhere\n"
 
 

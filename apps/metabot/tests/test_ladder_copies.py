@@ -142,7 +142,8 @@ def test_work_that_no_longer_fits_is_not_applied_and_its_copy_stays(repo):
     assert (repo / "hello.txt").read_text() == "the person changed it meanwhile\n"
     assert str(wt) in line and "nothing was changed" in line
     assert "metabot desks clean L" in line
-    assert copies.close(keep=1) == []
+    left = copies.close(keep=1)
+    assert left == []
     assert wt.exists()  # the work stays where the person can take it
     trees, _ = run_items(repo, "L")
     assert [path for path, _ in trees] == [wt.resolve()]  # and desks clean finds it
@@ -154,7 +155,8 @@ def test_closing_removes_every_copy(repo):
     one, two = copies.make(1), copies.make(2)
     copies.keep(1, "t", "L.1")
     copies.restore(1)
-    assert copies.close() == []
+    left = copies.close()
+    assert left == []
     assert not one.exists() and not two.exists()
     assert "rung-" not in _git(repo, "worktree", "list")
     assert not one.parent.exists()  # no empty folder left behind
@@ -199,7 +201,8 @@ def test_work_that_changed_its_copy_s_git_file_is_committed_in_the_copy(repo, ho
     assert _git(wt, "show", f"{commit}:hello.txt") == "from the rung\n"
     assert _state(repo) == before  # the person's HEAD, index and branches: byte for byte
     copies.restore(1)
-    assert copies.close() == []
+    left = copies.close()
+    assert left == []
 
 
 def test_a_copy_whose_git_file_changed_after_its_commit_is_still_removed(repo):
@@ -207,7 +210,8 @@ def test_a_copy_whose_git_file_changed_after_its_commit_is_still_removed(repo):
     assert copies is not None
     wt = copies.make(1)
     _break_link(wt, repo, "edited")
-    assert copies.close() == []
+    left = copies.close()
+    assert left == []
     assert not wt.exists()
 
 
