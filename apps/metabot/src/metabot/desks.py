@@ -15,6 +15,13 @@ never committed.
 and never commits. ``clean`` removes a run's worktrees and branches after the
 person agrees, and keeps any desk whose work is not committed. Nothing here
 pushes.
+
+A worktree's ``.git`` file is git's link from the worktree to its records in
+the repository, and work run in the worktree can change it like any file: a
+search and replace did, on 10-22. Pointed at the project's own ``.git``, it
+would turn MetaBot's commit in the worktree into a commit on the person's
+branch. So ``create_worktree`` keeps the file as git wrote it, and
+``relink`` puts it back before MetaBot's own git runs there.
 """
 
 from __future__ import annotations
@@ -109,6 +116,31 @@ def is_ancestor(repo: Path, older: str, newer: str) -> bool:
     return proc.returncode == 0
 
 
+_LINKS: dict[Path, bytes] = {}  # each worktree this process made: its .git file as git wrote it
+
+
+def relink(wt: Path) -> bool:
+    """Put back the ``.git`` file of a worktree this process made, when the work
+    changed it; whether it had to. A worktree it did not make is left as it is."""
+    link = _LINKS.get(wt.resolve())
+    if link is None:
+        return False
+    dot = wt / ".git"
+    try:
+        if not dot.is_symlink() and dot.is_file() and dot.read_bytes() == link:
+            return False
+        if dot.is_dir() and not dot.is_symlink():
+            shutil.rmtree(dot)
+        elif dot.is_symlink() or dot.exists():
+            dot.unlink()
+        dot.write_bytes(link)
+    except OSError as exc:
+        raise DeskGitError(
+            f"cannot put back the worktree's .git file: {exc.strerror or exc}"
+        ) from None
+    return True
+
+
 def create_worktree(
     repo: Path, run_id: str, label: str, base: str, *, detached: bool = False
 ) -> Path:
@@ -125,8 +157,11 @@ def create_worktree(
     how = ["--detach"] if detached else ["-b", desk_branch(run_id, label)]
     try:
         git(repo, "worktree", "add", "--quiet", *how, str(path), sha)
+        _LINKS[path.resolve()] = (path / ".git").read_bytes()
     except GitError as exc:
         raise DeskGitError(f"cannot make the worktree for {label}: {exc}") from None
+    except OSError as exc:
+        raise DeskGitError(f"cannot read the new worktree's .git file: {exc}") from None
     return path
 
 
@@ -145,19 +180,20 @@ def commit_desk(
     wt: Path, desk: str, task: str, run_id: str, branch: str | None = None
 ) -> str | None:
     """Commit what a desk changed; the new commit's sha, or None when nothing changed."""
+    relink(wt)
     if branch is not None:
         on = git(wt, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip()
         if on != f"refs/heads/{branch}":
             raise DeskGitError(f"desk {desk} left its branch {branch}; its work was not committed")
-    git(wt, "add", "--all", "--", ".", EXCLUDE)
-    if git(wt, "diff", "--cached", "--quiet", check=False).returncode == 0:
-        return None
-    subject, trailer = commit_message(desk, task, run_id)
     try:
+        git(wt, "add", "--all", "--", ".", EXCLUDE)
+        if git(wt, "diff", "--cached", "--quiet", check=False).returncode == 0:
+            return None
+        subject, trailer = commit_message(desk, task, run_id)
         git(wt, "commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", subject, "-m", trailer)
+        return git(wt, "rev-parse", "HEAD").stdout.strip()
     except GitError as exc:
         raise DeskGitError(f"cannot commit desk {desk}'s work: {exc}") from None
-    return git(wt, "rev-parse", "HEAD").stdout.strip()
 
 
 def restore_worktree(wt: Path) -> None:
@@ -167,6 +203,7 @@ def restore_worktree(wt: Path) -> None:
     and an advisor files nothing: such files never reach a branch, and the
     worktree can be removed later. Ignored files and the desk's inbox stay.
     """
+    relink(wt)
     try:
         git(wt, "reset", "--quiet", "--hard", "HEAD")
         git(wt, "clean", "-d", "--force", "--quiet", f"--exclude=/{HANDOFF_DIR}")

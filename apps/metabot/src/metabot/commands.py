@@ -189,10 +189,12 @@ async def ask_once(
     engine: Any = None,
     limits: Any = None,
     extra_meta: Mapping[str, Any] | None = None,
+    receipt_project: Path | None = None,
 ) -> Any:
     """One run as ``ask`` makes it. ``approver`` answers the gate, by default this terminal;
     ``engine`` is the engine itself, for a caller that makes its own; ``extra_meta`` joins
-    the run's meta."""
+    the run's meta; ``receipt_project`` is the project a receipt copy goes to, when the run
+    works somewhere else, as a ladder rung in its copy does."""
     from metabot.plugins import enabled_plugins
     from metabot.runner import run_job
 
@@ -221,7 +223,7 @@ async def ask_once(
         switchboard=connections and bool(store.active()),
         on_event=trace,
         meta=meta or None,
-        project=cwd if project_receipts_on(project_receipt) else None,
+        project=(receipt_project or cwd) if project_receipts_on(project_receipt) else None,
         limits=limits,
     )
 
@@ -251,6 +253,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
     from metabot.runner import Limits, NoPrice, RunCancelled
 
     trace = Trace(quiet=args.quiet)
+    if args.check and not args.ladder:
+        _err("--check goes with --ladder: a failing check makes the ladder climb")
+        return EXIT_USAGE
     if args.ladder:
         return _ask_ladder(args, trace)
     prompt: str | None = None
@@ -376,8 +381,10 @@ def _show_result(
 
 def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
     """``ask --ladder``: the cheapest rung first, climbing only on a failure the record shows."""
+    from metabot.checks import refusal
     from metabot.engines import get_engine
     from metabot.ladder import LadderError, Rung, attempts, effective_ladder, run_ladder, spent_line
+    from metabot.ladder_copies import Copies, CopyError
     from metabot.paths import new_run_id
     from metabot.roster import RosterError
     from metabot.runner import Limits, NoPrice, RunCancelled
@@ -405,6 +412,11 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
     if not cwd.is_dir():
         _err(f"{cwd} is not a directory")
         return EXIT_USAGE
+    checks = {f"ask:{n}": command for n, command in enumerate(args.check or [], 1)}
+    refused = refusal(checks)
+    if refused:
+        _err(refused.replace("change them in office.yaml", "change the --check"))
+        return EXIT_USAGE
     cfg = load_config()
     try:
         rungs, whose, note = effective_ladder(cfg)
@@ -425,12 +437,29 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
         + ("; private, so only rungs on this machine" if private else "")
     )
 
-    async def run_rung(rung: Rung, run_id: str, meta: dict[str, Any], cap: int | None) -> Any:
+    ladder_id = new_run_id()
+    copies = None
+    if not args.read_only:  # a read-only rung changes nothing, so it needs no copy
+        try:
+            copies = Copies.start(cwd, ladder_id)
+        except CopyError as exc:
+            trace.line(f"[metabot] {exc}; every rung works here")
+        if copies is None:
+            trace.note("[metabot] not a git checkout: every rung works here, in place")
+        else:
+            trace.note(
+                f"[metabot] each rung works in its own copy of the project ({copies.base[:12]})"
+            )
+
+    async def run_rung(
+        rung: Rung, run_id: str, meta: dict[str, Any], cap: int | None, where: Path | None
+    ) -> Any:
         trace.note(f"[metabot] rung {meta['rung']}: {rung.label()} ({rung.tier})")
         return await ask_once(
             engine_name=rung.engine,
             prompt=prompt,
-            cwd=cwd,
+            cwd=where or cwd,
+            receipt_project=cwd,
             model=rung.model,
             allow_write=args.allow_write,
             allows=args.allow,
@@ -454,13 +483,17 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
                 rungs,
                 run_rung,
                 cfg=cfg,
-                ladder_id=new_run_id(),
+                ladder_id=ladder_id,
                 max_attempts=most,
                 max_cost_musd=args.max_cost,
                 private=private,
                 gated=gated,
                 on_line=lambda text: trace.note(f"[metabot] {text}"),
                 no_price=NoPrice,
+                checks=checks or None,
+                copies=copies,
+                task=prompt,
+                cwd=cwd,
             )
         )
     except (RunCancelled, KeyboardInterrupt) as exc:
@@ -471,6 +504,8 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
     result = ladder.final
     if ladder.stopped:  # why there is no answer, so said even when quiet
         trace.line(f"[metabot] the ladder stopped: {ladder.stopped}")
+    if ladder.applied is False and ladder.apply_note:  # the work is not in the project
+        trace.line(f"[metabot] {ladder.apply_note}")
     if result is None:
         if args.json:
             print(json.dumps({"ok": False, "ladder": ladder.to_json()}))

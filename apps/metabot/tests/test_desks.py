@@ -19,7 +19,9 @@ from metabot.desks import (
     desk_label,
     diff_stat,
     pick,
+    relink,
     resolve_commit,
+    restore_worktree,
 )
 from metabot.desks import clean as clean_run
 
@@ -135,6 +137,52 @@ def test_a_desk_that_left_its_branch_is_reported(repo):
     with pytest.raises(DeskGitError, match="left its branch"):
         commit_desk(wt, "dev", "task", "mb-1.dev", branch="metabot/mb-1/dev")
     assert _git(wt, "log", "-1", "--format=%s").strip() == "first"
+
+
+def _point_at_the_project(wt: Path, repo: Path) -> None:
+    """What a search and replace over a desk's work can do to its .git file."""
+    (wt / ".git").write_text(f"gitdir: {repo / '.git'}\n", encoding="utf-8")
+
+
+def _stage_something(repo: Path) -> bytes:
+    (repo / "staged.txt").write_text("the person's\n", encoding="utf-8")
+    _git(repo, "add", "staged.txt")
+    return (repo / ".git" / "index").read_bytes()
+
+
+def test_a_desk_that_pointed_its_git_file_at_the_project_commits_on_its_own_branch(repo):
+    first = _head(repo)
+    wt = create_worktree(repo, "mb-1", "dev", "HEAD")
+    link = (wt / ".git").read_bytes()
+    index = _stage_something(repo)
+    (wt / "greeting.txt").write_text("hi\n", encoding="utf-8")
+    _point_at_the_project(wt, repo)
+    sha = commit_desk(wt, "dev", "task", "mb-1.dev", branch=desk_branch("mb-1", "dev"))
+    assert (wt / ".git").read_bytes() == link
+    assert sha and _git(repo, "rev-parse", desk_branch("mb-1", "dev")).strip() == sha
+    assert _head(repo) == first  # nothing landed on the person's branch
+    assert (repo / ".git" / "index").read_bytes() == index  # their staged file is still staged
+
+
+def test_restoring_a_desk_that_pointed_its_git_file_at_the_project_leaves_the_project(repo):
+    wt = create_worktree(repo, "mb-1", "dev", "HEAD")
+    index = _stage_something(repo)
+    status = _git(repo, "status", "--porcelain=v1")
+    (wt / "scratch.txt").write_text("what ran after the desk\n", encoding="utf-8")
+    _point_at_the_project(wt, repo)
+    restore_worktree(wt)
+    assert (repo / ".git" / "index").read_bytes() == index
+    assert _git(repo, "status", "--porcelain=v1") == status
+    assert not (wt / "scratch.txt").exists()
+
+
+def test_relink_leaves_a_worktree_it_did_not_make_alone(repo, tmp_path):
+    other = tmp_path / "other"
+    _git(repo, "worktree", "add", "-q", "--detach", str(other))
+    (other / ".git").write_text("gitdir: nowhere\n", encoding="utf-8")
+    put_back = relink(other)
+    assert put_back is False
+    assert (other / ".git").read_text(encoding="utf-8") == "gitdir: nowhere\n"
 
 
 def test_task_with_quotes_and_a_leading_dash_is_one_message(repo):
