@@ -68,9 +68,11 @@ MetaBot reads it at call time and never stores it.
 `metabot doctor --models` checks whether each model on a local server can call
 MetaBot's tools. Through the engine itself, it asks each model to read a file
 and say what is in it, and it keeps what it finds. A model that calls tools by
-itself runs as it is. When a model writes its call as text, MetaBot reads the
-call, and the journal says so. A model that does neither is asked for one step
-at a time, held to a schema of the tools. A server on another machine is not
+itself runs as it is. A model that writes its call as text is asked for one
+step at a time, held to a schema of the tools, when it passes that way too:
+text calls break in more ways in real work than in the check. When it does not
+pass by schema, MetaBot reads its text calls, and the journal says so. A model
+that does neither is held to the schema. A server on another machine is not
 checked, because a check there costs money.
 
 Roles map kinds of work to an engine and a model: `fast`, `build`, `review`,
