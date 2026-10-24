@@ -4,7 +4,7 @@ All notable changes to MetaBot (`apps/metabot`) are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] — 2026-10-25
 
 ### Added
 
