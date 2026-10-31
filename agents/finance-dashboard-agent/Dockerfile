@@ -1,21 +1,20 @@
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
+COPY --from=ghcr.io/astral-sh/uv:latest@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /usr/local/bin/uv
+
 WORKDIR /app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Exact versions, taken from this agent's uv.lock. Floors (>=) let the image
-# drift to whatever resolved on build day, so two builds of the same commit
-# could ship different dependency trees.
+# The lock is the pin. A version floor, or an exact version with no hash,
+# still accepts whatever bytes the index serves for that version on build day.
+# --require-hashes rejects a wheel that is not the one uv.lock recorded.
 COPY agents/finance-dashboard-agent/pyproject.toml agents/finance-dashboard-agent/uv.lock ./
-RUN pip install --no-cache-dir \
-    "mcp[cli]==1.30.0" \
-    "fastmcp==3.4.5" \
-    "starlette==1.3.1" \
-    "uvicorn[standard]==0.52.1" \
-    "python-dotenv==1.2.2"
+RUN uv export --frozen --no-dev --no-emit-project --no-header -o /tmp/req.txt && \
+    uv pip install --system --no-cache --require-hashes -r /tmp/req.txt && \
+    rm -f /usr/local/bin/uv /tmp/req.txt
 
 COPY agents/finance-dashboard-agent/server.py ./
 
