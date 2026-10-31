@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import subprocess
@@ -389,6 +390,181 @@ def test_find_office_from_a_linked_worktree_answers_the_main_tree(tmp_path):
     assert find_office(linked / "sub") == repo.resolve()
 
 
+def _linked_office(tmp_path: Path, linked: Path | None = None) -> tuple[Path, Path]:
+    """repo/team holds main-office, and a linked worktree's team folder worktree-office;
+    the worktree is ``linked``, beside the repository unless given."""
+    team = _office(tmp_path / "repo" / "team", {"dev": _desk()}, name="main-office")
+    repo = team.parent
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "MetaBot Test")
+    _git(repo, "config", "user.email", "metabot-test@example.invalid")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "office")
+    linked = linked or tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "--detach", str(linked))
+    _office(linked / "team", {"dev": _desk()}, name="worktree-office")
+    return team, linked / "team"
+
+
+def test_a_main_tree_whose_office_cannot_be_read_is_named_not_swapped_for_the_worktree_s(
+    tmp_path, capsys, path_checks
+):
+    team, here = _linked_office(tmp_path)
+    team.chmod(0o600)
+    try:
+        if os.access(team, os.X_OK):
+            pytest.skip("this user enters any folder")
+        code, out, err = _check(capsys, "--dir", str(here))
+    finally:
+        team.chmod(0o755)
+    assert code == 2 and "worktree-office" not in out
+    assert f"cannot read {team.resolve() / 'office.yaml'}: Permission denied" in err
+
+
+@pytest.mark.parametrize("shut", ["tree", "git", "record"])
+def test_a_linked_worktree_git_cannot_read_still_names_the_main_tree_s_office(
+    tmp_path, capsys, monkeypatch, path_checks, shut
+):
+    team, here = _linked_office(tmp_path)
+    repo = team.parent
+    door, mode = {
+        "tree": (repo, 0o600),
+        "git": (repo / ".git", 0o000),
+        "record": (repo / ".git" / "worktrees" / "linked", 0o000),  # before: its own office
+    }[shut]
+    door.chmod(mode)
+    try:
+        if os.access(door, os.X_OK):
+            pytest.skip("this user enters any folder")
+        given = _check(capsys, "--dir", str(here))
+        monkeypatch.chdir(here)
+        found = _check(capsys)
+    finally:
+        door.chmod(0o755)
+    for code, out, err in (given, found):
+        assert "worktree-office" not in out
+        if shut == "tree":  # git cannot enter the main tree, and neither can MetaBot
+            assert code == 2
+            assert f"cannot read {team.resolve() / 'office.yaml'}: Permission denied" in err
+        else:  # git cannot read the repository, and the main tree's office is there to read
+            assert code == 0 and "main-office" in out
+
+
+def test_a_main_tree_whose_name_is_not_utf_8_is_named_as_well(tmp_path, capsys, path_checks):
+    team, here = _linked_office(tmp_path / os.fsdecode(b"caf\xe9"))  # a .git file holds bytes
+    repo = team.parent
+    repo.chmod(0o600)
+    try:
+        if os.access(repo, os.X_OK):
+            pytest.skip("this user enters any folder")
+        code, out, err = _check(capsys, "--dir", str(here))
+    finally:
+        repo.chmod(0o755)
+    assert "worktree-office" not in out  # before: taken for a pruned worktree, by another name
+    assert code == 2 and "office.yaml: Permission denied" in err
+
+
+@pytest.mark.parametrize("how", ["pruned", "replaced", "declined", "garbled"])
+def test_a_worktree_git_no_longer_knows_or_declines_reads_its_own_office(
+    tmp_path, capsys, monkeypatch, how
+):
+    team, here = _linked_office(tmp_path)
+    repo = team.parent
+    if how == "pruned":  # as git worktree prune leaves it
+        shutil.rmtree(repo / ".git" / "worktrees" / "linked")
+    elif how == "garbled":  # its .git file names a record no file can be: before, a traceback
+        (here.parent / ".git").write_bytes(b"gitdir: /nowhere\x00x/.git/worktrees/linked\n")
+    elif how == "replaced":  # the main tree moved, and another project stands where it was
+        repo.rename(tmp_path / "moved")
+        other = _office(tmp_path / "repo" / "team", {"dev": _desk()}, name="another-project")
+        _git(other.parent, "init", "-q")
+    else:  # git looks no higher than the worktree's folder, on purpose
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(here.parent))
+    code, out, err = _check(capsys, "--dir", str(here))
+    assert code == 0 and "worktree-office" in out, err
+
+
+@pytest.mark.parametrize(
+    "lost", [errno.ENOTCONN, errno.EIO, errno.ESTALE], ids=["ENOTCONN", "EIO", "ESTALE"]
+)
+def test_a_main_tree_on_a_disk_that_went_away_is_named_not_swapped_for_the_worktree_s(
+    tmp_path, capsys, monkeypatch, lost
+):
+    team, here = _linked_office(tmp_path)
+    repo = team.parent
+    gone, stat = str(repo.resolve()), os.stat
+
+    def stat_on_a_lost_mount(path, *args, **kwargs):  # as a network mount that dropped
+        if os.fspath(path).startswith(gone):
+            raise OSError(lost, os.strerror(lost), os.fspath(path))
+        return stat(path, *args, **kwargs)
+
+    repo.chmod(0o600)  # and git, which runs apart, cannot enter it either
+    try:
+        if os.access(repo, os.X_OK):
+            pytest.skip("this user enters any folder")
+        monkeypatch.setattr(os, "stat", stat_on_a_lost_mount)
+        code, out, err = _check(capsys, "--dir", str(here))
+        monkeypatch.undo()
+    finally:
+        repo.chmod(0o755)
+    assert code == 2 and "worktree-office" not in out  # before: the worktree's own was read
+    assert f"cannot read {team.resolve() / 'office.yaml'}" in err
+
+
+def test_office_check_from_a_linked_worktree_reads_the_office_its_dir_reads(
+    tmp_path, capsys, monkeypatch, path_checks
+):
+    _team, here = _linked_office(tmp_path)
+    shut = tmp_path / "shut"
+    shut.mkdir()
+    (shut / "office.yaml").write_text("name: shut\n", encoding="utf-8")
+    (here / "office.yaml").unlink()
+    (here / "office.yaml").symlink_to(shut / "office.yaml")
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        given = _check(capsys, "--dir", str(here))
+        monkeypatch.chdir(here)
+        found = _check(capsys)
+    finally:
+        shut.chmod(0o755)
+    assert found == given
+    assert found[0] == 0 and "main-office" in found[1]
+
+
+def _removed_folder(tmp_path: Path, monkeypatch) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+
+
+def test_office_and_desks_commands_from_a_removed_folder_say_why(tmp_path, capsys, monkeypatch):
+    _removed_folder(tmp_path, monkeypatch)
+    for argv in (
+        ["office", "check"],
+        ["office", "trust", "--yes"],
+        ["office", "run", "hi"],
+        ["desks", "list"],
+        ["desks", "pick", "r/dev"],
+        ["desks", "clean", "r", "--yes"],
+    ):
+        assert main(argv) == 2, argv
+        out, err = capsys.readouterr()
+        assert "the current folder cannot be read" in err and "give --dir" in err, argv
+
+
+def test_a_relative_pinned_office_from_a_removed_folder_says_why(tmp_path, capsys, monkeypatch):
+    _office(tmp_path / "off", {"dev": _desk()})
+    _removed_folder(tmp_path, monkeypatch)
+    monkeypatch.setenv("DESK_OFFICE", "../off")
+    code, out, err = _check(capsys)
+    assert code == 2 and out == ""
+    assert "cannot read ../off/office.yaml: the current folder cannot be read" in err
+
+
 def _check(capsys, *argv: str) -> tuple[int, str, str]:
     code = main(["office", "check", *argv])
     out, err = capsys.readouterr()
@@ -417,6 +593,52 @@ def test_office_check_prints_desks_engines_and_checks(tmp_path, capsys):
     assert "openai/qwen2.5:3b" in local and "fan 2" in local
     assert any("ready:tests" in line and "make test" in line for line in lines)
     assert any(line.strip().startswith("! aider:") and "engine:" in line for line in lines)
+
+
+def test_office_check_names_a_folder_it_cannot_reach_or_enter(tmp_path, capsys):
+    import os
+
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    code, _out, err = _check(capsys, "--dir", str(loop))
+    assert code == 2 and err == f"metabot: {loop} is not a directory\n"
+    shut = _office(tmp_path / "shut", {"dev": _desk()})
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        code, _out, err = _check(capsys, "--dir", str(shut))
+    finally:
+        shut.chmod(0o755)
+    assert code == 2 and "office.yaml: cannot read" in err and "Permission denied" in err
+
+
+def test_office_check_from_a_folder_it_cannot_look_in_says_why(
+    tmp_path, capsys, monkeypatch, path_checks
+):
+    shut = tmp_path / "shut"
+    here = shut / "here"
+    here.mkdir(parents=True)
+    monkeypatch.chdir(here)
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        code, out, err = _check(capsys)
+    finally:
+        shut.chmod(0o755)
+    assert code == 2 and out == ""
+    assert f"cannot read {here / 'office.yaml'}: Permission denied" in err
+
+
+def test_office_check_names_a_pinned_office_that_is_a_loop_of_links(tmp_path, capsys, monkeypatch):
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    monkeypatch.setenv("DESK_OFFICE", str(loop))
+    assert find_office(tmp_path) == loop
+    code, out, err = _check(capsys)
+    assert code == 2 and out == ""
+    assert f"cannot read {loop / 'office.yaml'}: Too many levels of symbolic links" in err
 
 
 def test_office_check_names_a_desk_whose_engine_command_is_not_on_path(

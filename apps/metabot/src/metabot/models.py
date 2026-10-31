@@ -61,7 +61,7 @@ def _key(base_url: str, model: str) -> str:
 def _read() -> dict[str, Any]:
     try:
         data = json.loads(models_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 

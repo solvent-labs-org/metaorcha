@@ -121,6 +121,23 @@ async def _relay(root: Path, engines: dict, **kw):
     )
 
 
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_an_answer_naming_a_file_whose_name_is_not_utf_8_is_kept_and_handed_on(
+    tmp_path, engines, read_only
+):
+    name = os.fsdecode(b"caf\xe9.txt")  # a name as Python reads it from the disk
+    engines["claude"].act = lambda job: f"PLAN: wrote {name}"
+    root = _repo(tmp_path, {**DESKS, "plan": {**DESKS["plan"], "read_only": read_only}})
+    result = await _relay(root, engines)
+    # before: the office run stopped at the plan desk, "'utf-8' codec can't encode character
+    # '\udce9'", with its work not committed and no desk after it run
+    assert result.ok, [(r.desk, r.error) for r in result.rows]
+    shown = "PLAN: wrote caf\\udce9.txt"  # as `ask` prints it
+    assert result.rows[0].artefact.read_text(encoding="utf-8") == shown
+    inbox = Path(engines["codex"].jobs[0].cwd) / ".metabot" / "inbox"
+    assert (inbox / "plan.md").read_text(encoding="utf-8") == shown
+
+
 async def test_relay_runs_desks_in_order_each_with_the_earlier_answers(tmp_path, home, engines):
     root = _repo(tmp_path)
     result = await _relay(root, engines)

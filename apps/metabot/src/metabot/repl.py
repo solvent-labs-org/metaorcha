@@ -10,15 +10,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from metabot import __version__
-from metabot.approvals import terminal_safe
+from metabot.approvals import printable, terminal_safe
 from metabot.console import Trace
-from metabot.engines import ENGINES
+from metabot.engines import engine_names, known_engine
 
 HELP = """\
 /engine NAME   switch engine ({engines}); starts a new conversation
@@ -53,7 +52,7 @@ def repl(
     options = dict(options or {})
     session: str | None = None
     last: Any = None
-    write(f"metabot {__version__}: {engine} in {cwd}. /help lists commands.")
+    write(f"metabot {__version__}: {engine} in {printable(str(cwd), 2000)}. /help lists commands.")
     while True:
         try:
             line = read_line(f"{engine}> ")
@@ -72,19 +71,19 @@ def repl(
             if command in ("/exit", "/quit"):
                 return 0
             if command == "/help":
-                write(HELP.format(engines=", ".join(ENGINES)))
+                write(HELP.format(engines=", ".join(engine_names())))
             elif command == "/new":
                 session = None
                 write("new conversation")
             elif command == "/engine":
-                if arg in ENGINES:
+                if known_engine(arg):
                     engine, session = arg, None
                     options.pop("role", None)  # the role named the last engine
                     if options and options.pop("model", None):
                         write("the model you chose was for the last engine; using this one's own")
                     write(f"engine {engine}; new conversation")
                 else:
-                    write(f"unknown engine {arg!r}; choose one of: {', '.join(ENGINES)}")
+                    write(f"unknown engine {arg!r}; choose one of: {', '.join(engine_names())}")
             elif command == "/receipt":
                 write(receipt_line(last)[0] if last is not None else "no run yet")
             else:
@@ -123,6 +122,7 @@ def repl(
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
+    from metabot.cmdline import given_folder
     from metabot.commands import EXIT_USAGE, default_engine
     from metabot.roster import RosterError, pick
 
@@ -132,9 +132,9 @@ def cmd_chat(args: argparse.Namespace) -> int:
         print(f"metabot: {exc}")
         return EXIT_USAGE
     engine = engine or default_engine()
-    cwd = Path(args.cwd or os.getcwd()).resolve()
-    if not cwd.is_dir():
-        print(f"metabot: {cwd} is not a directory")
+    cwd, usable = given_folder(args.cwd)
+    if not usable:
+        print(f"metabot: {printable(str(cwd), 2000)} is not a directory")
         return EXIT_USAGE
     with contextlib.suppress(ImportError):
         import readline  # noqa: F401  (line editing and history for input())

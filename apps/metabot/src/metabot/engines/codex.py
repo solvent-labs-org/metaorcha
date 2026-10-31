@@ -16,8 +16,11 @@ Tested against codex-cli 0.154.0.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any
 
+from metabot import sandbox
 from metabot.config import Config, load_config
 from metabot.engines.base import CliEngine, EngineJob
 from metabot.events import (
@@ -45,9 +48,32 @@ class CodexEngine(CliEngine):
     binary = "codex"
     tool_prefix = "codex"
     skip_tools = ("mcp/metabot/",)
+    read_only_mode = "its read-only sandbox"
+    also_sees = "its built-in skills"
 
     def __init__(self, config: Config | None = None) -> None:
         self.config = config if config is not None else load_config()
+        if not self.config.codex_ignore_user_config:  # then its own home is not hidden
+            self.also_sees = (
+                "its built-in skills, your own codex home's config.toml, AGENTS.md, skills "
+                "and plugins, and, in a folder outside your home folder, the skills in "
+                "~/.agents/skills: codex_ignore_user_config is off"
+            )
+
+    def user_instructions(
+        self, cwd: Path | None = None, *, copy_of: Path | None = None
+    ) -> list[Path]:
+        """With the person's own codex settings skipped, their skills and plugins too.
+
+        Never ``rules``: those say which commands codex may run, and a rule that
+        forbids one keeps forbidding it.
+        """
+        if not self.config.codex_ignore_user_config:
+            return []
+        raw = os.environ.get("CODEX_HOME")
+        codex = Path(raw) if raw and Path(raw).is_absolute() else sandbox.user_home() / ".codex"
+        found = [codex / name for name in ("AGENTS.md", "AGENTS.override.md", "plugins", "skills")]
+        return sandbox.present([*found, sandbox.user_home() / ".agents" / "skills"])
 
     def argv(self, job: EngineJob) -> list[str]:
         argv = [self.binary, "exec"]
@@ -112,7 +138,9 @@ class CodexEngine(CliEngine):
             return [*events, ToolResult(item_id, {"status": status}, status == "completed")]
         if kind == "mcp_tool_call":
             ok = item.get("status") == "completed" and not item.get("error")
-            result = item.get("result") if ok else {"error": item.get("error")}
+            error = item.get("error")
+            # A call that failed with no error of codex's own holds why in its result.
+            result = item.get("result") if ok or error is None else {"error": error}
             return [*events, ToolResult(item_id, result, ok)]
         if kind == "web_search":
             return [*events, ToolResult(item_id, {}, True)]

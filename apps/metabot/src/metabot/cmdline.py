@@ -5,7 +5,9 @@ can use it.
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,6 +33,24 @@ def resolve_allows(raw: list[str], engine: Any, store: ConnectionStore) -> froze
                 pass
         out.add(f"{engine.tool_prefix}/{item}")
     return frozenset(out)
+
+
+def given_folder(raw: str | None) -> tuple[Path, bool]:
+    """The folder a command was given, else the current one, resolved, and whether it
+    is a folder to work in: a loop of links, or one past a folder that cannot be
+    entered, is not."""
+    try:
+        path = Path(raw or os.getcwd())
+    except OSError:  # the current folder was removed
+        return Path(raw or "."), False
+    try:
+        path = path.resolve()
+        return path, path.is_dir()
+    except (OSError, RuntimeError):  # RuntimeError: a loop of links, before 3.13
+        try:
+            return Path(os.path.abspath(path)), False
+        except OSError:  # a relative name, from a folder that was removed
+            return path, False
 
 
 def read_prompt(words: list[str]) -> str:

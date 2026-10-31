@@ -36,15 +36,21 @@ from emerge.preimage import redact_credentials
 from mcp_types import Tool
 
 from metabot.approvals import DenyAll
-from metabot.config import MODEL_RE, Config, ConfigError, load_config
-from metabot.connections import Connection, ConnectionFileError, ConnectionStore
+from metabot.config import MODEL_RE, Config, ConfigError, configured_keys, load_config
+from metabot.connections import (
+    Connection,
+    ConnectionFileError,
+    ConnectionStore,
+    merged_secrets,
+)
 from metabot.cron import Cron, CronError, zone
-from metabot.engines import ENGINES, get_engine
+from metabot.engines import bridge_keeps_read_only, engine_names, get_engine, known_engine
 from metabot.gate import Policy
 from metabot.paths import metabot_home, new_run_id, receipts_dir, run_path, safe_id, write_private
 from metabot.receipts import acceptance_of
 from metabot.scope_classes import ScopeClass, is_recognised, is_valid_capability_id
 from metabot.switchboard import classify
+from metabot.upstream import misplaced_copy
 
 ROUTINES = "routines.json"
 FIRINGS = "firings.jsonl"
@@ -119,9 +125,15 @@ def _check_shape(spec: RoutineSpec) -> None:
         raise RoutineError("goal", "a routine needs a goal")
     if len(spec.goal) > GOAL_LIMIT:
         raise RoutineError("goal", f"at most {GOAL_LIMIT} characters")
-    if spec.engine not in ENGINES:
-        choices = ", ".join(ENGINES)
+    if not known_engine(spec.engine):
+        choices = ", ".join(engine_names())
         raise RoutineError("engine", f"unknown engine {spec.engine!r}; choose one of: {choices}")
+    if not bridge_keeps_read_only(spec.engine):  # a routine's engine runs read-only
+        raise RoutineError(
+            "engine",
+            f"bridge {spec.engine} does not keep to read-only (read_only: honored), "
+            "and a routine runs read-only",
+        )
     if spec.model is not None and not (isinstance(spec.model, str) and MODEL_RE.match(spec.model)):
         raise RoutineError("model", f"{spec.model!r} is not a model name")
     cwd = Path(str(spec.cwd))
@@ -164,8 +176,16 @@ def _connections(refs: Any, store: ConnectionStore) -> dict[str, Connection]:
             raise RoutineError("connections", f"no connection named {ref!r}") from None
         if not conn.active:
             raise RoutineError("connections", f"connection {conn.name} is {conn.state}")
+        refused = _misplaced(conn)
+        if refused:
+            raise RoutineError("connections", f"connection {conn.name}: {refused}")
         found[conn.id] = conn
     return found
+
+
+def _misplaced(conn: Connection) -> str | None:
+    """Why a connection's server never starts, as a plugin's copy outside this home."""
+    return misplaced_copy(conn.command) if conn.transport == "stdio" and conn.command else None
 
 
 def _allows(entries: Any, conns: Mapping[str, Connection], list_tools: ListTools) -> dict[str, str]:
@@ -274,7 +294,10 @@ def _load() -> dict[str, dict[str, Any]]:
     path = _path()
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except RecursionError:  # what every reader of the routines catches
+        raise ValueError(f"{path} is nested too deep to read") from None
     if not isinstance(data, dict):
         raise ValueError(f"{path} is not a routines file")
     return {k: v for k, v in data.items() if isinstance(v, dict)}
@@ -395,7 +418,7 @@ def firings(routine_id: str | None = None) -> list[Firing]:
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             firing = _row(json.loads(line))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if firing is None or (routine_id is not None and firing.routine_id != routine_id):
             continue
@@ -435,7 +458,7 @@ def _run_error(run_id: str) -> str | None:
     try:
         journal = json.loads((run_path(run_id) / "journal.json").read_text(encoding="utf-8"))
         error = journal["meta"].get("error")
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return None
     return str(error)[:REASON_LIMIT] if error else None
 
@@ -471,9 +494,12 @@ def _cannot_fire(record: Mapping[str, Any], store: ConnectionStore) -> str | Non
             return f"connection {did} was removed"
         if not conn.active:
             return f"connection {conn.name} is {conn.state}"
+        refused = _misplaced(conn)
+        if refused:
+            return f"connection {conn.name}: {refused}"
     if not Path(str(record.get("cwd"))).is_dir():
         return f"{record.get('cwd')} is not a folder"
-    if record.get("engine") not in ENGINES:
+    if not known_engine(record.get("engine")):
         return f"unknown engine {record.get('engine')!r}"
     return None
 
@@ -507,6 +533,7 @@ async def fire(
         cfg = load_config()
     except ConfigError as exc:  # so would the settings
         cfg, unreadable = Config(), unreadable or str(exc)
+    tokens = merged_secrets(tokens, configured_keys(cfg))  # and each key they name
 
     def row(state: str, run_id: str | None = None, reason: str | None = None,
             receipt: Path | str | None = None) -> Firing:  # fmt: skip

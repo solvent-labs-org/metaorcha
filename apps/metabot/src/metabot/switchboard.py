@@ -43,25 +43,29 @@ import anyio
 from emerge.preimage import output_preimage, redact_credentials
 from mcp_types import CallToolResult, TextContent, Tool
 
-from metabot.connections import Connection, ConnectionStore
+from metabot.connections import Connection, ConnectionStore, record_secrets
 from metabot.origins import (
     acts_on,
+    acts_on_the_page,
     browser_class,
     call_urls,
     moves_unsaid,
     origin_allowed,
     origin_of,
+    page_said,
 )
 from metabot.paths import write_private
 from metabot.plugins import skill_description
 from metabot.scope_classes import ScopeClass, resolve_scope_class
 from metabot.serverlog import RedactedLog
+from metabot.steps import MAY_HAVE_RUN, ascii_text
 from metabot.upstream import Upstream
 
 TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]")
 TOOL_NAME_LIMIT = 64
 PREVIEW_LIMIT = 2000
 OPEN_TIMEOUT_S = 30.0
+ASK_STOPPED = {"error": "declined: cancelled"}  # a call stopped, or unanswered, as it asked
 LINE_LIMIT = 64 * 1024 * 1024  # the longest message an engine may send
 SKILLS_LIST = "skills__list"
 SKILLS_LOAD = "skills__load"
@@ -72,12 +76,20 @@ Approve = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 Record = Callable[[dict[str, Any]], Awaitable[None]]
 
 
-def declared_class(tool: Tool) -> str | None:
-    """A server's explicit hints can only tighten the class, never loosen it."""
+def declared_class(tool: Tool, *, browser: bool = False) -> str | None:
+    """A server's explicit hints can only tighten the class, never loosen it.
+
+    A browser server's destructive hint is not taken for a call that acts on
+    the page, such as a click or typing. One marks every action destructive,
+    as it cannot know where the page is; the origins the person allowed say
+    that, so on them such a call is classed by its name, and anywhere else it
+    is destructive whatever the server says. Its other calls, on the tabs or
+    the window, keep the hint.
+    """
     hints = tool.annotations
     if hints is None:
         return None
-    if hints.destructive_hint is True:
+    if hints.destructive_hint is True and not (browser and acts_on_the_page(tool.name)):
         return "destructive"
     if hints.read_only_hint is False:
         return "write"
@@ -103,7 +115,7 @@ def classify(
     A browser connection's call is classed by the origin it acts on first: the
     urls in ``args``, else ``last_origin``, where its page was last sent.
     """
-    declared = declared_class(tool)
+    declared = declared_class(tool, browser=conn.origins is not None)
     override = conn.overrides.get(tool.name)
     if conn.origins is None:
         return resolve_scope_class(
@@ -115,13 +127,18 @@ def classify(
     return _tightened(browser_class(tool.name, allowed), declared, override)
 
 
+def listed_class(conn: Connection, tool: Tool) -> ScopeClass:
+    """A tool's class before any call; a browser's, on the origins it may act on."""
+    if conn.origins is None:
+        return classify(conn, tool)
+    on = browser_class(tool.name, True)
+    return _tightened(on, declared_class(tool, browser=True), conn.overrides.get(tool.name))
+
+
 def class_label(conn: Connection, tool: Tool) -> str:
     """A tool's class as the engine and the person are shown it, before any call."""
-    if conn.origins is None:
-        return classify(conn, tool).label
-    on = browser_class(tool.name, True)
-    on = _tightened(on, declared_class(tool), conn.overrides.get(tool.name))
-    if on is ScopeClass.DESTRUCTIVE:
+    on = listed_class(conn, tool)
+    if conn.origins is None or on is ScopeClass.DESTRUCTIVE:
         return on.label
     return f"{on.label} on {', '.join(conn.origins)}; destructive elsewhere"
 
@@ -201,7 +218,7 @@ class Switchboard:
     async def __aenter__(self) -> Switchboard:
         await self._stack.__aenter__()
         try:
-            secrets_by_var = self.store.redaction_map()
+            secrets_by_var = record_secrets(self.store)  # a server may print a model's key
             self._log = RedactedLog(self.errlog, secrets_by_var)
             self._stack.callback(self._log.close)  # runs after every server has closed
             taken: set[str] = {SKILLS_LIST, SKILLS_LOAD}
@@ -229,6 +246,13 @@ class Switchboard:
 
     def has(self, name: str) -> bool:
         return name in self.routes or (bool(self.skills) and name in (SKILLS_LIST, SKILLS_LOAD))
+
+    def offers(self, name: str, *, read_only: bool = False) -> bool:
+        """Whether :meth:`tools` lists ``name`` for a job: a read-only job sees the reads alone."""
+        route = self.routes.get(name)
+        if route is None or not read_only:
+            return self.has(name)
+        return listed_class(route.conn, route.tool) is ScopeClass.READ
 
     def _skill_tools(self) -> list[Tool]:
         if not self.skills:
@@ -283,12 +307,14 @@ class Switchboard:
             return f"{file} is not a text file", False
         return data.decode("utf-8", errors="replace"), True
 
-    async def _skill_call(self, name: str, args: dict[str, Any]) -> CallToolResult:
+    async def _skill_call(
+        self, name: str, args: dict[str, Any], call_id: str | None = None
+    ) -> CallToolResult:
         started = time.monotonic()
-        call_id = self._call_id()
+        call_id = call_id or self._call_id()
         text, ok = self._skill(name, args)
         result = CallToolResult(content=[TextContent(type="text", text=text)], is_error=not ok)
-        await self.record(
+        await self._keep(
             {
                 "call_id": call_id,
                 "tool": f"metabot/{name.replace('__', '_')}",
@@ -300,9 +326,12 @@ class Switchboard:
         )
         return result
 
-    def tools(self) -> list[Tool]:
+    def tools(self, *, read_only: bool = False) -> list[Tool]:
+        """Every tool, each with its class; for a read-only job, the reads alone."""
         listed = self._skill_tools()
         for name, route in self.routes.items():
+            if read_only and listed_class(route.conn, route.tool) is not ScopeClass.READ:
+                continue
             label = class_label(route.conn, route.tool)
             description = f"[{label}] {route.tool.description or ''}".strip()
             listed.append(
@@ -317,15 +346,27 @@ class Switchboard:
         origin = self._pages[conn.id]
         return f"the page was last sent to {origin}" if origin else "the page's origin is not known"
 
-    def _sent(self, conn: Connection, capability: str, args: Mapping[str, Any], ok: bool) -> None:
+    def _sent(
+        self, conn: Connection, capability: str, args: Mapping[str, Any], result: CallToolResult
+    ) -> None:
         """After a browser call, where its page is now, when that is known."""
         if conn.origins is None:
             return
+        ok = not result.is_error
         urls = call_urls(args)
         if urls:
             self._pages[conn.id] = origin_of(urls[0]) if ok and len(urls) == 1 else None
         elif moves_unsaid(capability):
             self._pages[conn.id] = None  # back, forward or another tab: it does not say where
+        # The server says where its page is now, after a link or a redirect too. A
+        # page can write that line itself, so the line may take the page off an
+        # allowed origin and never onto one: only a call that carries the url can.
+        said, origin = page_said(c.text for c in result.content if isinstance(c, TextContent))
+        if said and (
+            not origin_allowed(origin, conn.origins)
+            or origin_allowed(self._pages.get(conn.id), conn.origins)
+        ):
+            self._pages[conn.id] = origin
 
     def _call_id(self) -> str:
         self._count += 1
@@ -335,7 +376,7 @@ class Switchboard:
         self, call_id: str, conn: Connection, capability: str, args: Any, output: Any, ok: bool,
         started: float,
     ) -> None:  # fmt: skip
-        await self.record(
+        await self._keep(
             {
                 "call_id": call_id,
                 "tool": f"{conn.id}#{capability}",
@@ -346,14 +387,35 @@ class Switchboard:
             }
         )
 
-    async def call(self, name: str, args: dict[str, Any]) -> CallToolResult:
+    async def _keep(self, step: dict[str, Any]) -> None:
+        """Send ``step`` to the record, which a stop never cuts off: the run counts the call,
+        so its record has it. A stopped engine's switchboard has until it is killed."""
+        with anyio.CancelScope(shield=True):
+            await self.record(step)
+
+    async def call(
+        self, name: str, args: dict[str, Any], call_id: str | None = None
+    ) -> CallToolResult:
+        """One call, recorded under ``call_id``: an in-process engine's own id for it, so the
+        step takes the place of the call it asked."""
         if self.skills and name in (SKILLS_LIST, SKILLS_LOAD):
-            return await self._skill_call(name, args)
+            return await self._skill_call(name, args, call_id)
         route = self.routes.get(name)
-        if route is None:
-            return _error(f"metabot: no tool named {name}")
+        if route is None:  # the engine said it called it: the record says it failed
+            reason = f"no tool named {name}"
+            await self._keep(
+                {
+                    "call_id": call_id or self._call_id(),
+                    "tool": ascii_text(f"metabot/{name}"),
+                    "args": args,
+                    "output": {"error": reason},
+                    "success": False,
+                    "latency_ms": 0,
+                }
+            )
+            return _error(f"metabot: {reason}")
         started = time.monotonic()
-        call_id = self._call_id()
+        call_id = call_id or self._call_id()
         try:
             conn = self.store.get(route.conn.id)  # read fresh: a revoke mid-run counts
         except KeyError:
@@ -374,15 +436,30 @@ class Switchboard:
             if conn.origins is not None and not call_urls(args):
                 where = f" ({self._where(conn)})"
                 preview = preview[: PREVIEW_LIMIT - len(where)] + where
-            reply = await self.approve(
-                {
-                    "op": "approve",
-                    "call_id": call_id,
-                    "tool": f"{conn.id}#{route.capability}",
-                    "cls": cls.label,
-                    "preview": preview[:PREVIEW_LIMIT],
-                }
-            )
+            try:
+                reply = await self.approve(
+                    {
+                        "op": "approve",
+                        "call_id": call_id,
+                        "tool": f"{conn.id}#{route.capability}",
+                        "cls": cls.label,
+                        "preview": preview[:PREVIEW_LIMIT],
+                    }
+                )
+            except anyio.get_cancelled_exc_class():  # stopped while it asked: never made
+                with contextlib.suppress(Exception):
+                    await self._record(
+                        call_id, conn, route.capability, clean_args, dict(ASK_STOPPED), False,
+                        started,
+                    )  # fmt: skip
+                raise
+            except Exception:  # no answer came, as when the runner took too long: never made
+                with contextlib.suppress(Exception):
+                    await self._record(
+                        call_id, conn, route.capability, clean_args, dict(ASK_STOPPED), False,
+                        started,
+                    )  # fmt: skip
+                return _error(f"metabot: {cls.label} call not allowed ({ASK_STOPPED['error']})")
             if not reply.get("allow"):
                 reason = str(reply.get("reason") or "declined")
                 await self._record(
@@ -393,7 +470,13 @@ class Switchboard:
             result = await route.upstream.call_tool(route.capability, args)
         except Exception as exc:  # a failed call is an error result, not a crash
             result = _error(f"metabot: the connection failed: {type(exc).__name__}: {exc}")
-        self._sent(conn, route.capability, args, not result.is_error)
+        except BaseException:  # cut off once sent: the server may have run it
+            with contextlib.suppress(Exception):
+                await self._record(
+                    call_id, conn, route.capability, clean_args, dict(MAY_HAVE_RUN), False, started
+                )
+            raise
+        self._sent(conn, route.capability, args, result)
         dumped = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         clean = redact_credentials(output_preimage(dumped), redact) if redact else dumped
         await self._record(

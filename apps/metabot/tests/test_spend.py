@@ -115,6 +115,40 @@ def test_a_dated_snapshot_takes_its_models_rate():
     assert rate_for("claude-haiku-4-5-20251001", {}) == rate_for("claude-haiku-4-5", {})
 
 
+@pytest.mark.parametrize(
+    ("asked", "ran"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5-20250929"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0", "claude-haiku-4-5-20251001"),
+        ("claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929"),
+        ("claude-sonnet-4-5[1m]", "claude-sonnet-4-5-20250929"),
+        ("claude-3-7-sonnet-latest", "claude-3-7-sonnet-20250219"),
+        ("claude-opus-5-5", "claude-opus-5-5"),
+    ],
+)
+def test_one_model_named_two_ways_is_one_model(asked, ran):
+    from metabot.prices import same_model
+
+    assert same_model(asked, ran) and same_model(ran, asked)
+
+
+@pytest.mark.parametrize(
+    ("asked", "ran"),
+    [
+        ("claude-sonnet-4-5", "claude-sonnet-4-6"),
+        ("claude-sonnet-4", "claude-sonnet-4-5-20250929"),
+        ("claude-haiku-4-5-20251001", "claude-sonnet-4-6"),  # plan mode runs another model
+        ("my-model", "claude-sonnet-4-5-20250929"),  # an alias says nothing of what it names
+        ("my-model-v3", "my-model-v2"),  # a model's own versions, not a cloud's id for one
+        (None, "claude-sonnet-4-6"),
+    ],
+)
+def test_another_model_or_an_alias_is_not_the_model_asked_for(asked, ran):
+    from metabot.prices import same_model
+
+    assert not same_model(asked, ran) and not same_model(ran, asked)
+
+
 def test_the_engine_decides_the_source():
     assert price_for("openai", "qwen2.5:3b", "http://127.0.0.1:11434/v1", {}).source == "local"
     assert price_for("openai", "qwen2.5:3b", "http://localhost:11434/v1", {}).source == "local"

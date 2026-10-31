@@ -8,6 +8,14 @@ Verdicts mirror the platform's shapes: the model as a ``pass`` with
 ``<engine>/<model>``; an approval as ``pass`` naming the approver; a decline
 as ``warn`` with ``declined`` (never ``fail``: a decline is the gate working,
 not the run failing).
+
+A ``content`` verdict commits to texts the journal keeps in its meta, by
+name: its detail is ``name=<digest>`` parts joined by ``;``, and each digest
+is ``hash_value({"field": name, "salt": salt, "text": text})`` over the text
+as kept, a known secret already replaced by its marker. Each salt is 32
+random bytes in hex, drawn for that text alone and kept only in the journal,
+under ``salts``, so a receipt that travels gives no text away, however
+short. The check name fixes this rule: another rule takes another name.
 """
 
 from __future__ import annotations
@@ -168,12 +176,12 @@ def _made_alone(path: Path, seed: str, key: Ed25519PrivateKey) -> Ed25519Private
     return key
 
 
-def model_verdict(engine: str, model: str | None) -> dict[str, str]:
-    return {
-        "check": "model",
-        "result": "pass",
-        "detail": ascii_text(f"{engine}/{model or 'default'}"),
-    }
+def model_verdict(engine: str, model: str | None, ran_on: Sequence[str] = ()) -> dict[str, str]:
+    """The model the run named, and the models its tokens ran on when one is another."""
+    detail = f"{engine}/{model or 'default'}"
+    if any(ran != model for ran in ran_on):
+        detail += ";ran_on=" + ",".join(ran[:120] for ran in ran_on)
+    return {"check": "model", "result": "pass", "detail": ascii_text(detail)}
 
 
 def usage_verdict(spend: Spend, cost_musd: int | None, source: str, prices: str) -> dict[str, str]:
@@ -190,6 +198,24 @@ def usage_verdict(spend: Spend, cost_musd: int | None, source: str, prices: str)
     }
 
 
+def signed_cost(path: Path | str | None) -> int | None:
+    """What a sealed run cost, as its receipt's ``usage`` verdict signs it; None when unpriced."""
+    if path is None:
+        return None
+    try:
+        envelope = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    verdicts = envelope.get("verdicts") if isinstance(envelope, dict) else None
+    for verdict in verdicts if isinstance(verdicts, list) else []:
+        if isinstance(verdict, dict) and verdict.get("check") == "usage":
+            for field in str(verdict.get("detail", "")).split(";"):
+                key, _, value = field.partition("=")
+                if key == "cost_musd" and value.isdigit():
+                    return int(value)
+    return None
+
+
 def budget_verdict(cap_musd: int, spent_musd: int | None) -> dict[str, str]:
     """The run's money cap, and whether it held."""
     if spent_musd is None:
@@ -203,6 +229,45 @@ def budget_verdict(cap_musd: int, spent_musd: int | None) -> dict[str, str]:
         "result": "fail" if spent_musd > cap_musd else "pass",
         "detail": f"cap_musd={cap_musd};spent_musd={spent_musd}",
     }
+
+
+# What a run's meta says about where it ran, and where it sits among other
+# runs, signed as verdicts. The journal's meta is not signed, apart from the
+# texts a ``content`` verdict commits to; these are.
+WHERE_FIELDS = {"bridge": ("name", "source", "digest"), "endpoint": ("name", "base_url")}
+LINEAGE = ("office", "desk", "copy", "advises", "read_only", "round", "parent", "ladder", "rung")
+FIELD_LIMIT = 2000  # a fan's parent names each good copy
+
+
+def _field(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return ascii_text(value, limit=FIELD_LIMIT).replace(";", "_")
+
+
+def provenance_verdicts(meta: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The receipt's signed copy of where a run ran and where it sits among others.
+
+    A ``bridge`` or ``endpoint`` verdict says which program or server ran it;
+    the bridge's digest covers its command and the files the command names. A
+    ``plugin`` verdict pins each plugin it had. ``lineage`` names its office,
+    desk, round and parent, or its ladder and rung. A value never carries a
+    ``;``, so it cannot pass for another field.
+    """
+    found: list[dict[str, str]] = []
+    for kind, keys in WHERE_FIELDS.items():
+        facts = meta.get(kind)
+        if isinstance(facts, Mapping):
+            detail = ";".join(f"{k}={_field(facts[k])}" for k in keys if facts.get(k) is not None)
+            found.append({"check": kind, "result": "pass", "detail": detail})
+    plugins = meta.get("plugins")
+    for pin in plugins if isinstance(plugins, list) else []:
+        found.append({"check": "plugin", "result": "pass", "detail": _field(pin)})
+    placed = [(k, meta[k]) for k in LINEAGE if meta.get(k) not in (None, "", False)]
+    if placed:
+        detail = ";".join(f"{k}={_field(v)}" for k, v in placed)
+        found.append({"check": "lineage", "result": "pass", "detail": detail})
+    return found
 
 
 def approval_verdict(
@@ -298,7 +363,7 @@ def named_here(prompt: str, cwd: Path) -> list[str]:
         try:
             path = (root / word).resolve()
             here = path != root and path.is_relative_to(root) and path.exists()
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, ValueError):  # RuntimeError: a loop of links
             continue
         if here and path not in seen:
             seen.add(path)
@@ -306,12 +371,17 @@ def named_here(prompt: str, cwd: Path) -> list[str]:
     return out
 
 
+def listed(names: Sequence[str]) -> str:
+    """Names as a sentence lists them: the first three, then how many more."""
+    shown = list(names[:3]) + ([f"{len(names) - 3} more"] if len(names) > 3 else [])
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
 def unread_caveat(named: Sequence[str]) -> str | None:
     """The line beside an answer that names files here when its run made no tool calls."""
     if not named:
         return None
-    shown = list(named[:3]) + ([f"{len(named) - 3} more"] if len(named) > 3 else [])
-    which = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+    which = listed(named)
     one = len(named) == 1
     return (
         f"{which} {'is' if one else 'are'} here, but this run made no tool calls, "
@@ -323,7 +393,7 @@ def run_caveat(run_id: str) -> str | None:
     """``answer_caveat`` for a run, read from its kept journal; None when every call went."""
     try:
         journal = json.loads((run_path(run_id) / "journal.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(journal, dict):
         return None
@@ -331,6 +401,60 @@ def run_caveat(run_id: str) -> str | None:
         x if isinstance(x, list) else [] for x in (journal.get("steps"), journal.get("verdicts"))
     ]
     return answer_caveat(*declined_and_failed(*lists))
+
+
+CONTENT = "content"
+SALT_BYTES = 32
+_NAME = re.compile(r"[a-z_]{1,32}")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def content_digest(field: str, text: Any, salt: str) -> str:
+    """What a ``content`` verdict signs for one kept text: the sha256 of its canonical JSON
+    with its field name and salt, by the rule the steps' hashes use."""
+    return hash_value({"field": field, "salt": salt, "text": text})
+
+
+def content_pins(verdicts: Any) -> dict[str, str] | None:
+    """The texts a receipt's ``content`` verdict commits to, as ``{name: digest}``.
+
+    Empty when no verdict is a ``content`` one; None when there is more than one,
+    or its detail is not ``name=<64 hex>`` parts with each name once.
+    """
+    found = [
+        v for v in (verdicts if isinstance(verdicts, list) else [])
+        if isinstance(v, dict) and v.get("check") == CONTENT
+    ]  # fmt: skip
+    if not found:
+        return {}
+    detail = found[0].get("detail")
+    if len(found) > 1 or not isinstance(detail, str):
+        return None
+    pins: dict[str, str] = {}
+    for part in detail.split(";"):
+        name, _, digest = part.partition("=")
+        if not (_NAME.fullmatch(name) and _HEX64.fullmatch(digest)) or name in pins:
+            return None
+        pins[name] = digest
+    return pins
+
+
+def _content_matches(envelope: Mapping[str, Any], journal: Mapping[str, Any]) -> bool:
+    """Whether every text the receipt commits to re-derives from the journal's meta and salts."""
+    pins = content_pins(envelope.get("verdicts"))
+    salts, meta = journal.get("salts", {}), journal.get("meta")
+    if pins is None or not isinstance(salts, dict) or set(salts) != set(pins):
+        return False
+    if not pins:
+        return True  # a receipt sealed before 0.3.0, or one that commits to nothing
+    if not isinstance(meta, dict):
+        return False
+    return all(
+        isinstance(salts[name], str)
+        and _HEX64.fullmatch(salts[name]) is not None
+        and content_digest(name, meta.get(name), salts[name]) == digest
+        for name, digest in pins.items()
+    )
 
 
 def scrub(value: Any, secrets: Mapping[str, str] | None) -> Any:
@@ -389,8 +513,16 @@ def seal_and_store(
     policy_version: str = POLICY_VERSION,
     meta: Mapping[str, Any] | None = None,
     criteria: Mapping[str, bool] | None = None,
+    index: bool = True,
+    commit: Sequence[str] = (),
 ) -> Path:
     """Seal, then write journal, receipt and index line. Returns the receipt path.
+
+    ``index=False`` leaves the index line out, for a seal, which is not a run.
+
+    Each meta field named in ``commit`` is committed to as it is kept, a known
+    secret redacted, in one ``content`` verdict; its salt goes to the journal
+    alone. A field the meta does not hold is committed to as null.
 
     Declared ``criteria`` are judged on every kept step by the one rule the
     platform uses (``emerge.criteria``): the verdict joins the others and the
@@ -404,20 +536,26 @@ def seal_and_store(
     accepted = declared_acceptance_verdict(declared, clean)
     if declared:
         policy_version = compose_policy_version(policy_version, criteria_digest(declared))
+    kept_meta = scrub(dict(meta or {}), secrets)
+    names = list(dict.fromkeys(commit))
+    if not all(isinstance(n, str) and _NAME.fullmatch(n) for n in names):
+        raise ValueError(f"cannot commit to {names!r}: a name is [a-z_], 1 to 32 long")
+    salts = {name: os.urandom(SALT_BYTES).hex() for name in names}
+    pinned = ";".join(f"{n}={content_digest(n, kept_meta.get(n), s)}" for n, s in salts.items())
+    content = [{"check": CONTENT, "result": "pass", "detail": pinned}] if salts else []
     envelope = seal_run(
         {
             "run_id": run_id,
             "agent_dids": [did],
             "policy_version": policy_version,
             "steps": clean,
-            "verdicts": [*verdicts, *([accepted] if accepted else [])],
+            "verdicts": [*verdicts, *content, *([accepted] if accepted else [])],
             "started_at": started_at,
             "finished_at": finished_at,
         },
         key,
     )
     receipt_file = receipts_dir() / f"{run_id}.json"
-    kept_meta = scrub(dict(meta or {}), secrets)
     journal = {
         "format": JOURNAL_FORMAT,
         "run_id": run_id,
@@ -427,12 +565,15 @@ def seal_and_store(
         "finished_at": finished_at,
         "meta": kept_meta,
         **({"criteria": declared} if declared else {}),
+        **({"salts": salts} if salts else {}),
         "steps": clean,
         "verdicts": envelope["verdicts"],
     }
     write_private(run_dir(run_id) / "journal.json", json.dumps(journal, indent=2) + "\n")
     receipt_text = json.dumps(envelope, indent=2) + "\n"
     write_private(receipt_file, receipt_text)
+    if not index:
+        return receipt_file
     _append_index(
         {
             **_index_meta(kept_meta),
@@ -452,7 +593,7 @@ def verdicts_of(receipt: Path | str) -> list[dict[str, Any]]:
     """A receipt's verdicts that are objects; none when it does not read."""
     try:
         verdicts = json.loads(Path(receipt).read_text(encoding="utf-8")).get("verdicts") or []
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, RecursionError):
         return []
     return [v for v in verdicts if isinstance(v, dict)] if isinstance(verdicts, list) else []
 
@@ -560,11 +701,11 @@ def project_copy(receipt: Path, project: Path | None) -> tuple[Path | None, str 
 
 
 def verify_file(path: Path | str) -> AttestationVerdict:
-    try:
+    try:  # a file nested past what can be read is no receipt
         envelope = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return verify_run_attestation(envelope)
+    except (OSError, ValueError, RecursionError):
         return AttestationVerdict(valid=False)
-    return verify_run_attestation(envelope)
 
 
 def _step_list(value: Any) -> bool:
@@ -579,8 +720,16 @@ def journal_matches(run_id: str) -> bool:
 
     What the journal copies from the receipt, the verdicts, the signer and the
     times among them, must also be what the receipt signs: a page shows them
-    from the journal, beside the receipt's state.
+    from the journal, beside the receipt's state. So must each text a
+    ``content`` verdict commits to, from the journal's meta and salts.
     """
+    try:
+        return _journal_matches(run_id)
+    except RecursionError:  # a file nested past what can be read matches nothing
+        return False
+
+
+def _journal_matches(run_id: str) -> bool:
     try:
         journal = json.loads((run_path(run_id) / "journal.json").read_text(encoding="utf-8"))
         envelope = json.loads(receipt_path(run_id).read_text(encoding="utf-8"))
@@ -603,7 +752,9 @@ def journal_matches(run_id: str) -> bool:
             or s.get("success") != k.get("success")
         ):
             return False
-    return verify_run_attestation(envelope).valid
+    if not verify_run_attestation(envelope).valid:
+        return False
+    return _content_matches(envelope, journal)  # the prompt, the answer or the task, as kept
 
 
 def list_index() -> list[dict[str, Any]]:
@@ -614,7 +765,7 @@ def list_index() -> list[dict[str, Any]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(row, dict) and "run_id" in row:
             rows.append(row)

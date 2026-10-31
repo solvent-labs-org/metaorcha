@@ -1,8 +1,10 @@
 """A fake browser MCP server for tests, over stdio: it keeps one page's url, and nothing else.
 
 Tools: navigate(url), navigate_back(), tabs(action, index), evaluate(expression),
-click(selector), type(text), screenshot(). A url with "unreachable" in it
-fails, the way a page that does not load does.
+click(selector), type(text), screenshot(), click_link(ref, leads_to, title). A
+url with "unreachable" in it fails, the way a page that does not load does.
+click_link follows a link: its call does not say where the page goes, and its
+answer does, in the lines a browser MCP server writes after a call.
 
 --count-file F   append one line per tool call that reached this server
 """
@@ -78,6 +80,14 @@ def screenshot() -> str:
     """A picture of the page."""
     _count("screenshot")
     return json.dumps({"png": "iVBORw0KGgo=", "url": page["url"]})
+
+
+@server.tool()
+def click_link(ref: str, leads_to: str, title: str = "") -> str:
+    """Click a link of the page; the page goes where the link leads."""
+    _count("click_link")
+    page["url"] = leads_to
+    return f"### Page\n- Page URL: {leads_to}\n- Page Title: {title}"
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ Tested against ``claude`` 2.1.302.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
@@ -36,6 +38,7 @@ from typing import Any
 
 from metabot.engines.base import CliEngine, EngineJob
 from metabot.events import ErrorEvent, Event, Final, Started, TextEvent, ToolCall, ToolResult, Usage
+from metabot.sandbox import copies_main, git_root, main_checkout
 
 HOOK_TIMEOUT_S = 900  # an approval can wait this long for a human
 SILENT = frozenset({"rate_limit_event", "stream_event", "keep_alive"})
@@ -73,7 +76,7 @@ def _read_settings(path: Path) -> dict[str, Any]:
         if len(raw) > SETTINGS_LIMIT:
             return {}
         data = json.loads(raw.decode("utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -166,7 +169,8 @@ def _kind(block: Any) -> str:
 def _message_usage(obj: dict[str, Any], state: dict[str, Any]) -> list[Event]:
     """A message's usage, the first time it is seen: claude repeats a message once per block.
 
-    It counts as the run goes, so a cap can act on it; the result's total replaces it.
+    It counts as the run goes, so a cap can act on it; the result's total adds what it holds
+    past the messages.
     """
     message = obj.get("message")
     usage = message.get("usage") if isinstance(message, dict) else None
@@ -178,7 +182,43 @@ def _message_usage(obj: dict[str, Any], state: dict[str, Any]) -> list[Event]:
         if msg_id in seen:
             return []
         seen.add(msg_id)
-    return [Usage({"usage": usage})]
+    # The model that ran it: in plan mode claude runs haiku's requests on sonnet, and a
+    # subagent may run on another model, while the start names the main one.
+    ran = message.get("model") if isinstance(message, dict) else None
+    return [Usage({"usage": usage}, model=ran if isinstance(ran, str) and ran else None)]
+
+
+SLUG_MAX = 200  # claude's own: a longer folder name is cut there and given a hash
+
+
+def _memory_keys(cwd: Path, copy_of: Path | None = None) -> list[Path]:
+    """The folders claude may name a project's memory after: the run's folder, its git
+    repository's, and that repository's main checkout when it is a linked worktree.
+    claude takes any ``.git`` as a repository's, so such a folder is one too.
+    ``copy_of``: ``cwd`` is where MetaBot makes a copy of the git project there, a linked
+    worktree that is its own repository's folder."""
+    here = Path(os.path.realpath(cwd))
+    keys = [Path(os.path.abspath(cwd)), here]
+    if copy_of is not None:
+        main = copies_main(copy_of)
+        return list(dict.fromkeys([*keys, *([main] if main else [])]))
+    loose = next((f for f in (here, *here.parents) if os.path.lexists(f / ".git")), None)
+    for root in (git_root(here), loose):
+        if root is not None:
+            keys += [root, *([main] if (main := main_checkout(root)) else [])]
+    return list(dict.fromkeys(keys))
+
+
+def _memory_of(projects: Path, folder: Path) -> list[Path]:
+    """The memory folder claude keeps for ``folder``, under the name it gives it."""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+    if len(slug) <= SLUG_MAX:
+        return [m for m in [projects / slug / "memory"] if os.path.isdir(m)]
+    try:  # the hash is claude's own, so any folder with the cut name is it
+        named = sorted(e for e in projects.iterdir() if e.name.startswith(f"{slug[:SLUG_MAX]}-"))
+    except OSError:
+        return []
+    return [e / "memory" for e in named if os.path.isdir(e / "memory")]
 
 
 class ClaudeEngine(CliEngine):
@@ -186,8 +226,24 @@ class ClaudeEngine(CliEngine):
     binary = "claude"
     tool_prefix = "claude-code"
     loads_plugins = True
+    read_only_mode = "plan mode"
+    also_sees = "its built-in skills"
     skip_tools = ("mcp__metabot__",)
     supports_hooks = True
+
+    def user_instructions(
+        self, cwd: Path | None = None, *, copy_of: Path | None = None
+    ) -> list[Path]:
+        """The auto memory the engine keeps for the project, outside it, in its config folder."""
+        if cwd is None:
+            return []
+        settings = user_settings_path(self.env())
+        if settings is None:
+            return []
+        projects = settings.parent / "projects"
+        keys = _memory_keys(Path(cwd), copy_of)
+        found = [m for folder in keys for m in _memory_of(projects, folder)]
+        return list(dict.fromkeys(found))
 
     def argv(self, job: EngineJob) -> list[str]:
         argv = [self.binary, "-p", "--output-format", "stream-json", "--verbose"]

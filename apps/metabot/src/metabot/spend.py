@@ -26,6 +26,10 @@ class Spend:
     def tokens(self) -> int:
         return self.input + self.output + self.cache_read + self.cache_write
 
+    @property
+    def prompt(self) -> int:
+        return self.input + self.cache_read + self.cache_write
+
     def __add__(self, other: Spend) -> Spend:
         mine, theirs = self.reported_musd, other.reported_musd
         reported = None if mine is None and theirs is None else (mine or 0) + (theirs or 0)
@@ -35,6 +39,23 @@ class Spend:
             self.cache_read + other.cache_read,
             self.cache_write + other.cache_write,
             reported,
+        )
+
+    def beyond(self, counted: Spend) -> Spend:
+        """The tokens past those ``counted``: output past theirs, and prompt tokens past
+        theirs, put on the kinds that grew, the dearest first as the listed rates go. Tokens
+        that only moved from one kind to another, as when a total leaves out what was cached,
+        are none."""
+        left = max(0, self.prompt - counted.prompt)
+        put: dict[str, int] = {}
+        for kind in ("cache_write", "input", "cache_read"):
+            put[kind] = min(left, max(0, getattr(self, kind) - getattr(counted, kind)))
+            left -= put[kind]
+        return Spend(
+            put["input"],
+            max(0, self.output - counted.output),
+            put["cache_read"],
+            put["cache_write"],
         )
 
     def as_dict(self) -> dict[str, int | None]:
@@ -104,3 +125,18 @@ def dollars(musd: int) -> str:
     if musd == 0 or musd % 10_000 == 0:
         return f"${whole}"
     return f"${musd / MUSD:.6f}".rstrip("0")
+
+
+def uncounted(who: str, tokens: int | None, lost: bool = False, late: bool = False) -> str:
+    """Why a run under a money cap has no cost: a request never said what it spent, tokens
+    came before its engine named a model that prices them otherwise, its tokens have no
+    price, or none were counted; ``tokens`` None when that is not known."""
+    if lost:
+        return f"{who} sent a request that never said what it spent"
+    if late:
+        return f"{who}'s engine reported tokens before it named its model"
+    if tokens is None:
+        return f"{who}'s cost is unknown"
+    if tokens:
+        return f"{who}'s {tokens} tokens have no price MetaBot knows"
+    return f"{who} reported no usage MetaBot could read"

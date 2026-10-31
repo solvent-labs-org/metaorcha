@@ -114,6 +114,17 @@ def test_a_revoked_connection_is_refused(tmp_path, gh):
         _check(_spec(tmp_path))
 
 
+def test_a_connection_naming_a_plugins_copy_outside_this_home_is_refused(tmp_path):
+    word = f"rh/plugins/tools@{'c' * 64}/server.py"  # as 0.2.0 saved it under METABOT_HOME=rh
+    ConnectionStore().add(name="tools-db", transport="stdio", command=["python3", word])
+    with pytest.raises(RoutineError) as caught:
+        _check(_spec(tmp_path, connections=["tools-db"]))
+    # before: saved, and each firing skipped it without a word; with an allow on it, "did not
+    # answer: PermissionError", with no way out named
+    assert caught.value.field == "connections"
+    assert f"metabot plugin enable {'c' * 12} --add-servers" in str(caught.value)
+
+
 def test_a_missing_connection_is_refused(tmp_path):
     with pytest.raises(RoutineError, match="no connection named"):
         _check(_spec(tmp_path, connections=["ghost"]))
@@ -332,6 +343,19 @@ async def test_declared_criteria_with_nothing_to_judge_fail_the_run(chat, tmp_pa
     firing = await fire(rid, make_engine=_local(fake))
     verdicts = {v["check"]: v for v in _verdicts(firing)}
     assert verdicts["declared_acceptance"]["result"] == "fail"
+
+
+async def test_a_connection_naming_a_plugins_copy_outside_this_home_refuses_the_firing(
+    tmp_path, home, gh
+):
+    rid = save_routine(_spec(tmp_path), list_tools=_tools)
+    doc = json.loads((home / "connections.json").read_text(encoding="utf-8"))
+    doc["connections"][0]["command"] = ["python3", f"rh/plugins/tools@{'c' * 64}/server.py"]
+    (home / "connections.json").write_text(json.dumps(doc), encoding="utf-8")
+    firing = await fire(rid, make_engine=lambda name: pytest.fail("ran"))
+    # before: it fired without the connection, saying nothing of it
+    assert firing.state == "refused"
+    assert f"metabot plugin enable {'c' * 12} --add-servers" in firing.reason
 
 
 async def test_a_connection_revoked_after_save_refuses_the_firing(tmp_path, gh):

@@ -155,6 +155,26 @@ def _match(model: str, rates: Mapping[str, Rate]) -> str | None:
     return None
 
 
+_CLOUD_VERSION = re.compile(r"-v\d+:\d+$")  # a cloud's version of its id: "-v1:0", never "-v3"
+_SNAPSHOT = re.compile(r"-(\d{8}|latest)$")  # a dated snapshot, or the newest one
+
+
+def _bare_name(model: str) -> str:
+    """``model`` without what only names it another way: claude's ``[1m]``, a cloud's
+    region and version, a snapshot's date, which one cloud gives after ``@``, or
+    ``-latest``."""
+    name = _claude_name(model).replace("@", "-")
+    return _SNAPSHOT.sub("", _CLOUD_VERSION.sub("", name))
+
+
+def same_model(a: str | None, b: str | None) -> bool:
+    """``a`` and ``b`` name one model, each its own way. A name of the person's own, as a
+    gateway's, names no model by its look, so it is the same as itself alone."""
+    if not a or not b:
+        return False
+    return _bare_name(a) == _bare_name(b)
+
+
 def rate_for(model: str | None, mine: Mapping[str, Rate]) -> Rate | None:
     """The rate for ``model``: the person's, else the table's; None when neither has it."""
     if not model:
@@ -171,6 +191,16 @@ def is_local(base_url: str | None) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+# claude's own names for a model of its: the CLI picks the model, and names it as it starts
+CLAUDE_ALIASES = re.compile(r"(default|best|sonnet|opus|haiku|opusplan)(\[1m\])?")
+
+
+def named_as_it_starts(engine: str, model: str | None) -> bool:
+    """The engine picks the model and names it as it starts: claude with no model named, or
+    with one of its aliases. What the run costs is known from that name."""
+    return engine == "claude" and (not model or CLAUDE_ALIASES.fullmatch(model) is not None)
 
 
 def price_for(

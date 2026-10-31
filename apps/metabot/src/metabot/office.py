@@ -5,13 +5,15 @@ the desks, and each gate's ``checks``. Threads, milestones, plans and every
 key MetaBot does not know belong to Code Desks and are ignored here, so one
 file serves both tools.
 
-Three keys are MetaBot's own, and Code Desks ignores them:
+Four keys are MetaBot's own, and Code Desks ignores them:
 
 - ``engine:`` the engine a ``custom`` or ``any`` desk runs on. A custom desk
   whose ``command`` is itself ``metabot chat -e E -m M`` needs none.
 - ``fan:`` how many copies of the desk run at once, at most this machine's
   ``fan_cap``.
 - ``turns:`` the most tool calls one run of the desk may make.
+- ``read_only: true`` the desk takes its turn read-only, as an advisor does:
+  every write is asked, it files nothing, and its answer is handed on.
 
 A desk Code Desks accepts but MetaBot cannot run here still loads, with a
 problem. The rest of the office runs, and only that desk is refused.
@@ -24,19 +26,21 @@ home.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from metabot.config import MODEL_RE
-from metabot.engines import ENGINES, missing_command
+from metabot.engines import bridge_keeps_read_only, engine_names, known_engine, missing_command
 from metabot.gitcmd import main_worktree, toplevel
+from metabot.paths import is_file
 
 OFFICE_FILE = "office.yaml"
 OFFICE_ENV = "DESK_OFFICE"  # set by Code Desks on every desk process
@@ -80,6 +84,7 @@ class DeskSpec:
     turns: int
     cwd: str
     problem: str | None = None  # why this desk cannot run here, when it cannot
+    read_only: bool = False  # it takes its turn read-only and files nothing
 
     @property
     def is_advisor(self) -> bool:
@@ -93,6 +98,7 @@ class OfficeSpec:
     top: Path  # the project: the git top level, else the office folder
     gates: dict[str, GateSpec]
     desks: dict[str, DeskSpec]
+    sha256: str = ""  # of the office.yaml bytes it was read from; a seal signs it
 
     def checks(self) -> dict[str, str]:
         """Every gate's checks, keyed ``<gate>:<item>``, in gate order."""
@@ -104,13 +110,23 @@ class OfficeSpec:
 
 
 def find_office(start: Path | None = None) -> Path | None:
-    """The office folder for ``start``: Code Desks' pin, else the nearest office.yaml above."""
+    """The office folder for ``start``: Code Desks' pin, else the nearest office.yaml above.
+
+    A folder it cannot look in ends the search there: reading the office there says why.
+    """
     pinned = os.environ.get(OFFICE_ENV)
     if pinned:
-        return Path(pinned).resolve()
+        try:
+            return Path(pinned).resolve()
+        except (OSError, RuntimeError):  # a loop of links
+            return Path(pinned)
     here = (start or Path.cwd()).resolve()
     for folder in (here, *here.parents):
-        if (folder / OFFICE_FILE).is_file():
+        try:
+            found = is_file(folder / OFFICE_FILE)
+        except OSError:  # as --dir reads it: the main tree's office, when that tree has one
+            return office_root(folder)
+        if found:
             return office_root(folder)
     return None
 
@@ -119,7 +135,10 @@ def office_root(folder: Path) -> Path:
     """``folder`` as the main working tree sees it, when that tree has the office too."""
     folder = folder.resolve()
     mapped = main_worktree(folder)
-    return mapped if (mapped / OFFICE_FILE).is_file() else folder
+    try:
+        return mapped if is_file(mapped / OFFICE_FILE) else folder
+    except OSError:  # an office it cannot look at, never another: reading it says why
+        return mapped
 
 
 def load_office(root: Path, fan_cap: int = FAN_CAP_DEFAULT) -> OfficeSpec:
@@ -139,8 +158,15 @@ def load_office(root: Path, fan_cap: int = FAN_CAP_DEFAULT) -> OfficeSpec:
         raise OfficeError(OFFICE_FILE, "nested too deeply") from None
     except (yaml.YAMLError, ValueError) as exc:  # a date like 2026-13-45 is a ValueError
         raise OfficeError(OFFICE_FILE, " ".join(str(exc).split())) from None
-    root = root.resolve()
-    return parse_office(data, root, toplevel(root) or root, fan_cap)
+    try:
+        root = root.resolve()
+    except (OSError, RuntimeError) as exc:  # a relative name, from a folder that was removed
+        why = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        raise OfficeError(
+            OFFICE_FILE, f"cannot read {path}: the current folder cannot be read ({why})"
+        ) from None
+    spec = parse_office(data, root, toplevel(root) or root, fan_cap)
+    return replace(spec, sha256=hashlib.sha256(raw).hexdigest())
 
 
 def parse_office(data: Any, root: Path, top: Path, fan_cap: int = FAN_CAP_DEFAULT) -> OfficeSpec:
@@ -179,7 +205,7 @@ def desk_engine(
         for name in (ADVISOR_ROLE, ROSTER_ROLE) if desk.is_advisor else (ROSTER_ROLE,):
             role = (roster or {}).get(name) or {}
             engine = role.get("engine")
-            if engine in ENGINES:
+            if known_engine(engine):
                 return str(engine), role.get("model")
         raise OfficeError(
             f"desks.{desk.name}",
@@ -199,6 +225,11 @@ def desk_problem(
         engine, _model = desk_engine(desk, roster)
     except OfficeError as exc:
         return exc.reason
+    if (desk.read_only or desk.is_advisor) and not bridge_keeps_read_only(engine):
+        return (
+            f"bridge {engine} does not keep to read-only (read_only: honored), "
+            "and this desk runs read-only"
+        )
     missing = missing_command(engine)  # else the run would start, and fail at this desk
     return f"{missing} is not on PATH" if missing else None
 
@@ -319,6 +350,9 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
     fan = _bounded(raw.get("fan"), f"{where}.fan", 1, FAN_CAP_MAX)
     turns = _bounded(raw.get("turns"), f"{where}.turns", TURN_CAP_DEFAULT, TURN_CAP_MAX)
     cwd = str(raw.get("cwd", "."))
+    read_only = raw.get("read_only", False)
+    if not isinstance(read_only, bool):
+        raise OfficeError(f"{where}.read_only", "true or false")
     role_file, role_problem = _role(role, root, top)
     problems = [
         None if DESK_NAME.match(name) else _NAME_PROBLEM,
@@ -336,6 +370,7 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
         "an advisor runs once for each desk it advises, so it has no fan"
         if advises and fan > 1
         else None,
+        "a read-only desk files nothing, so it has no fan" if read_only and fan > 1 else None,
     ]
     return DeskSpec(
         name=name,
@@ -350,6 +385,7 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
         turns=turns,
         cwd=cwd,
         problem="; ".join(p for p in problems if p) or None,
+        read_only=read_only,
     )
 
 
@@ -364,8 +400,8 @@ def _engine(
 ) -> tuple[str | None, str | None, str | None]:
     """(engine, model, problem) for a desk."""
     if engine is not None:
-        if engine not in ENGINES:
-            raise OfficeError(f"{where}.engine", f"one of {', '.join(ENGINES)}")
+        if not known_engine(engine):
+            raise OfficeError(f"{where}.engine", f"one of {', '.join(engine_names())}")
         fixed = HARNESS_ENGINES.get(harness)
         if fixed and engine != fixed:
             raise OfficeError(f"{where}.engine", f"{engine} conflicts with harness: {harness}")
@@ -380,7 +416,7 @@ def _engine(
     named, named_model = said
     if named is None:
         return None, model, "its command runs MetaBot's default engine; name one with -e or engine:"
-    if named not in ENGINES:
+    if not known_engine(named):
         return None, model, f"its command names engine {named!r}, which MetaBot does not have"
     return named, named_model or model, None
 

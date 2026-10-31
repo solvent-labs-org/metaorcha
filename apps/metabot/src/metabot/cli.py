@@ -7,6 +7,7 @@ The commands live in :mod:`metabot.commands` and the chat loop in
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import subprocess
@@ -25,12 +26,14 @@ TOKEN_FLAG_REFUSED = (
 
 
 def _binary_version(path: str) -> str:
+    """The first line ``path --version`` says, whatever its bytes, as a name's are read."""
     try:
         out = subprocess.run(
             [path, "--version"],
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
             check=False,
         )
@@ -43,24 +46,27 @@ def _binary_version(path: str) -> str:
 def cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "models", None) is not None:
         return _doctor_models(args.models)
+    from metabot.approvals import printable
     from metabot.needs import doctor_lines
     from metabot.plugins import PluginError
     from metabot.receipts import key_problem, resolve_key_path
 
     home = metabot_home()
     print(f"python   {sys.version.split()[0]}")
-    print(f"home     {home} (mode {oct(os.stat(home).st_mode & 0o777)})")
+    print(f"home     {printable(str(home), 2000)} (mode {oct(os.stat(home).st_mode & 0o777)})")
     key = resolve_key_path()
+    named = printable(str(key), 2000)
     there = key.exists() or key.is_symlink()
     problem = key_problem(key) if there else None  # a missing key is made on first use
     if problem:
-        print(f"key      {key} (does not read: {problem})")
+        print(f"key      {named} (does not read: {printable(problem, 2000)})")
     else:
-        print(f"key      {key} ({'present' if there else 'missing: run metabot init'})")
+        print(f"key      {named} ({'present' if there else 'missing: run metabot init'})")
     for name, binary in ENGINE_BINARIES.items():
         path = shutil.which(binary)
-        if path:
-            print(f"engine   {name:<7} on PATH {path} {_binary_version(path)}")
+        if path:  # the version is the binary's own words: shown escaped, as an argument is
+            said = printable(_binary_version(path), 200)
+            print(f"engine   {name:<7} on PATH {printable(path, 2000)} {said}")
         else:
             print(f"engine   {name:<7} missing")
     try:
@@ -155,7 +161,9 @@ def _dollars(value: str) -> int:
 
 
 def _run_options(p: argparse.ArgumentParser) -> None:
-    p.add_argument("-e", "--engine", choices=list(ENGINES), help="default: metabot engines")
+    p.add_argument(
+        "-e", "--engine", help="a built-in engine or a bridge (default: metabot engines)"
+    )
     p.add_argument(
         "-m", "--model", type=_model_name, help="the engine's model (default: the engine's own)"
     )
@@ -200,9 +208,15 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--engine", help="the default engine")
     init.set_defaults(func=_lazy("metabot.commands", "cmd_init"))
 
-    add("engines", help="which engines are here").set_defaults(
-        func=_lazy("metabot.commands", "cmd_engines")
+    eng = add("engines", help="which engines are here")
+    eng.add_argument(
+        "--manifest",
+        action="store_true",
+        help="with each engine: how it reads without writing, its models, the sandbox here, "
+        "and what still reaches it",
     )
+    eng.add_argument("--cwd", help="the directory the sandbox line is for (default: here)")
+    eng.set_defaults(func=_lazy("metabot.commands", "cmd_engines"))
 
     ask = add("ask", help="run one prompt and print the answer")
     _run_options(ask)
@@ -249,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
         func=_lazy("metabot.commands", "cmd_config_show")
     )
     c_set = csub.add_parser("set", allow_abbrev=False, help="change one setting")
-    c_set.add_argument("key", help="project_receipts, fan_cap or ladder_attempts")
+    c_set.add_argument("key", help="project_receipts, fan_cap, ladder_attempts or sandbox")
     c_set.add_argument("value")
     c_set.set_defaults(func=_lazy("metabot.commands", "cmd_config_set"))
 
@@ -347,6 +361,24 @@ def build_parser() -> argparse.ArgumentParser:
         " (after metabot office trust records that you agree)",
     )
     o_run.add_argument(
+        "--until-checks",
+        action="store_true",
+        help="run the checks, and while a desk's checks fail, run that desk again with what "
+        "they said, up to --rounds times",
+    )
+    o_run.add_argument(
+        "--rounds",
+        type=int,
+        metavar="N",
+        help="with --until-checks, the most rounds a desk runs (default 3, at most 10)",
+    )
+    o_run.add_argument(
+        "--max-cost",
+        type=_dollars,
+        metavar="DOLLARS",
+        help="one cap over every desk run and round; a desk MetaBot cannot price never starts",
+    )
+    o_run.add_argument(
         "--desks", metavar="A,B,C", help="the desks to run, in order (default: all but advisors)"
     )
     o_run.add_argument(
@@ -429,6 +461,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_enable.add_argument(
         "--add-servers", action="store_true", help="make its MCP servers connections, gated"
     )
+    bridges = p_enable.add_mutually_exclusive_group()
+    bridges.add_argument(
+        "--allow-bridges",
+        action="store_true",
+        help="make its bridges engines; they run outside the gate",
+    )
+    bridges.add_argument("--without-bridges", action="store_true", help="leave its bridges out")
+    p_new = psub.add_parser("new", allow_abbrev=False, help="write a plugin to start from")
+    p_new.add_argument("name", help="the plugin's name")
+    p_new.add_argument(
+        "--bridge", action="store_true", help="a bridge, an engine of your own; else a skill"
+    )
+    p_new.add_argument("--dir", help="the folder to write it in (default: ./NAME)")
     p_disable = psub.add_parser("disable", allow_abbrev=False, help="turn a plugin off")
     p_remove = psub.add_parser("remove", allow_abbrev=False, help="delete an installed plugin")
     for parser_ in (p_show, p_enable, p_disable, p_remove):
@@ -443,6 +488,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("enable", p_enable),
         ("disable", p_disable),
         ("remove", p_remove),
+        ("new", p_new),
     ):
         parser_.set_defaults(func=_lazy("metabot.plugin_commands", f"cmd_plugin_{action}"))
 
@@ -459,7 +505,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="when it runs, e.g. '0 9 * * 1-5'",
     )
     rt_save.add_argument("--tz", metavar="ZONE", help="the cron's zone (default: this machine's)")
-    rt_save.add_argument("-e", "--engine", choices=list(ENGINES), help="default: metabot engines")
+    rt_save.add_argument(
+        "-e", "--engine", help="a built-in engine or a bridge (default: metabot engines)"
+    )
     rt_save.add_argument("-m", "--model", help="the engine's model (default: the engine's own)")
     rt_save.add_argument("--cwd", help="the directory to work in (default: here)")
     rt_save.add_argument(
@@ -519,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     ro_sub = roster.add_subparsers(dest="roster_command", metavar="ACTION")
     ro_set = ro_sub.add_parser("set", allow_abbrev=False, help="give a role an engine and model")
     ro_set.add_argument("role", help="fast, build, review, second or private")
-    ro_set.add_argument("--engine", required=True, help=f"one of {', '.join(ENGINES)}")
+    ro_set.add_argument("--engine", required=True, help=f"one of {', '.join(ENGINES)}, or a bridge")
     ro_set.add_argument("--model", help="the engine's model (default: the engine's own)")
     ro_set.set_defaults(func=_lazy("metabot.roster", "cmd_roster_set"))
     ro_unset = ro_sub.add_parser("unset", allow_abbrev=False, help="give a role back its default")
@@ -620,6 +668,15 @@ def _token_flag_given(argv: list[str]) -> bool:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if isinstance(sys.stdout, io.TextIOWrapper) and not sys.stdout.closed:
+        # a name whose bytes are not UTF-8, as a folder's can be, prints escaped, as on
+        # stderr, and never as a traceback
+        sys.stdout.reconfigure(errors="backslashreplace")
+    stdin = sys.stdin
+    if isinstance(stdin, io.TextIOWrapper) and not stdin.closed and stdin.errors == "strict":
+        # such a name's bytes are read as an argument's are: a prompt or a note piped in
+        # holds it, and never stops with a traceback
+        stdin.reconfigure(errors="surrogateescape")
     words = list(argv) if argv is not None else sys.argv[1:]
     if _token_flag_given(words):
         print(TOKEN_FLAG_REFUSED, file=sys.stderr)

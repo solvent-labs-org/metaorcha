@@ -50,11 +50,17 @@ from typing import Any
 from emerge.journal import utc_now
 
 from metabot.approvals import printable
-from metabot.connections import ConnectionStore
+from metabot.connections import record_secrets
 from metabot.engines.base import DROPPED_ENV
 from metabot.office import OfficeSpec
 from metabot.paths import metabot_home, private_dir, write_private
-from metabot.receipts import ensure_key, project_copy, seal_and_store
+from metabot.receipts import (
+    ensure_key,
+    project_copy,
+    provenance_verdicts,
+    scrub,
+    seal_and_store,
+)
 from metabot.scope_classes import ScopeClass
 from metabot.shell import TIMEOUT_EXIT, run_shell, stop_group
 from metabot.shell_policy import classify_shell
@@ -66,6 +72,8 @@ CANNOT_START_EXIT = 127  # what sh reports for a command it could not run
 CHECK_TIMEOUT_S = 600.0
 CHECK_OUTPUT_LIMIT = 16_000
 CHECK_CRITERIA = {"exit_zero": True}
+FEEDBACK_TAIL = 4_000  # of each failed check's stdout and stderr, for the next round
+FEEDBACK_LIMIT = 12_000  # of all of it together
 EVIDENCE = "{evidence}"
 NEEDS_EVIDENCE = "needs {evidence}, which a person names when delivering"
 TRUST_FORMAT = "metabot.trust/1"
@@ -83,7 +91,8 @@ def shown(text: str) -> str:
 
 
 def trust_path(office: OfficeSpec) -> Path:
-    digest = hashlib.sha256(str(office.root).encode("utf-8")).hexdigest()[:16]
+    # a folder's name as its bytes: one that is not UTF-8 is trusted too, and others as before
+    digest = hashlib.sha256(str(office.root).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     return metabot_home() / "trust" / f"{digest}.json"
 
 
@@ -104,7 +113,7 @@ def recorded(office: OfficeSpec) -> dict[str, str] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         data = None
     commands = data.get("commands") if isinstance(data, dict) else None
     if not isinstance(commands, dict) or data.get("office") != str(office.root):
@@ -314,6 +323,57 @@ class GateRun:
     summary: str | None  # pass, or fail naming each check; None when cancelled first
     project_receipt: Path | None = None  # its copy in the project, when one was asked for
     project_error: str | None = None
+    failures: tuple[dict[str, Any], ...] = ()  # each failed check: what it said, at its end
+
+
+def failures_of(steps: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """Each failed check's name, exit, stdout and stderr, as the receipt holds them."""
+    found = []
+    for step in steps:
+        if step["success"]:
+            continue
+        out = step["output"]
+        found.append(
+            {
+                "check": f"{step['args']['gate']}:{step['args']['item']}",
+                "exit_code": out.get("exit_code"),
+                "timed_out": bool(out.get("timed_out")),
+                "stdout": str(out.get("stdout") or ""),
+                "stderr": str(out.get("stderr") or ""),
+            }
+        )
+    return tuple(found)
+
+
+def feedback_text(gate: GateRun, round_no: int, *, changed: bool = True) -> str:
+    """What the checks said about a round's work, for the desk's next round.
+
+    Each connection's secret is taken out, as it is from a receipt, before
+    any of it is cut, so no cut leaves part of a secret behind.
+    """
+    secrets = record_secrets()
+    lines = [
+        f"The gate's checks failed on your work in round {round_no}."
+        if changed
+        else f"Your round {round_no} changed no file, and the gate's checks fail on the work "
+        "as it stands."
+    ]
+    for failed in gate.failures:
+        how = "timed out" if failed["timed_out"] else f"exited {failed['exit_code']}"
+        lines.append(f"\n## {failed['check']} {how}")
+        for stream in ("stdout", "stderr"):
+            said = scrub(failed[stream], secrets)
+            said = (said if isinstance(said, str) else "")[-FEEDBACK_TAIL:].rstrip()
+            if said.strip():
+                lines.append(f"{stream}, its end:\n```\n{said}\n```")
+    lines.append(
+        "\nFix the work so these checks pass. Do not change the checks, the office file, "
+        "or the tests the checks run."
+    )
+    text = "\n".join(lines)
+    if len(text) > FEEDBACK_LIMIT:
+        text = text[: FEEDBACK_LIMIT - 40] + "\n[... cut: the rest is in the checks run]"
+    return text
 
 
 class ChecksCancelled(asyncio.CancelledError):
@@ -357,11 +417,11 @@ async def run_gate(
     receipt = seal_and_store(
         run_id=run_id,
         steps=steps,
-        verdicts=[],
+        verdicts=provenance_verdicts({**(meta or {}), "parent": desk_run_id}),
         started_at=started_at,
         finished_at=utc_now(),
         key=key,
-        secrets=ConnectionStore().redaction_map(),
+        secrets=record_secrets(),
         criteria=None if cancelled else CHECK_CRITERIA,
         meta={
             **(meta or {}),
@@ -373,7 +433,9 @@ async def run_gate(
             "checks": outcome,
         },
     )
-    result = GateRun(run_id, receipt, outcome, *project_copy(receipt, project))
+    result = GateRun(
+        run_id, receipt, outcome, *project_copy(receipt, project), failures=failures_of(steps)
+    )
     if cancelled:
         raise ChecksCancelled(result)
     return result

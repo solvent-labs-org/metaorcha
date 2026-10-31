@@ -39,7 +39,7 @@ import stat
 from pathlib import Path
 
 from metabot.office import DeskSpec, OfficeSpec
-from metabot.paths import metabot_home, private_dir, safe_id
+from metabot.paths import is_dir, is_file, metabot_home, private_dir, safe_id
 
 # The front matter a plugin's copy for the engines is stripped of, from the same code.
 from metabot.plugins import CLAUDE_MANIFEST, CURSOR_MANIFEST, NEVER_IN_A_VIEW, PluginError
@@ -70,19 +70,24 @@ def sources(office: OfficeSpec) -> list[tuple[Path, bool]]:
 
 
 def find_skill(office: OfficeSpec, name: str) -> Path:
-    """The resolved folder of the skill ``name``; KitError when there is none to use."""
+    """The resolved folder of the skill ``name``; KitError when there is none to use, or a
+    place it looks in cannot be read: the skill there may be the one Code Desks gives."""
     if not KIT_NAME.fullmatch(name):
         raise KitError(f"{name!r} is not a skill name")
     places = sources(office)
     for base, in_project in places:
         candidate = base / name
-        if not candidate.is_dir():
-            continue
-        found = candidate.resolve()
-        if in_project and not found.is_relative_to(office.top.resolve()):
-            raise KitError(f"skill {name!r} in {base} leads outside the project")
-        if not (found / "SKILL.md").is_file():
-            raise KitError(f"skill {name!r} in {base} has no SKILL.md")
+        try:
+            if not is_dir(candidate):
+                continue
+            found = candidate.resolve()
+            if in_project and not found.is_relative_to(office.top.resolve()):
+                raise KitError(f"skill {name!r} in {base} leads outside the project")
+            if not is_file(found / "SKILL.md"):
+                raise KitError(f"skill {name!r} in {base} has no SKILL.md")
+        except (OSError, RuntimeError) as exc:  # RuntimeError: a loop of links, before 3.13
+            why = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+            raise KitError(f"skill {name!r} in {base} cannot be read: {why}") from None
         return found
     raise KitError(f"skill {name!r} is not in " + ", ".join(str(base) for base, _ in places))
 
@@ -101,9 +106,15 @@ def kit_problem(office: OfficeSpec, desk: DeskSpec) -> str | None:
 
 
 def _plain_files(name: str, src: Path) -> list[tuple[str, Path]]:
-    """Every file of a skill, by its path inside it; a link or special file is refused."""
+    """Every file of a skill, by its path inside it; a link or special file is refused, and so
+    is a folder in it that cannot be listed, which would load as nothing."""
     found: list[tuple[str, Path]] = []
-    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+
+    def unread(exc: OSError) -> None:
+        rel = os.path.relpath(exc.filename, src) if exc.filename else "."
+        raise KitError(f"skill {name!r}: {rel} cannot be read: {exc.strerror or exc}")
+
+    for dirpath, dirnames, filenames in os.walk(src, onerror=unread, followlinks=False):
         here = Path(dirpath)
         if here == src and ".git" in dirnames:
             dirnames.remove(".git")  # a checkout's history is not the skill

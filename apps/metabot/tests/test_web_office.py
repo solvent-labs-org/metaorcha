@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import html
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -24,6 +26,7 @@ from metabot.runner import RunCancelled
 from metabot.web_app import make_app
 from metabot.web_guard import COOKIE, Guard
 from metabot.web_runs import Broker
+from test_office import _linked_office
 from test_office_run import DESKS, TASK, DeskEngine, _build, _repo
 from test_web_runs import (
     FORM,
@@ -104,6 +107,25 @@ def test_the_office_page_offers_the_desks_of_the_office_the_ui_started_in(tmp_pa
     assert f'name="folder" value="{html.escape(str(root))}"' in text
 
 
+@pytest.mark.parametrize("start", ["the main tree", "a worktree git cannot read"])
+def test_an_office_whose_folder_name_is_not_utf_8_is_shown_and_run(tmp_path, start):
+    team, here = _linked_office(tmp_path / os.fsdecode(b"caf\xe9"), tmp_path / "linked")
+    record = team.parent / ".git" / "worktrees" / "linked"
+    record.chmod(0o000)  # git cannot read the worktree by its record: the office is the main's
+    try:
+        if os.access(record, os.X_OK):
+            pytest.skip("this user enters any folder")
+        with office_ui(team if start == "the main tree" else here, _engines()) as (client, guard):
+            page = client.get("/office")  # before: a server error
+            assert page.status_code == 200 and "main-office" in page.text
+            assert "caf\\udce9" in page.text  # the byte that is not UTF-8, shown as text
+            if start != "the main tree":  # a folder the page can name back
+                office_id = _start(client, guard, here, "dev")
+                assert "main-office" in _until(client, office_id, _ended)
+    finally:
+        record.chmod(0o755)
+
+
 def test_a_desk_whose_kit_cannot_load_is_offered_unticked_with_why(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "person"))  # where Code Desks looks last
     root = _repo(tmp_path, {**DESKS, "plan": {**DESKS["plan"], "kit": ["no-such-skill"]}})
@@ -111,6 +133,27 @@ def test_a_desk_whose_kit_cannot_load_is_offered_unticked_with_why(tmp_path, mon
         text = client.get("/office").text
     assert 'name="desk" value="plan">' in text and 'name="desk" value="build" checked>' in text
     assert "kit: skill &#x27;no-such-skill&#x27; is not in" in text
+
+
+def test_a_kit_place_it_cannot_enter_is_named_and_not_a_server_error(
+    tmp_path, monkeypatch, path_checks
+):
+    import os
+
+    monkeypatch.setenv("HOME", str(tmp_path / "person"))
+    root = _repo(tmp_path, {**DESKS, "plan": {**DESKS["plan"], "kit": ["x"]}})
+    shut = root / ".office"
+    (shut / "skills" / "x").mkdir(parents=True)
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        with office_ui(root, {}) as (client, _guard):
+            page = client.get("/office")
+    finally:
+        shut.chmod(0o755)
+    assert page.status_code == 200 and 'name="desk" value="plan">' in page.text
+    assert "cannot be read: Permission denied" in page.text
 
 
 def test_a_folder_is_looked_up_and_one_with_no_office_says_so(tmp_path):
@@ -124,6 +167,73 @@ def test_a_folder_is_looked_up_and_one_with_no_office_says_so(tmp_path):
     assert "no office.yaml in" in none and 'name="desk"' not in none
     assert 'name="desk" value="plan" checked>' in found
     assert "is not a folder" in missing and 'name="desk"' not in missing
+
+
+def test_a_folder_that_cannot_be_entered_is_refused_and_not_a_server_error(tmp_path, home):
+    import os
+
+    root = _repo(tmp_path)
+    shut = tmp_path / "shut"
+    shut.mkdir()
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        engines = _engines()
+        with office_ui(root, engines) as (client, guard):
+            page = client.get("/office", params={"folder": str(shut)})
+            sent = _send(client, guard, root, ("plan",), folder=str(shut))
+    finally:
+        shut.chmod(0o755)
+    assert page.status_code == 200 and "cannot be entered" in page.text
+    assert sent.status_code == 400 and "cannot be entered" in sent.text
+    assert not any(engine.jobs for engine in engines.values())
+
+
+def test_an_office_it_cannot_look_at_says_why_and_is_not_a_server_error(
+    tmp_path, home, monkeypatch, path_checks
+):
+    import os
+
+    shut = tmp_path / "shut"
+    under = shut / "here"
+    under.mkdir(parents=True)
+    (shut / "office.yaml").write_text("name: t\n", encoding="utf-8")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "office.yaml").symlink_to(shut / "office.yaml")
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    engines = _engines()
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        with office_ui(under, engines) as (client, guard):
+            started_under = client.get("/office")
+            through = client.get("/office", params={"folder": str(linked)})
+            sent = _send(client, guard, linked, ("plan",))
+            monkeypatch.setenv("DESK_OFFICE", str(loop))
+            pinned = client.get("/office")
+    finally:
+        shut.chmod(0o755)
+    assert started_under.status_code == 200 and "is not a folder" in started_under.text
+    for page in (through, sent):
+        assert f"cannot read {linked / 'office.yaml'}: Permission denied" in page.text
+    assert through.status_code == 200 and sent.status_code == 400
+    assert pinned.status_code == 200 and "is not a folder" in pinned.text
+    assert not any(engine.jobs for engine in engines.values())
+
+
+def test_a_worktree_whose_git_file_names_no_record_reads_its_own_office(tmp_path, home):
+    from test_office import _linked_office
+
+    _team, here = _linked_office(tmp_path)
+    (here.parent / ".git").write_bytes(b"gitdir: /nowhere\x00x/.git/worktrees/linked\n")
+    with office_ui(here, {}) as (client, _guard):
+        page = client.get("/office")
+    assert page.status_code == 200, page.text  # before: a server error
+    assert f'name="folder" value="{html.escape(str(here))}"' in page.text
 
 
 @pytest.mark.parametrize(
@@ -276,6 +386,27 @@ def test_an_office_run_that_cannot_open_says_why_on_its_page(tmp_path, monkeypat
     assert "desks.plan.kit: skill" in text and "OfficeError" not in text
     assert not office_journal_path(office_id).exists() and not engines["claude"].jobs
     assert f'href="/offices/{office_id}"' not in text  # there is no record to show
+
+
+def test_an_office_run_whose_record_cannot_be_written_did_not_end_well(tmp_path, monkeypatch):
+    from metabot import office_run
+
+    saved = office_run._save
+
+    def save(record, rows):  # the disk fills as the office run closes
+        if record.get("finished_at"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return saved(record, rows)
+
+    monkeypatch.setattr(office_run, "_save", save)
+    root = _repo(tmp_path)
+    with office_ui(root, _engines()) as (client, guard):
+        office_id = _start(client, guard, root, "plan", "build", "review")
+        text = _until(client, office_id, _ended)
+    assert "<th>state</th><td>failed</td>" in text
+    said = "the office's record could not be written: [Errno 28] No space left on device"
+    assert f'<p class="bad">{html.escape(said)}</p>' in text
+    assert html.escape(f"[metabot] {said}") in text  # and in its trace, as it closed
 
 
 def test_the_live_address_of_an_office_run_from_elsewhere_goes_to_its_record(tmp_path):

@@ -19,6 +19,11 @@ def _engine(fake, **kw) -> OpenAIEngine:
     return OpenAIEngine(base_url=fake.url, model="tiny", config=Config(), **kw)
 
 
+def _default(fake) -> OpenAIEngine:
+    """An engine on the default server, the one ``doctor --models`` probes."""
+    return OpenAIEngine(model="tiny", config=Config(openai_base_url=fake.url))
+
+
 async def _run(engine, tmp_path, **kw):
     return await run_job(
         engine=engine,
@@ -134,12 +139,34 @@ async def test_a_call_inside_a_longer_answer_is_not_made_and_the_model_is_asked_
 async def test_a_model_that_keeps_writing_calls_inside_its_answer_fails_the_run(chat, tmp_path):
     (tmp_path / "README.md").write_text("hello")
     fake = chat([text_reply(FENCED_CALL)] * 3)
-    result = await _run(_engine(fake), tmp_path)
+    result = await _run(_default(fake), tmp_path)
     assert result.ok is False
+    assert result.error == (
+        "openai: the model kept writing tool calls inside its answer; none was made. "
+        "metabot doctor --models tiny checks how it calls tools"
+    )
+    assert _steps(result) == [] and len(fake.requests) == 3
+
+
+async def test_a_probed_model_that_fails_this_way_is_not_sent_to_the_probe(chat, tmp_path):
+    (tmp_path / "README.md").write_text("hello")
+    fake = chat([text_reply(FENCED_CALL)] * 3)
+    save_probe(fake.url, "tiny", "native", "called read_file")
+    result = await _run(_default(fake), tmp_path)
     assert result.error == (
         "openai: the model kept writing tool calls inside its answer; none was made"
     )
-    assert _steps(result) == [] and len(fake.requests) == 3
+
+
+async def test_a_model_on_a_server_the_probe_does_not_reach_is_not_sent_to_it(chat, tmp_path):
+    (tmp_path / "README.md").write_text("hello")
+    fake = chat([text_reply(FENCED_CALL)] * 3)
+    result = await _run(_engine(fake), tmp_path)  # a named endpoint's server, say
+    assert result.error == (
+        "openai: the model kept writing tool calls inside its answer; none was made"
+    )
+    far = "https://models.example/v1"  # the probe refuses a remote server: it costs money
+    assert OpenAIEngine(model="big", config=Config(openai_base_url=far))._probe_hint("big") == ""
 
 
 async def test_a_placeholder_write_inside_an_answer_is_never_made(chat, tmp_path):
@@ -192,9 +219,12 @@ async def test_calls_before_one_that_broke_off_are_made_and_the_broken_one_is_no
 
 async def test_an_answer_that_is_an_unreadable_call_fails_the_run(chat, tmp_path):
     fake = chat([text_reply('{"name": "delete_all", "arguments": {"path": "/"}}')])
-    result = await _run(_engine(fake), tmp_path)
+    result = await _run(_default(fake), tmp_path)
     assert result.ok is False
-    assert result.error == "openai: the model answered with a tool call MetaBot could not read"
+    assert result.error == (
+        "openai: the model answered with a tool call MetaBot could not read. "
+        "metabot doctor --models tiny checks how it calls tools"
+    )
     assert _steps(result) == []
 
 

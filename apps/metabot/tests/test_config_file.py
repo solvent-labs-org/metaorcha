@@ -95,7 +95,8 @@ def test_config_set_names_a_bad_key_or_value_once(capsys):
     assert main(["config", "set", "nope", "1"]) == 2
     said = capsys.readouterr().err
     assert (
-        said == "metabot: no setting 'nope'; one of: project_receipts, fan_cap, ladder_attempts\n"
+        said == "metabot: no setting 'nope'; one of: project_receipts, fan_cap, ladder_attempts,"
+        " sandbox\n"
     )
     assert main(["config", "set", "fan_cap", "9"]) == 2
     assert capsys.readouterr().err == "metabot: fan_cap takes a whole number from 1 to 5\n"

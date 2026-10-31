@@ -8,6 +8,10 @@ record, and the runner stays the only writer.
 Ops: ``{"op": "approve", ...}`` -> ``{"allow": bool, "reason": str}``;
 ``{"op": "step", "step": {...}}`` -> ``{"ok": true}``; anything else ->
 ``{"error": "unknown op"}``.
+
+An asker that hangs up before its reply, as one that gave up waiting does,
+withdraws its request: a person still asked is asked no longer, and the call
+is declined. A step sent before the hang-up is still taken.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from typing import Any
 
 MAX_MESSAGE = 32 * 1024 * 1024
 SUN_PATH_LIMIT = 100  # sockaddr_un holds 104-108 bytes, platform dependent
+WITHDRAWN = {"allow": False, "reason": "declined: cancelled"}  # a question the run took back
 
 
 def _fits(path: Path) -> bool:
@@ -61,19 +66,30 @@ class ControlServer:
         self.cleanup_dir = cleanup_dir
         self._server: asyncio.AbstractServer | None = None
         self._handlers: set[asyncio.Task[Any]] = set()
+        self._asking: set[asyncio.Task[Any]] = set()  # questions still waiting on an answer
         self._closing = False
 
     async def start(self) -> None:
         with contextlib.suppress(FileNotFoundError):
             self.path.unlink()
-        old = os.umask(0o177)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server: asyncio.Server | None = None
         try:
-            self._server = await asyncio.start_unix_server(
-                self._handle, path=str(self.path), limit=MAX_MESSAGE
+            # Its folder is the run's own, which no one else can enter, until it is made
+            # owner-only. The file mode mask is left as it is: every thread shares it.
+            sock.bind(str(self.path))
+            os.chmod(self.path, 0o600)
+            server = await asyncio.start_unix_server(
+                self._handle, sock=sock, limit=MAX_MESSAGE, start_serving=False
             )
-        finally:
-            os.umask(old)
-        os.chmod(self.path, 0o600)
+            await server.start_serving()  # held first, so a stop here closes it whole
+        except BaseException:
+            if server is not None:
+                server.close()  # the loop stops watching the socket before it is closed
+            else:
+                sock.close()
+            raise
+        self._server = server
 
     async def close(self) -> None:
         """Stop serving. A question still waiting (on a person, say) is cancelled:
@@ -93,6 +109,13 @@ class ControlServer:
         if self.cleanup_dir:
             with contextlib.suppress(OSError):
                 self.path.parent.rmdir()
+
+    def withdraw(self) -> None:
+        """Take back every question still waiting on an answer, as the run ends: each is
+        declined, ``declined: cancelled``, and the person is asked no longer. Steps are still
+        taken, as the engine stops."""
+        for task in list(self._asking):
+            task.cancel()
 
     async def _dispatch(self, msg: Any) -> dict[str, Any]:
         if not isinstance(msg, dict):
@@ -117,11 +140,16 @@ class ControlServer:
                 return
             line = await reader.readline()
             try:
-                reply = await self._dispatch(json.loads(line))
-            except ValueError:
-                reply = {"error": "malformed request"}
-            except Exception as exc:  # a handler bug must not take the run down
-                reply = {"error": f"{type(exc).__name__}: {exc}"}
+                msg = json.loads(line)
+            except (ValueError, RecursionError):  # not JSON, or nested past what can be read
+                reply: dict[str, Any] | None = {"error": "malformed request"}
+            else:
+                try:
+                    reply = await self._answer(msg, reader)
+                except Exception as exc:  # a handler bug must not take the run down
+                    reply = {"error": f"{type(exc).__name__}: {exc}"}
+            if reply is None:
+                return  # the asker hung up: no one is there to reply to
             writer.write(json.dumps(reply).encode("utf-8") + b"\n")
             await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError, ValueError):
@@ -133,6 +161,33 @@ class ControlServer:
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
+
+    async def _answer(self, msg: Any, reader: asyncio.StreamReader) -> dict[str, Any] | None:
+        """The reply to ``msg``; None when the asker of a question hangs up before it, which
+        withdraws the question. Anything else is answered at once, so a step that came in
+        is taken, also when its sender is gone."""
+        if not (isinstance(msg, dict) and msg.get("op") == "approve"):
+            return await self._dispatch(msg)
+        answer = asyncio.ensure_future(self._dispatch(msg))
+        self._asking.add(answer)
+        gone = asyncio.ensure_future(_hung_up(reader))
+        try:
+            await asyncio.wait({answer, gone}, return_when=asyncio.FIRST_COMPLETED)
+            if not answer.done():
+                return None
+            return dict(WITHDRAWN) if answer.cancelled() else answer.result()
+        finally:
+            self._asking.discard(answer)
+            for task in (answer, gone):
+                task.cancel()
+            await asyncio.gather(answer, gone, return_exceptions=True)
+
+
+async def _hung_up(reader: asyncio.StreamReader) -> None:
+    """Returns once the asker closes its end. A request is one line: more is let go."""
+    with contextlib.suppress(ConnectionError):
+        while await reader.read(65536):
+            pass
 
 
 async def request(path: Path | str, msg: dict[str, Any], timeout: float = 900.0) -> dict[str, Any]:

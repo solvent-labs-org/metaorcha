@@ -47,13 +47,17 @@ def receipt_state(run_id: Any) -> str:
     """
     from metabot.office_run import receipt_state as state
     from metabot.paths import receipts_dir
+    from metabot.seals import is_seal, seal_state
 
     if not is_safe_id(run_id):
         return "INVALID"
     kept = receipts_dir() / f"{run_id}.json"
     try:
-        return state(run_id, str(kept) if kept.is_file() else None)
-    except ValueError:
+        said = state(run_id, str(kept) if kept.is_file() else None)
+        if said == "valid" and is_seal(json.loads(kept.read_text(encoding="utf-8"))):
+            return seal_state(kept, run_id)  # a ladder's or office run's: its members too
+        return said
+    except (ValueError, RecursionError):
         return "INVALID"
     except OSError:
         return "cannot read"
@@ -94,7 +98,7 @@ def run_view(run_id: str) -> dict[str, Any] | None:
     ``run_id`` is a safe id: the caller checked it.
     """
     from metabot.paths import run_path
-    from metabot.receipts import answer_caveat, declined_and_failed
+    from metabot.receipts import answer_caveat, content_pins, declined_and_failed
 
     path = run_path(run_id) / "journal.json"
     if not path.is_file():
@@ -102,7 +106,7 @@ def run_view(run_id: str) -> dict[str, Any] | None:
     view: dict[str, Any] = {"run_id": run_id, "error": None}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         data, view["error"] = {}, f"cannot read this run's journal: {exc}"
     if not isinstance(data, dict):
         data, view["error"] = {}, "cannot read this run's journal: it holds no object"
@@ -125,6 +129,14 @@ def run_view(run_id: str) -> dict[str, Any] | None:
     view["caveat"] = answer_caveat(*declined_and_failed(steps, verdicts))  # every step counts
     view["receipt"] = _text(data.get("receipt"))
     view["state"] = receipt_state(run_id)
+    if view["state"] == "valid" and any(v.get("check") == "seal" for v in verdicts):
+        from metabot.paths import receipt_path
+        from metabot.seals import seal_state
+
+        view["state"] = seal_state(receipt_path(run_id), run_id)  # its members must hold too
+    # what the receipt commits to, read only when the journal matches it, so these are signed
+    good = view["state"] == "valid" or view["state"].startswith("valid, ")
+    view["commits"] = sorted(content_pins(verdicts) or {}) if good else []
     for key in ("signer", "started_at", "finished_at"):
         view[key] = _text(data.get(key))
     return view
@@ -160,12 +172,22 @@ def office_view(office_run_id: str) -> dict[str, Any] | None:
         }
     view = {key: value for key, value in record.items() if key != "desks"}
     view["office_run_id"], view["error"] = office_run_id, None
+    if isinstance(record.get("seal"), str):  # judged where MetaBot keeps it, by this run's id
+        from metabot.paths import receipt_path
+        from metabot.seals import seal_state
+
+        view["seal_state"] = seal_state(receipt_path(office_run_id), office_run_id)
+    elif record.get("seal_error"):
+        view["seal_state"] = f"none: {record['seal_error']}"
     desks = []
     for raw in _items(record.get("desks")):
         row = dict(raw)
         run_id = str(row.get("run_id") or "")
         row["label"] = _label(row)
-        row["indent"] = isinstance(row.get("copy"), int) or row.get("advises") is not None
+        later = type(row.get("round")) is int and row["round"] > 1
+        if type(row.get("round")) is int:
+            row["label"] += f" r{row['round']}"
+        row["indent"] = isinstance(row.get("copy"), int) or row.get("advises") is not None or later
         row["state"] = receipt_state(run_id)
         if row.get("checks") is not None or row.get("checks_receipt") is not None:
             row["checks_state"] = receipt_state(run_id + CHECKS_SUFFIX)

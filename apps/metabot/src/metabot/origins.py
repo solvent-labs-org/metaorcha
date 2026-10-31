@@ -6,11 +6,18 @@ at any depth and in a list under a plural name such as ``urls`` or
 ``targets``, else the origin the page was last sent to. On an allowed origin a call is read when
 its name says it only looks, and write otherwise; a destructive word in its
 name stays destructive. A call that runs code in the page is destructive on
-every origin: its code can act anywhere, and send what it reads anywhere. On
-any other origin, or when the origin is not known, the call is destructive,
-so a person approves that exact call, and a run with nobody there refuses
-it. The person's own dev server, on this machine and any port, is allowed
-unless they say otherwise.
+every origin: its code can act anywhere, and send what it reads anywhere. So
+is a call on the browser's cookies, storage or routes, which reach every
+site, and a call at a point on the screen, which may land in another site's
+frame. On any other origin, or when the origin is not known, the call is
+destructive, so a person approves that exact call, and a run with nobody
+there refuses it. The person's own dev server, on this machine and any port,
+is allowed unless they say otherwise.
+
+A target names an element of the page only as a browser server names one
+of the top page, ``e6``; anything else under a key such as ``target`` or
+``endTarget`` counts as a place. An element in a frame, ``f1e12``, is in a
+page that may be another site's, so it is a place with no origin.
 
 An origin is read only from an absolute http or https url that every
 browser reads the same way. A url a browser could read differently, such as
@@ -22,12 +29,18 @@ it as another address. So does a host whose last label is a number, unless
 the host is four decimal octets. One trailing dot on a name is that name
 without the dot.
 
-The page's origin is learnt only from the calls that carry a url. A call
-that moves the page without saying where, back, forward, to another tab,
-or to another page, leaves its origin unknown. A call that reads the page,
-or acts on it where it is, keeps that origin. A page that moves itself, by
-a link or a redirect, is not seen: the next call is classed by where the
-page was last sent, and the person is shown that when asked.
+The page's origin is learnt from the calls that carry a url, and from a
+server that says where its page is after a call, in a line
+``- Page URL: <url>`` of its answer, as a browser MCP server does. Lines that
+disagree leave the origin unknown. A page can write such a line itself, in its
+title or a console message, so a line may take the page off an allowed origin
+and never put it on one: only a call that carries the url brings it back. A
+call that moves the page without saying where, back, forward, to another tab,
+or to another page, leaves its origin unknown. A call that reads the page, or
+acts on it where it is, keeps that origin. With a server that does not say, a
+page that moves itself, by a link or a redirect, is not seen: the next call is
+classed by where the page was last sent, and the person is shown that when
+asked.
 """
 
 from __future__ import annotations
@@ -57,9 +70,18 @@ _UNSAFE = re.compile(r"[\\\s\x00-\x1f\x7f]")
 _HOST = re.compile(r"^[a-z0-9_.-]+$")
 _URL_KEYS = frozenset({"url", "uri", "href", "link", "location", "address", "target"})
 _URL_LISTS = frozenset({"urls", "uris", "hrefs", "links", "locations", "addresses", "targets"})
+# Keys a browser server also uses to name an element of the page: target, and any key that
+# ends so, such as endTarget. An element of the top page is named e<N>; one in a frame,
+# f<N>e<M>, is in a page that may be another site's, so it counts as a place.
+_ELEMENT_OR_PLACE = ("target", "targets")
+_ELEMENT_REF = re.compile(r"e[0-9]{1,9}")
 
 # Words of a call that runs code in the page or the browser.
 RUNS_CODE = frozenset({"evaluate", "eval", "code", "script", "javascript", "js", "execute", "exec"})
+# Words of a call on the whole browser: its cookies, storage and routes reach every site.
+REACHES_EVERY_SITE = frozenset({"cookie", "cookies", "storage", "route", "routes", "unroute"})
+# Words of a call at a point on the screen: what is there may be another site's frame.
+AT_A_POINT = frozenset({"mouse", "xy"})
 # Words of a call that moves the page somewhere it does not say.
 MOVES_UNSAID = frozenset({"back", "forward", "tab", "tabs", "history"})
 # With the word "page", these change which page is showing.
@@ -268,14 +290,14 @@ def _is_url_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
     low = key.lower()
-    return low in _URL_KEYS or low.endswith(("url", "uri"))
+    return low in _URL_KEYS or low.endswith(("url", "uri", "target"))
 
 
 def _is_url_list_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
     low = key.lower()
-    return low in _URL_LISTS or low.endswith(("urls", "uris"))
+    return low in _URL_LISTS or low.endswith(("urls", "uris", "targets"))
 
 
 def call_urls(args: Mapping[str, Any] | None) -> list[Any]:
@@ -283,8 +305,9 @@ def call_urls(args: Mapping[str, Any] | None) -> list[Any]:
 
     A list under a plural name, such as ``urls`` or ``targets``, holds one each. Any other
     value under such a name counts as one, so one that is not text has no
-    origin. The arguments are walked without recursion: their depth is the
-    model's to choose.
+    origin, except an element of the page named under ``target``. The
+    arguments are walked without recursion: their depth is the model's to
+    choose.
     """
     found: list[Any] = []
     todo: deque[Any] = deque([args or {}])
@@ -297,12 +320,44 @@ def call_urls(args: Mapping[str, Any] | None) -> list[Any]:
             continue
         for key, value in node.items():
             if _is_url_key(key):
-                found.append(value)
+                found.extend(_places(key, [value]))
             elif _is_url_list_key(key):
-                found.extend(value if isinstance(value, list) else [value])
+                found.extend(_places(key, value if isinstance(value, list) else [value]))
             elif isinstance(value, (Mapping, list)):
                 todo.append(value)
     return found
+
+
+def _places(key: str, values: list[Any]) -> list[Any]:
+    """The values under a url key that may be a place: under a target, not an element's name.
+
+    A browser server names an element of the top page as its target, such as
+    ``e6``. Anything else still counts, an element in a frame among them.
+    """
+    if not key.lower().endswith(_ELEMENT_OR_PLACE):
+        return values
+    return [v for v in values if not (isinstance(v, str) and _ELEMENT_REF.fullmatch(v))]
+
+
+_PAGE_URL = re.compile(r"- Page URL: (\S+)")
+
+
+def page_said(texts: Iterable[str]) -> tuple[bool, str | None]:
+    """Where a browser server says its page is after a call: whether it said, and the origin.
+
+    A ``- Page URL: <url>`` line at the start of a line of its answer says it.
+    Lines that disagree, or a url with no origin, say the page is not known.
+    """
+    found = {m.group(1) for text in texts for m in map(_PAGE_URL.fullmatch, text.splitlines()) if m}
+    if not found:
+        return False, None
+    origins = {origin_of(url) for url in found}
+    return True, origins.pop() if len(origins) == 1 else None
+
+
+def acts_on_the_page(name: str) -> bool:
+    """Whether a browser call's name says it acts on the page: a click, typing, a navigate."""
+    return bool(set(_tokens(name)) & BROWSER_ACTIONS)
 
 
 def moves_unsaid(name: str) -> bool:
@@ -324,8 +379,8 @@ def browser_class(name: str, allowed: bool) -> ScopeClass:
     """A browser call's class before hints and settings tighten it."""
     if not allowed or not is_valid_capability_id(name):
         return ScopeClass.DESTRUCTIVE
-    if set(_tokens(name)) & RUNS_CODE:
-        return ScopeClass.DESTRUCTIVE  # its code can act on any origin, whatever the page's
+    if set(_tokens(name)) & (RUNS_CODE | REACHES_EVERY_SITE | AT_A_POINT):
+        return ScopeClass.DESTRUCTIVE  # it can act on any origin, whatever the page's
     named = platform_rule(name)
     if named is ScopeClass.DESTRUCTIVE and is_recognised(name):
         return ScopeClass.DESTRUCTIVE  # a destructive word in the name

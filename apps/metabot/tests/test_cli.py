@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -181,6 +182,26 @@ def test_ask_reads_the_prompt_from_stdin(echo, tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().err == ""  # -q: no trace and no receipt line
 
 
+def _stdin(data: bytes) -> io.TextIOWrapper:
+    """A stdin as Python opens one in a UTF-8 locale: strict about what it decodes."""
+    return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8")
+
+
+def test_a_prompt_on_stdin_naming_a_file_whose_name_is_not_utf_8_runs(echo, tmp_path, monkeypatch):
+    argv_out = tmp_path / "argv.json"
+    monkeypatch.setenv("FAKE_ARGV_OUT", str(argv_out))
+    monkeypatch.setattr(sys, "stdin", _stdin(b"see caf\xe9.txt\n"))  # as `ls | metabot ask -`
+    # before: a traceback, UnicodeDecodeError, before any run; as an argument it ran
+    assert main(["ask", "-q", "--cwd", str(tmp_path), "-"]) == 0
+    argv = json.loads(argv_out.read_text())["argv"]
+    assert argv[-1] == os.fsdecode(b"see caf\xe9.txt\n")  # its bytes, as an argument's go
+
+
+def test_chat_reads_a_line_naming_a_file_whose_name_is_not_utf_8(echo, tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _stdin(b"see caf\xe9.txt\n"))
+    assert main(["chat", "--cwd", str(tmp_path)]) == 0  # before: a traceback at the line
+
+
 def test_ask_failure_still_seals(bin_dir, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-error-result.jsonl"))
     assert main(["ask", "--cwd", str(tmp_path), "go"]) == 1
@@ -188,9 +209,8 @@ def test_ask_failure_still_seals(bin_dir, tmp_path, monkeypatch, capsys):
 
 
 def test_ask_rejects_an_unknown_engine_and_a_missing_dir(echo, tmp_path, capsys):
-    with pytest.raises(SystemExit) as exit_info:
-        main(["ask", "-e", "nope", "hi"])
-    assert exit_info.value.code == 2
+    assert main(["ask", "-e", "nope", "hi"]) == 2  # checked after parsing: bridges count
+    assert "unknown engine 'nope'" in capsys.readouterr().err
     assert main(["ask", "--cwd", str(tmp_path / "missing"), "hi"]) == 2
 
 
@@ -328,6 +348,21 @@ def test_connect_add_needs_one_target(bin_dir, monkeypatch, capsys):
         main(["connect", "add", "gh", "--url", "https://a", "--command", "x"])
 
 
+@pytest.mark.parametrize("folder", ["plain", "App Support"])
+def test_connect_add_saves_no_server_that_would_never_start(tmp_path, monkeypatch, capsys, folder):
+    from metabot.connections import ConnectionStore
+
+    where = tmp_path / folder / "mb"
+    monkeypatch.setenv("METABOT_HOME", str(where))
+    copy = where / "plugins" / f"tools@{'a' * 64}"
+    copy.mkdir(parents=True)
+    word = f"{copy}/server.py" if folder != "plain" else f"x{copy}/server.py"
+    assert main(["connect", "add", "mine", "--no-token", "--command", "python3", word]) == 2
+    # before: saved, and every start refused it, with a mend that never rewrote it
+    assert "mine would never start: it names a copy of plugin tools" in capsys.readouterr().err
+    assert ConnectionStore().list() == []
+
+
 def test_connect_add_reports_a_bad_name(bin_dir, capsys):
     assert main(["connect", "add", "Bad_Name", "--no-token", "--url", "https://x"]) == 2
     assert "a name is 1-32" in capsys.readouterr().err
@@ -402,6 +437,21 @@ def test_connect_test_reports_a_dead_server(bin_dir, tmp_path, capsys):
     assert "gone did not answer" in capsys.readouterr().err
 
 
+def test_connect_test_starts_no_plugin_server_saved_outside_this_home(
+    tmp_path, monkeypatch, capsys
+):
+    word = f"rh/plugins/tools@{'b' * 64}/server.py"  # as 0.2.0 saved it under METABOT_HOME=rh
+    planted = tmp_path / word
+    planted.parent.mkdir(parents=True)
+    ran = tmp_path / "ran"
+    planted.write_text(f"open({str(ran)!r}, 'w').close()\n", encoding="utf-8")
+    ConnectionStore().add(name="tools-db", transport="stdio", command=[sys.executable, word])
+    monkeypatch.chdir(tmp_path)
+    assert main(["connect", "test", "tools-db"]) == 1
+    assert not ran.exists()  # before: it ran, in the folder the command was typed in
+    assert f"metabot plugin enable {'b' * 12} --add-servers" in capsys.readouterr().err
+
+
 # ── receipts ────────────────────────────────────────────────────────────────
 
 
@@ -437,6 +487,17 @@ def test_receipts_verify_exit_codes(echo, tmp_path, capsys):
     assert main(["receipts", "verify", "../../no-such/receipt"]) == 2
 
 
+def test_receipts_verify_by_id_checks_the_receipt_is_that_runs(echo, tmp_path, capsys):
+    first, second = _one_run(tmp_path, capsys), _one_run(tmp_path, capsys)
+    kept = receipts_dir() / f"{first}.json"
+    kept.write_bytes((receipts_dir() / f"{second}.json").read_bytes())  # valid, but not first's
+    assert main(["receipts", "verify", first]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("INVALID")
+    assert f"  the receipt kept as {first} is run {second}'s" in out.splitlines()
+    assert main(["receipts", "verify", str(kept)]) == 0  # a file given by path is what it says
+
+
 def test_receipts_verify_creates_nothing_in_the_metabot_home(echo, tmp_path, capsys, monkeypatch):
     run_id = _one_run(tmp_path, capsys)
     shared = tmp_path / "shared.json"
@@ -447,6 +508,50 @@ def test_receipts_verify_creates_nothing_in_the_metabot_home(echo, tmp_path, cap
     assert main(["receipts", "verify", run_id]) == 2  # not kept in this home
     capsys.readouterr()
     assert not fresh.exists()  # a check reads: it makes no home and no receipts folder
+
+
+def test_a_home_whose_name_is_not_utf_8_is_named_escaped(echo, tmp_path, capsys, monkeypatch):
+    """init, receipts verify and doctor name the home and what is in it, whatever its bytes;
+    each stopped with a traceback, init and verify after doing their work."""
+    monkeypatch.setenv("METABOT_HOME", str(tmp_path / os.fsdecode(b"caf\xe9-home")))
+    assert main(["init"]) == 0
+    assert "caf\\udce9-home" in capsys.readouterr().out
+    run_id = _one_run(tmp_path, capsys)
+    assert main(["receipts", "verify", run_id]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("VALID") and "caf\\udce9-home" in out
+    changed = receipts_dir() / "changed.json"
+    signed = (receipts_dir() / f"{run_id}.json").read_text()
+    changed.write_text(signed.replace('"success": true', '"success": false', 1))
+    assert main(["receipts", "verify", str(changed)]) == 1
+    assert capsys.readouterr().out.startswith("INVALID")
+    monkeypatch.setenv("PATH", "/no/such/bin")  # doctor asks each engine CLI it finds its version
+    main(["doctor"])
+    assert "caf\\udce9-home" in capsys.readouterr().out
+
+
+def test_doctor_shows_an_engine_whose_version_is_not_utf_8(tmp_path, capsys, monkeypatch):
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    claude = folder / "claude"  # its version holds a byte that is not UTF-8, and a screen clear
+    claude.write_bytes(b"#!/bin/sh\nprintf 'claude 9.9 caf\\351 \\033[2J\\n'\n")
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(folder))
+    # before: a traceback, UnicodeDecodeError, and none of the lines after the key
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert f"engine   claude  on PATH {claude} claude 9.9 caf\\udce9 \\x1b[2J\n" in out
+    assert "engine   codex   missing" in out
+
+
+def test_chat_in_a_folder_whose_name_is_not_utf_8(echo, tmp_path, capsys, monkeypatch):
+    folder = tmp_path / os.fsdecode(b"caf\xe9")
+    folder.mkdir()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # the input ends at once
+    assert main(["chat", "--cwd", str(folder)]) == 0  # before: a traceback, before any prompt
+    assert f"in {tmp_path}/caf\\udce9. /help" in capsys.readouterr().out
+    assert main(["chat", "--cwd", str(tmp_path / os.fsdecode(b"none\xe9"))]) == 2
+    assert capsys.readouterr().out == f"metabot: {tmp_path}/none\\udce9 is not a directory\n"
 
 
 def test_receipts_list_and_show(echo, tmp_path, capsys):
@@ -525,6 +630,21 @@ def _evil_answer(tmp_path, monkeypatch) -> str:
     path.write_text("\n".join([*lines[:-1], json.dumps(last)]) + "\n", encoding="utf-8")
     monkeypatch.setenv("FAKE_FIXTURE", str(path))
     return last["result"]
+
+
+def test_an_answer_naming_a_file_whose_name_is_not_utf_8_prints_escaped(
+    bin_dir, tmp_path, monkeypatch, capsys
+):
+    lines = (FIXTURES / "claude-echo.jsonl").read_text(encoding="utf-8").splitlines()
+    last = json.loads(lines[-1])
+    last["result"] = "wrote " + os.fsdecode(b"caf\xe9.txt")  # a name as Python reads it
+    path = tmp_path / "named.jsonl"
+    path.write_text("\n".join([*lines[:-1], json.dumps(last)]) + "\n", encoding="utf-8")
+    monkeypatch.setenv("FAKE_FIXTURE", str(path))
+    # before: the run was sealed, and then printing its answer stopped it with a traceback
+    assert main(["ask", "--cwd", str(tmp_path), "hi"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "wrote caf\\udce9.txt\n" and "(valid, " in captured.err
 
 
 def test_an_answer_shown_on_a_terminal_cannot_repaint_it(bin_dir, tmp_path, monkeypatch):

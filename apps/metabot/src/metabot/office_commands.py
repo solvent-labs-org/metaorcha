@@ -40,8 +40,21 @@ def _lines_err(text: str) -> None:
 
 def office_from_args(args: argparse.Namespace) -> OfficeSpec | None:
     """The office ``--dir`` names, else the one here or above; None after saying why."""
+    from metabot.cmdline import given_folder
+
     cfg = load_config()
-    root = office_root(Path(args.dir)) if getattr(args, "dir", None) else find_office()
+    if getattr(args, "dir", None):
+        folder, usable = given_folder(args.dir)
+        if not usable:
+            _err(f"metabot: {folder} is not a directory")
+            return None
+        root: Path | None = office_root(folder)
+    else:
+        try:
+            root = find_office()
+        except OSError as exc:  # no office pinned, and the current folder was removed
+            _err(f"metabot: {_no_folder(exc)}")
+            return None
     if root is None:
         _err("metabot: no office.yaml here or above; Code Desks' `desk init` writes one")
         return None
@@ -115,8 +128,16 @@ def cmd_office_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _no_folder(exc: OSError) -> str:
+    return f"the current folder cannot be read ({exc.strerror or exc}); give --dir"
+
+
 def _repo(args: argparse.Namespace) -> Path | None:
-    start = Path(args.dir) if getattr(args, "dir", None) else Path.cwd()
+    try:
+        start = Path(args.dir) if getattr(args, "dir", None) else Path.cwd()
+    except OSError as exc:  # the current folder was removed
+        _err(f"metabot: {_no_folder(exc)}")
+        return None
     top = toplevel(start)
     if top is None:
         _err(f"metabot: {start} is not in a git repository")
@@ -219,9 +240,15 @@ def cmd_office_run(args: argparse.Namespace) -> int:
     from metabot.approvals import pick_approver, terminal_safe
     from metabot.cmdline import read_prompt
     from metabot.console import Trace
-    from metabot.office_run import receipt_state, run_fan, run_relay
+    from metabot.office_run import ROUNDS_DEFAULT, receipt_state, run_fan, run_relay
     from metabot.runner import RunCancelled
+    from metabot.spend import dollars
 
+    if args.rounds is not None and not args.until_checks:
+        _err("metabot: --rounds goes with --until-checks")
+        return 2
+    rounds = (args.rounds or ROUNDS_DEFAULT) if args.until_checks else 1
+    checks = args.checks or args.until_checks
     office = office_from_args(args)
     if office is None:
         return 2
@@ -250,7 +277,9 @@ def cmd_office_run(args: argparse.Namespace) -> int:
                 plugins=not args.no_plugins,
                 on_event=trace,
                 on_desk=on_desk,
-                checks=args.checks,
+                checks=checks,
+                rounds=rounds,
+                max_cost_musd=args.max_cost,
                 **kw,
             )
         )
@@ -266,27 +295,44 @@ def cmd_office_run(args: argparse.Namespace) -> int:
     except (DeskGitError, GitError, ValueError) as exc:  # a PluginError is a ValueError
         _err(f"metabot: the office run stopped: {printable(str(exc), 300)}")
         return 1
+    # a run whose record is not on disk did not end well: the trace said why as it closed
+    ended_well = result.ok and result.record_error is None
     print(f"office run {result.office_run_id}  {result.mode}")
     for row in result.rows:
         state = receipt_state(row.run_id, str(row.receipt) if row.receipt else None)
+        label = row.label + (f" r{row.round}" if row.round else "")
         line = (
-            f"  {_s(row.label, 40):<12} {'ok' if row.ok else 'error':<6} "
+            f"  {_s(label, 40):<12} {'ok' if row.ok else 'error':<6} "
             f"{_s(_runs_text(row.engine, row.model), 60):<24} receipt {state:<8} {_stat(row.stat)}"
         )
-        if args.checks:
-            line += f"  checks {_s(row.checks or _unchecked(row.ok, row.advises), 300)}"
+        if checks:
+            line += f"  checks {_s(row.checks or _unchecked(row), 300)}"
         if row.error:
             line += f"  {_s(row.error, 300)}"
+        if row.stopped:
+            line += f"  ({_s(row.stopped, 200)})"
         print(line)
+    if args.max_cost is not None:
+        spent = sum(row.cost_musd or 0 for row in result.rows)
+        if result.cost_unknown:  # a run that counted no usage: the total is a floor
+            unknown = _s(", ".join(result.cost_unknown), 200)
+            print(
+                f"  spent at least {dollars(spent)} of {dollars(args.max_cost)}: "
+                f"the cost of {unknown} is unknown"
+            )
+        else:
+            print(f"  spent {dollars(spent)} of {dollars(args.max_cost)}")
     for key, why in result.checks_skipped.items():
         print(f"  check {_s(key, 80)} skipped: {_s(why, 200)}")
-    if args.checks and all(r.checks is None for r in result.rows if r.advises is None):
+    if checks and all(r.checks is None for r in result.rows if r.advises is None):
         print("  no check ran: no desk changed a file")
     if result.project_copies:
         where = result.project_copies[0].parent
         print(f"  project copies: {len(result.project_copies)} receipts in {_s(where, 300)}")
     for why in result.project_errors:
         print(f"  {_s(why, 300)}; the receipts in the MetaBot home count")
+    if result.seal is not None:
+        print(f"  sealed over every run: metabot receipts verify {result.office_run_id}")
     tty = sys.stdout.isatty()
     advice = [r for r in result.rows if r.advises is not None]
     for row in advice:  # an advisor's output is for the person, whomever it advised
@@ -295,7 +341,7 @@ def cmd_office_run(args: argparse.Namespace) -> int:
             print(terminal_safe(row.answer) if tty else row.answer, flush=True)
             _said_otherwise(row)
     # a fan's desks all count; a relay's are the last desk's runs, one or its copies
-    worked = [r for r in result.rows if r.advises is None]
+    worked = [r for r in result.rows if r.advises is None and r.next_round is None]
     last = worked[-1].desk if worked else None
     shown = worked if result.mode == "fan" else [r for r in worked if r.desk == last]
     for row in shown:
@@ -304,7 +350,7 @@ def cmd_office_run(args: argparse.Namespace) -> int:
             print(terminal_safe(row.answer) if tty else row.answer, flush=True)
             _said_otherwise(row)
     if not any(row.ok for row in shown):
-        return 0 if result.ok else 1  # it stopped short: its table says where
+        return 0 if ended_well else 1  # it stopped short: its table says where
     if not result.offer:
         if any(row.commit for row in worked):  # a failed desk's, or a branch since gone
             print(
@@ -321,7 +367,7 @@ def cmd_office_run(args: argparse.Namespace) -> int:
     else:
         for label in result.offer:
             print(f"pick one: metabot desks pick {result.office_run_id}/{label}")
-    return 0 if result.ok else 1
+    return 0 if ended_well else 1
 
 
 def cmd_office_trust(args: argparse.Namespace) -> int:
@@ -363,21 +409,36 @@ def cmd_office_trust(args: argparse.Namespace) -> int:
         if input("trust them on this machine? [y/N] ").strip().lower() not in ("y", "yes"):
             print("not trusted")
             return 1
-    print(f"trusted on this machine; recorded in {record_trust(office)}")
+    print(f"trusted on this machine; recorded in {_s(record_trust(office), 2000)}")
     return 0
 
 
-def _unchecked(ok: object, advises: object) -> str:
+def _unchecked(row: Any) -> str:
     """Why a desk has no checks result: it changed no file, or it did not get that far."""
-    return NO_CHANGE if ok and advises is None else "-"
+    if row.read_only:
+        return READ_ONLY
+    return NO_CHANGE if row.ok and row.advises is None else "-"
 
 
 NO_CHANGE = "- (no file changed)"
+READ_ONLY = "- (read-only)"
 
 
-def show_office(record: dict) -> int:
+def _kept(run_id: str) -> str | None:
+    """A run's receipt where MetaBot keeps it, if there is one; ValueError for no run id."""
+    from metabot.paths import receipt_path
+
+    path = receipt_path(run_id)
+    return str(path) if path.is_file() else None
+
+
+def show_office(record: dict, office_run_id: str) -> int:
+    """An office run's tree; its seal is judged as kept under ``office_run_id``, the id the
+    record was read by, never by a path the record names."""
     from metabot.checks import CHECKS_SUFFIX
     from metabot.office_run import receipt_state
+    from metabot.paths import receipt_path
+    from metabot.seals import seal_state
 
     print(
         f"office run  {_s(record.get('office_run_id'), 130)}  {_s(record.get('office'), 80)}  "
@@ -386,13 +447,17 @@ def show_office(record: dict) -> int:
     print(f"task        {_s(record.get('task', ''), 300)}")
     started, finished = _s(record.get("started_at"), 40), _s(record.get("finished_at"), 40)
     print(f"started     {started}   finished {finished}")
+    if isinstance(record.get("seal"), str):
+        seal = receipt_path(office_run_id)
+        print(f"seal        {_s(str(seal), 600)} ({seal_state(seal, office_run_id)})")
+    elif record.get("seal_error"):
+        print(f"seal        none: {_s(record.get('seal_error'), 300)}")
     for row in record.get("desks") or []:
         if not isinstance(row, dict):
             continue
         run_id = str(row.get("run_id") or "")
-        receipt = row.get("receipt")
-        try:
-            state = receipt_state(run_id, receipt if isinstance(receipt, str) else None)
+        try:  # where MetaBot keeps it, never a path the record names
+            state = receipt_state(run_id, _kept(run_id))
         except ValueError:
             state = "INVALID"
         stat = row.get("stat")
@@ -409,13 +474,12 @@ def show_office(record: dict) -> int:
         checks, checks_receipt = row.get("checks"), row.get("checks_receipt")
         if isinstance(checks, str) or isinstance(checks_receipt, str):
             try:
-                checks_state = receipt_state(
-                    run_id + CHECKS_SUFFIX,
-                    checks_receipt if isinstance(checks_receipt, str) else None,
-                )
+                checks_state = receipt_state(run_id + CHECKS_SUFFIX, _kept(run_id + CHECKS_SUFFIX))
             except ValueError:
                 checks_state = "INVALID"
             line += f"  checks {_s(checks or '-', 200)} (receipt {checks_state})"
+        elif record.get("checks") and row.get("read_only") is True:
+            line += f"  checks {READ_ONLY}"
         elif record.get("checks") and row.get("ok") and row.get("advises") is None:
             line += f"  checks {NO_CHANGE}"
         if row.get("error"):

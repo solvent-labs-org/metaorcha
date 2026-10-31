@@ -39,7 +39,9 @@ class ToolResult:
 @dataclass(frozen=True)
 class Usage:
     data: dict[str, Any] = field(default_factory=dict)
-    total: bool = False  # the run's whole spend so far, in place of the reports before it
+    total: bool = False  # the run's whole so far: what it holds past the reports before is added
+    model: str | None = None  # the model these tokens ran on, when the engine names it
+    lost: bool = False  # a request went out, and this report does not say what it spent
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,8 @@ class Final:
 @dataclass(frozen=True)
 class ErrorEvent:
     message: str
+    unsent: bool = False  # nothing reached the model: never sent, or its server refused it
+    lost: bool = False  # a request went out and what it spent never came back
 
 
 @dataclass(frozen=True)

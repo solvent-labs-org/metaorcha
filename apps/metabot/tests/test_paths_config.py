@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 
 from conftest import private_mode
 from metabot import config, paths
@@ -12,6 +13,29 @@ def test_home_is_private(home):
     h = paths.metabot_home()
     assert h == home
     assert private_mode(h) == 0o700
+
+
+def test_a_home_named_by_a_relative_path_is_named_whole(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("METABOT_HOME", "rel-home")
+    # before: rel-home, which a hook or a switchboard started in another folder looked
+    # for there
+    assert paths.metabot_home() == tmp_path / "rel-home"
+
+
+def test_the_tests_guard_clears_a_stray_home_it_cannot_list(tmp_path):
+    from conftest import _clear_stray
+
+    stray = tmp_path / "no-test-home"
+    (stray / "home" / "locked" / "deep").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o500)
+    (stray / "home" / "out").symlink_to(outside)
+    os.chmod(stray / "home" / "locked", 0)
+    _clear_stray(stray)
+    # before: rmtree stopped at the folder, so every test after was named and errored
+    assert not stray.exists()
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o500  # a link is never followed
 
 
 def test_a_private_folder_and_each_parent_it_makes_are_0700_whatever_the_umask(tmp_path):
@@ -60,7 +84,7 @@ def test_config_roundtrip():
 
 def test_version_cli(capsys):
     assert main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "metabot 0.2.0"
+    assert capsys.readouterr().out.strip() == "metabot 0.3.0"
 
 
 def test_run_dir_refuses_path_tricks():

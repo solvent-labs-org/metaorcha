@@ -8,8 +8,10 @@ they start.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import copy
+import os
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -23,12 +25,25 @@ from starlette.types import ASGIApp
 
 from metabot import web_data as data
 from metabot import web_pages as pages
+from metabot.checks import NOT_ONE_LINE, refused
 from metabot.web_guard import Guard, checked_form, guarded, nonce_of
 from metabot.web_runs import AskAnswered, AskExpired, Broker, WebApprover
 
 PROMPT_LIMIT = 100_000  # characters of a task typed in the page
 FIELDS = ("prompt", "engine", "role", "model", "folder")
-OFFICE_FIELDS = ("prompt", "folder", "mode", "checks", "advisors")  # and a "desk" per desk
+EVERYDAY_FIELDS = ("prompt", "folder", "check")  # a task, a folder, and a check if you have one
+CHECK_LIMIT = 1000
+# and a "desk" per desk
+OFFICE_FIELDS = (
+    "prompt",
+    "folder",
+    "mode",
+    "checks",
+    "advisors",
+    "until_checks",
+    "rounds",
+    "max_cost",
+)
 MODES = ("relay", "fan")
 TITLES = {400: "Not done", 404: "Not found", 409: "Answered already", 410: "No longer waiting"}
 
@@ -88,21 +103,79 @@ def _task(prompt: str) -> None:
 
 
 def _folder(text: str, start_dir: Path) -> Path:
-    """The folder a form names, from where the UI started; ValueError when it is not one."""
+    """The folder a form names, from where the UI started; ValueError when it is not one,
+    or is one that cannot be entered."""
     try:
         found = (start_dir / Path(text).expanduser()).resolve()
+        if not found.is_dir():  # past a folder it cannot enter, is_dir raises
+            raise ValueError
     except (OSError, RuntimeError, ValueError):
-        found = None
-    if found is None or not found.is_dir():
-        raise ValueError(f"{text[:300]} is not a folder")
+        raise ValueError(f"{text[:300]} is not a folder") from None
+    if not os.access(found, os.X_OK):
+        raise ValueError(f"{text[:300]} cannot be entered")
     return found
+
+
+def plan_everyday(values: dict[str, str], start_dir: Path) -> dict[str, Any]:
+    """What the home page asks to do: a task in a folder, run as a ladder.
+
+    Raises ValueError naming what is wrong.
+    """
+    from metabot.config import ConfigError, load_config
+
+    try:
+        load_config()  # settings that do not read stop the run here, as they stop metabot ask
+    except ConfigError as exc:
+        raise ValueError(str(exc)) from exc
+    prompt = values["prompt"]
+    _task(prompt)
+    cwd = _folder(values["folder"].strip() or str(start_dir), start_dir)
+    check = values.get("check", "").strip()
+    why = refused({"check": check}).get("check") if check else None
+    if why == NOT_ONE_LINE:
+        raise ValueError(
+            "the check is one line of printable text: a command, as you would type it in the folder"
+        )
+    if why is not None:
+        raise ValueError(
+            "that check could change or delete things, so it never runs: give a command that"
+            " only tests the work"
+        )
+    if len(check) > CHECK_LIMIT:
+        raise ValueError(f"the check is longer than {CHECK_LIMIT} characters")
+    return {"prompt": prompt, "cwd": cwd, "check": check or None}
+
+
+def ladder_args(plan: dict[str, Any]) -> argparse.Namespace:
+    """The ``ask --ladder`` options a home-page task runs with.
+
+    These are the defaults, which write only when asked.
+    """
+    return argparse.Namespace(
+        prompt=[plan["prompt"]],
+        cwd=str(plan["cwd"]),
+        check=[plan["check"]] if plan.get("check") else None,
+        engine=None,
+        model=None,
+        suggest=False,
+        resume=None,
+        role=None,
+        allow_write=False,
+        allow=None,
+        read_only=False,
+        no_connections=False,
+        no_plugins=False,
+        max_cost=None,
+        project_receipt=None,
+        json=False,
+    )
 
 
 def plan_run(values: dict[str, str], start_dir: Path) -> dict[str, Any]:
     """What a chat form asks to run, as ``ask`` would run it; ValueError naming what is wrong."""
     from metabot.commands import default_engine
     from metabot.config import MODEL_RE, load_config
-    from metabot.engines import ENGINES
+    from metabot.engines import engine_names, known_engine
     from metabot.roster import ROLES, pick
 
     load_config()  # settings that do not read stop the run here, as they stop metabot ask
@@ -112,8 +185,9 @@ def plan_run(values: dict[str, str], start_dir: Path) -> dict[str, Any]:
     if role is not None and role not in ROLES:
         raise ValueError(f"unknown role {role[:40]!r}; choose one of: {', '.join(ROLES)}")
     engine = values["engine"] or None
-    if engine is not None and engine not in ENGINES:
-        raise ValueError(f"unknown engine {engine[:40]!r}; choose one of: {', '.join(ENGINES)}")
+    if engine is not None and not known_engine(engine):
+        names = ", ".join(engine_names())
+        raise ValueError(f"unknown engine {engine[:40]!r}; choose one of: {names}")
     model = values["model"].strip() or None
     if model is not None and not MODEL_RE.match(model):
         raise ValueError(f"{model[:60]!r} is not a model name")
@@ -135,9 +209,14 @@ def office_in(folder: str, start_dir: Path) -> Any:
     """The office in a form's folder, read as ``office run --dir`` reads it; ValueError if none."""
     from metabot.config import load_config
     from metabot.office import OFFICE_FILE, OfficeError, load_office, office_root
+    from metabot.paths import is_file
 
     root = office_root(_folder(folder.strip() or str(start_dir), start_dir))
-    if not (root / OFFICE_FILE).is_file():
+    try:
+        missing = not is_file(root / OFFICE_FILE)
+    except OSError:  # one it cannot look at: reading it says why
+        missing = False
+    if missing:
         raise ValueError(f"no {OFFICE_FILE} in {str(root)[:300]}; Code Desks' desk init writes one")
     try:
         return load_office(root, load_config().fan_cap)
@@ -199,12 +278,15 @@ def plan_office(values: dict[str, str], desks: list[str], start_dir: Path) -> di
     if unknown is not None:
         raise ValueError(f"no desk named {unknown[:40]!r}")
     roster = roster_entries()
-    checks = values["checks"] == "1"
+    rounds = _rounds(values)
+    cap = _cap(values["max_cost"])
+    checks = values["checks"] == "1" or rounds > 1
     advisors = mode == "relay" and values["advisors"] == "1"
     try:
         start = check_start(
-            office, values["prompt"], desks=desks, roster=roster, checks=checks, advisors=advisors
-        )
+            office, values["prompt"], desks=desks, roster=roster, checks=checks,
+            advisors=advisors, rounds=rounds, max_cost_musd=cap,
+        )  # fmt: skip
     except OfficeError as exc:
         raise ValueError(str(exc)) from None
     return {
@@ -215,7 +297,39 @@ def plan_office(values: dict[str, str], desks: list[str], start_dir: Path) -> di
         "roster": roster,
         "checks": checks,
         "advisors": advisors,
+        "rounds": rounds,
+        "max_cost": cap,
     }
+
+
+def _rounds(values: dict[str, str]) -> int:
+    """The most rounds the form asks a desk to run: one, unless until the checks pass."""
+    from metabot.office_run import ROUNDS_DEFAULT
+
+    said = values["rounds"].strip()
+    if values["until_checks"] != "1":
+        if said:
+            raise ValueError("rounds go with until the checks pass: tick it, or leave rounds empty")
+        return 1
+    if not said:
+        return ROUNDS_DEFAULT
+    if not (said.isascii() and said.isdigit()) or len(said) > 3:
+        raise ValueError("rounds must be a whole number, from 1 to 10")
+    return int(said)
+
+
+def _cap(said: str) -> int | None:
+    """The form's money cap in micro-dollars, or None when it gives none."""
+    import argparse
+
+    from metabot.cli import _dollars
+
+    if not said.strip():
+        return None
+    try:
+        return _dollars(said.strip())
+    except (argparse.ArgumentTypeError, ValueError, ArithmeticError):
+        raise ValueError("max cost must be dollars, such as 2 or 0.50") from None
 
 
 def make_app(
@@ -234,13 +348,15 @@ def make_app(
     def chat_page(
         request: Request, values: dict[str, str], error: str | None = None, status: int = 200
     ) -> HTMLResponse:
-        from metabot.engines import ENGINES, available
+        from metabot.engines import available, engine_names, is_bridge
         from metabot.roster import ABOUT, ROLES
 
         found = available()
         engines = [
             (n, f"{n} ({'installed' if found.get(n) else 'not found'})" if n in found else n)
-            for n in ENGINES
+            if not is_bridge(n)
+            else (n, f"{n} (bridge)")
+            for n in engine_names()
         ]
         page = pages.chat_page(
             nonce_of(request),
@@ -278,6 +394,63 @@ def make_app(
         coro = ask_once(**plan, approver=approver, trace=live.trace, run_id=run_id, engine=engine)
         broker.start(run_id, coro)
         return RedirectResponse(f"/live/{run_id}", status_code=303)
+
+    def everyday_response(
+        request: Request, values: dict[str, str], error: str | None = None, status: int = 200
+    ) -> HTMLResponse:
+        page = pages.everyday_page(
+            nonce_of(request), guard.csrf, values=values, started=started(), error=error
+        )
+        return HTMLResponse(page, status_code=status)
+
+    async def start_ladder(plan: dict[str, Any]) -> RedirectResponse:
+        """Open a run and start its ladder as a task on this loop, so its asks reach the page."""
+        from metabot.commands import LadderSetupError, ladder_run, ladder_setup
+        from metabot.paths import new_run_id
+
+        run_id = new_run_id()
+        live = broker.open(
+            run_id, engine="ladder", model=None, cwd=str(plan["cwd"]), prompt=plan["prompt"]
+        )
+        args = ladder_args(plan)
+        try:
+            # the page's id is the ladder's, so its record and its seal are found by it later
+            setup = await run_in_threadpool(ladder_setup, args, live.trace, plan["prompt"], run_id)
+        except LadderSetupError as exc:  # the run is shown as failed, with the reason
+            live.state, live.error = "failed", str(exc)
+            return RedirectResponse(f"/live/{run_id}", status_code=303)
+        approver = WebApprover(broker, run_id)
+
+        async def climb() -> Any:
+            from metabot.ladder import why_line
+
+            live.answered = False  # until the ladder takes a try: a stop takes none
+            ladder = await ladder_run(setup, args, live.trace, approver=approver)
+            live.why, live.answered = why_line(ladder, pages.WHY_LIMIT), ladder.answered
+            return ladder.final
+
+        broker.start(run_id, climb())
+        return RedirectResponse(f"/live/{run_id}", status_code=303)
+
+    async def home(request: Request) -> HTMLResponse | RedirectResponse:
+        """The home page: the everyday box, unless the settings ask for the developer runs list."""
+        from metabot.config import ConfigError, load_config
+
+        try:
+            developer = load_config().ui_mode == "developer"
+        except ConfigError:
+            developer = False
+        if developer and request.method != "POST":
+            return await run_in_threadpool(runs, request)
+        if request.method != "POST":
+            return everyday_response(request, {"prompt": "", "folder": str(start_dir), "check": ""})
+        form = await checked_form(request, guard)
+        values = {k: v if isinstance(v := form.get(k), str) else "" for k in EVERYDAY_FIELDS}
+        try:
+            plan = await run_in_threadpool(plan_everyday, values, start_dir)
+        except ValueError as exc:
+            return everyday_response(request, values, error=str(exc), status=400)
+        return await start_ladder(plan)
 
     async def office_form(
         request: Request,
@@ -342,6 +515,8 @@ def make_app(
             make_engine=make_engine,
             checks=plan["checks"],
             office_run_id=office_run_id,
+            rounds=plan["rounds"],
+            max_cost_musd=plan["max_cost"],
             **({"advisors": plan["advisors"]} if relay else {}),
         )
         broker.start(office_run_id, coro)
@@ -352,11 +527,11 @@ def make_app(
         if not data.is_safe_id(run_id):
             return _message(request, 400, "That is not a run id.")
         found = broker.runs.get(run_id)
-        if found is None:
-            if await run_in_threadpool(data.run_view, run_id) is not None:
-                return RedirectResponse(f"/runs/{run_id}", status_code=303)
+        if found is None:  # an office run's seal is a run too, so its record is looked for first
             if await run_in_threadpool(data.office_view, run_id) is not None:
                 return RedirectResponse(f"/offices/{run_id}", status_code=303)
+            if await run_in_threadpool(data.run_view, run_id) is not None:
+                return RedirectResponse(f"/runs/{run_id}", status_code=303)
             return _message(request, 404, f"No run {run_id} was started here.")
         # the run as it stood before its record is read: a run that says done
         # was saved before this read, so its pick list is in what the read finds,
@@ -409,7 +584,8 @@ def make_app(
             await broker.close()  # every pending ask declined, every run sealed
 
     routes = [
-        Route("/", runs),
+        Route("/", home, methods=["GET", "POST"]),
+        Route("/runs", runs),
         Route("/runs/{run_id}", run),
         Route("/offices/{office_run_id}", office),
         Route("/connections", connections),

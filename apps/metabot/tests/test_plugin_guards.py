@@ -340,8 +340,15 @@ def test_a_changed_installed_copy_shows_as_changed(tmp_path, capsys):
 
 def test_a_plugin_never_replaces_a_connection_the_person_added(tmp_path):
     mine = ConnectionStore().add(name="tools-db", transport="stdio", command=["my-db"])
-    _install(tmp_path, servers={"db": {"command": "their-db"}})
-    with pytest.raises(PluginError, match="already exists"):
+    plugin = _install(tmp_path, servers={"db": {"command": "their-db"}, "web": {"command": "w"}})
+    with pytest.raises(PluginError, match="already exists") as refused:
         enable("tools", add_servers=True)
     assert [(c.id, c.command) for c in ConnectionStore().list()] == [(mine.id, ["my-db"])]
     assert enabled_plugin_dirs() == []
+    said = str(refused.value)  # what to do names what MetaBot has: no command removes one
+    assert "remove it first" not in said and "keeps its name when revoked" in said
+    assert "so none of its servers is added" in said  # tools-web neither
+    # one way through, whole: before, two ways, and the second alone was refused again
+    assert "enable it without --add-servers, then add its servers with metabot connect add" in said
+    assert f"metabot plugin show {plugin.tree[:12]} lists them" in said
+    assert enable(plugin.tree[:12]).enabled  # the first step, as said

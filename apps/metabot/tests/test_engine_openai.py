@@ -18,7 +18,8 @@ from metabot.engines.openai_compat import OpenAIEngine
 from metabot.gate import Policy
 from metabot.paths import metabot_home, run_dir
 from metabot.receipts import verify_file
-from metabot.runner import run_job
+from metabot.runner import Limits, RunCancelled, run_job
+from metabot.steps import MAY_HAVE_RUN, NO_RESULT
 
 
 def _engine(fake: FakeChat, key_env: str | None = None) -> OpenAIEngine:
@@ -193,6 +194,91 @@ async def test_switchboard_tools_go_through_the_switchboard(chat, tmp_path):
     tools = [s["tool"] for s in _env(result)["steps"]]
     assert len(tools) == 1 and tools[0].endswith("#list_issues")
     assert count.read_text().splitlines() == ["list_issues"]
+
+
+def _gh(count, *extra: str) -> None:
+    ConnectionStore().add(
+        name="gh",
+        transport="stdio",
+        command=[sys.executable, str(FAKE_MCP), "--count-file", str(count), *extra],
+    )
+
+
+def _steps(result) -> list[tuple]:
+    """The journal's steps: each with its output, which the receipt keeps as a hash."""
+    steps = json.loads((run_dir(result.run_id) / "journal.json").read_text())["steps"]
+    return [(s["call_id"], s["tool"], s["success"], s["output"]) for s in steps]
+
+
+@pytest.mark.parametrize(
+    "asked", ["mcp__metabot__gh__create_issue", "mcp__metabot__gh__list_issues", "mcp__metabot__x"]
+)
+async def test_a_call_named_as_the_switchboard_s_own_is_refused_and_recorded(chat, tmp_path, asked):
+    count = tmp_path / "count"
+    _gh(count)
+    bad = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c2", "function": {"name": asked, "arguments": "{not json"}}]}}]}  # fmt: skip
+    fake = chat([_call(asked, {}, "c1"), bad, _answer("I created the issue.")])
+    result = await _run(fake, tmp_path, switchboard=True, read_only=True)
+    assert [(s[0], s[1], s[2]) for s in _steps(result)] == [
+        ("c1", f"metabot/{asked}", False),
+        ("c2", f"metabot/{asked}", False),
+    ]
+    assert result.failed == 2 and not count.exists()
+
+
+@pytest.mark.parametrize(
+    ("second", "counted"),
+    [(("gh__create_issue", {"title": "t2"}), (2, 0)), (("read_file", {"path": "gone"}), (1, 1))],
+    ids=["two-declined", "declined-then-failed"],
+)
+@pytest.mark.parametrize(  # ids the record keeps as one: cut at its limit, or made printable
+    "ids", [("call_0", "call_0"), ("c" * 230, "c" * 230), ("callé", "callè")],
+    ids=["same", "long", "unprintable"],
+)  # fmt: skip
+async def test_a_model_that_gives_two_calls_one_id_has_each_call_counted(
+    chat, tmp_path, second, counted, ids
+):
+    count = tmp_path / "count"
+    _gh(count)
+    first = _call("gh__create_issue", {"title": "t1"}, ids[0])
+    fake = chat([first, _call(*second, ids[1]), _answer("Both done.")])
+    result = await _run(fake, tmp_path, switchboard=True)
+    assert (result.declined, result.failed) == counted
+    assert len({step[0] for step in _steps(result)}) == 2  # two calls, two ids in the record
+    replied = [m for m in fake.requests[-1]["messages"] if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in replied] == list(ids)  # as the model named them
+
+
+async def test_a_switchboard_call_past_a_limit_is_recorded_and_never_made(chat, tmp_path):
+    count = tmp_path / "count"
+    _gh(count)
+    script = [_call("gh__list_issues", {}, "c1"), _call("gh__list_issues", {}, "c2")]
+    fake = chat([*script, _answer("two")])
+    result = await _run(fake, tmp_path, switchboard=True, limits=Limits(max_tool_calls=1))
+    assert result.error == "limit: 1 tool calls"
+    [made, cut] = _steps(result)
+    assert made[0] == "c1" and made[1].endswith("#list_issues") and made[2] is True
+    assert cut == ("c2", "metabot/gh__list_issues", False, NO_RESULT)
+    assert count.read_text().splitlines() == ["list_issues"]  # the second was never made
+
+
+async def test_a_switchboard_call_cut_off_once_sent_may_have_run(chat, tmp_path):
+    count = tmp_path / "count"
+    _gh(count, "--slow", "30")
+    fake = chat([_call("gh__create_issue", {"title": "t1"}, "c1"), _answer("done")])
+    run = _run(fake, tmp_path, switchboard=True, policy=Policy(allow_write=True))
+    task = asyncio.ensure_future(run)
+    for _ in range(600):  # until the server has the call
+        await asyncio.sleep(0.05)
+        if count.exists():
+            break
+    task.cancel()
+    with pytest.raises(RunCancelled) as cancelled:
+        await asyncio.wait_for(task, 30)
+    [cut] = _steps(cancelled.value.result)
+    assert (cut[0], cut[2], cut[3]) == ("c1", False, MAY_HAVE_RUN)
+    assert cut[1].endswith("#create_issue")
 
 
 async def test_server_stderr_goes_to_the_run_log_not_the_terminal(chat, tmp_path, capfd):

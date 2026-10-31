@@ -160,6 +160,33 @@ async def test_external_step_lands_in_receipt(tmp_path, monkeypatch):
     assert journal_matches(result.run_id) is True
 
 
+async def test_a_home_named_by_a_relative_path_is_reached_from_the_engines_folder(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("METABOT_HOME", "rel-home")
+    monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-echo.jsonl"))
+    monkeypatch.setenv("FAKE_CONTROL", "from-hook")
+    step = {
+        "call_id": "sw-1",
+        "tool": "did:orcha:agent:conn-0123456789ab#list_issues",
+        "args": {},
+        "output": [],
+        "success": True,
+        "latency_ms": 7,
+    }
+    monkeypatch.setenv("FAKE_CONTROL_MSG", json.dumps({"op": "step", "step": step}))
+    work = tmp_path / "work"  # the engine runs here, as a desk or `ask --cwd` does
+    work.mkdir()
+    result = await _run(work)
+    # before: the hook was told rel-home/runs/<id>/control.sock, which it looked for in the
+    # engine's folder, so the gate could not be reached and the step was lost
+    assert result.ok is True, result.error
+    tools = [s["tool"] for s in _envelope(result)["steps"]]
+    assert tools == ["claude-code/Bash", "did:orcha:agent:conn-0123456789ab#list_issues"]
+    assert not (work / "rel-home").exists()
+
+
 async def test_no_tty_denial_recorded(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "claude-echo.jsonl"))
     monkeypatch.setenv("FAKE_CONTROL", "from-hook")

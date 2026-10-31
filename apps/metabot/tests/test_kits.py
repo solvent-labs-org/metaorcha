@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -85,6 +86,23 @@ def test_office_check_names_a_kit_skill_it_cannot_find(tmp_path, person, capsys)
     _skill(person / ".agents" / "skills", "nope")
     assert main(["office", "check", "--dir", str(root)]) == 0
     assert "cannot run here" not in capsys.readouterr().out
+
+
+def test_office_check_names_a_kit_place_it_cannot_enter(tmp_path, person, capsys, path_checks):
+    root = _office(tmp_path)
+    _skill(root / ".office" / "skills", "plan")
+    shut = root / ".office"
+    shut.chmod(0o600)
+    try:
+        if os.access(shut, os.X_OK):
+            pytest.skip("this user enters any folder")
+        code = main(["office", "check", "--dir", str(root)])
+    finally:
+        shut.chmod(0o755)
+    out = capsys.readouterr().out
+    [line] = [x for x in out.splitlines() if x.strip().startswith("! build:")]
+    assert code == 0
+    assert f"kit: skill 'plan' in {shut / 'skills'} cannot be read: Permission denied" in line
 
 
 @pytest.mark.parametrize("name", ["../plan", "a/b", ".plan", "..", "", "p" * 65, "plan\n"])
@@ -178,6 +196,26 @@ def test_a_skill_holding_a_link_is_refused_and_nothing_is_left(tmp_path, person)
     (folder / "key").symlink_to(person / "secret.txt")
     with pytest.raises(kits.KitError, match="holds a link, 'key'"):
         _build_kit(root, tmp_path / "kit")
+    assert not (tmp_path / "kit").exists()
+
+
+@pytest.mark.parametrize("shut", [".", "scripts"])
+def test_a_skill_folder_that_cannot_be_listed_is_refused_not_copied_as_nothing(
+    tmp_path, person, shut
+):
+    root = _office(tmp_path)
+    folder = _skill(root / ".office" / "skills", "plan")
+    (folder / "scripts").mkdir()
+    (folder / "scripts" / "run.sh").write_text("echo plan\n", encoding="utf-8")
+    door = folder / shut
+    door.chmod(0o300)  # it can be entered, and not listed
+    try:
+        if os.access(door, os.R_OK):
+            pytest.skip("this user lists any folder")
+        with pytest.raises(kits.KitError, match=rf"skill 'plan': {re.escape(shut)} cannot be read"):
+            _build_kit(root, tmp_path / "kit")
+    finally:
+        door.chmod(0o755)
     assert not (tmp_path / "kit").exists()
 
 

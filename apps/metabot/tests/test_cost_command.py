@@ -128,3 +128,17 @@ def test_cost_shows_an_edited_index_safely(home, capsys):
     out = capsys.readouterr().out
     assert "\x1b" not in out
     assert "total $0.00 over 1 runs" in out
+
+
+def test_a_run_that_reported_no_usage_says_so_and_asks_for_no_price():
+    from types import SimpleNamespace
+
+    from metabot.commands import cost_line
+
+    nothing = SimpleNamespace(cost_musd=None, cost_source="unknown", tokens=0)
+    said = cost_line(nothing, "demo")
+    assert said == "[metabot] demo reported no usage, so there is no cost to show"
+    some = SimpleNamespace(cost_musd=None, cost_source="unknown", tokens=12)
+    assert cost_line(some, "demo").endswith(
+        "12 tokens; no price for this model: add one under prices"
+    )

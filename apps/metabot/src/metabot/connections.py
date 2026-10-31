@@ -13,6 +13,7 @@ import contextlib
 import json
 import re
 import secrets
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from metabot.paths import metabot_home, private_dir, write_private
 from metabot.scope_classes import ScopeClass
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+CONN_ID_RE = re.compile(r"did:orcha:agent:conn-[0-9a-f]{12}")
 ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 HEADER_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -57,6 +59,11 @@ class Connection:
     def redacted_as(self) -> str:
         """The name a redacted token shows as: ``[REDACTED:<redacted_as>]``."""
         return self.token_env or f"{self.name}-token"
+
+
+def new_connection_id() -> str:
+    """A fresh connection id, as :meth:`ConnectionStore.add` gives one."""
+    return f"did:orcha:agent:conn-{secrets.token_hex(6)}"
 
 
 def _validate(transport: str, command, url, token, token_env, header) -> None:
@@ -144,7 +151,7 @@ class ConnectionStore:
             return []
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             raise ConnectionFileError(f"cannot read {self.path}: {exc}") from exc
         rows = data.get("connections", []) if isinstance(data, dict) else None
         if not isinstance(rows, list) or not all(isinstance(raw, dict) for raw in rows):
@@ -187,8 +194,12 @@ class ConnectionStore:
         token_env: str | None = None,
         header: str | None = None,
         origins: Any = None,
+        conn_id: str | None = None,
     ) -> Connection:
-        """Add a connection; ``origins`` makes it a browser that may act only there."""
+        """Add a connection; ``origins`` makes it a browser that may act only there.
+
+        ``conn_id`` is one :func:`new_connection_id` made: a plugin lists it first.
+        """
         if not NAME_RE.match(name or ""):
             raise ValueError("a name is 1-32 of a-z, 0-9 and '-', starting with a letter or digit")
         if name in RESERVED:
@@ -198,8 +209,12 @@ class ConnectionStore:
         conns = self._load()
         if any(c.name == name for c in conns):
             raise ValueError(f"a connection named {name!r} already exists")
+        if conn_id is not None and (
+            not CONN_ID_RE.fullmatch(conn_id) or any(c.id == conn_id for c in conns)
+        ):
+            raise ValueError(f"{conn_id} is not a connection id this store can take")
         conn = Connection(
-            id=f"did:orcha:agent:conn-{secrets.token_hex(6)}",
+            id=conn_id or new_connection_id(),
             name=name,
             transport=transport,
             command=list(command) if command else None,
@@ -224,6 +239,25 @@ class ConnectionStore:
                 self._save(conns)
                 return conn
         raise KeyError(ref)
+
+    def respec(
+        self,
+        ref: str,
+        *,
+        transport: str,
+        command: builtins.list[str] | None = None,
+        url: str | None = None,
+    ) -> Connection:
+        """Write what a connection starts or calls again. Its id, name, scope settings, state
+        and token stay, so a routine that names it still does."""
+
+        def _respec(conn: Connection) -> None:
+            _validate(transport, command, url, None, conn.token_env, conn.header)
+            conn.transport = transport
+            conn.command = list(command) if command else None
+            conn.url = url
+
+        return self._update(ref, _respec)
 
     def revoke(self, ref: str) -> Connection:
         def _revoke(conn: Connection) -> None:
@@ -263,3 +297,33 @@ class ConnectionStore:
             return (self._secrets() / conn.suffix).read_text(encoding="utf-8") or None
         except FileNotFoundError:
             return None
+
+
+def merged_secrets(*maps: Mapping[str, str]) -> dict[str, str]:
+    """One ``{VAR: secret}`` map from several, never dropping a secret.
+
+    Two different secrets under one name are both kept, the later as ``VAR_2``, ``VAR_3``.
+    """
+    out: dict[str, str] = {}
+    for secrets_of in maps:
+        for var, secret in secrets_of.items():
+            name, n = var, 2
+            while name in out and out[name] != secret:
+                name, n = f"{var}_{n}", n + 1
+            out[name] = secret
+    return out
+
+
+def record_secrets(store: ConnectionStore | None = None) -> dict[str, str]:
+    """Every secret a record must not keep: each connection's token in ``store``, by default
+    the person's, and each key the settings name for a model, whichever one a run called.
+
+    Settings that do not read give no keys here: the command that needs them stops on them.
+    """
+    from metabot.config import ConfigError, configured_keys, load_config
+
+    try:
+        keys = configured_keys(load_config())
+    except ConfigError:
+        keys = {}
+    return merged_secrets((store or ConnectionStore()).redaction_map(), keys)

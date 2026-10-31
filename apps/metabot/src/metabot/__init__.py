@@ -1,3 +1,3 @@
 """MetaBot: a local bot whose work you can prove."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

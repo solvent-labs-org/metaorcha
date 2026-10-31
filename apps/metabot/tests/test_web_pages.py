@@ -23,7 +23,7 @@ from metabot.routines import RoutineSpec, fire, save_routine
 from metabot.runner import run_job
 from metabot.web_app import make_app
 from metabot.web_guard import COOKIE, Guard
-from metabot.web_pages import UNSIGNED
+from metabot.web_pages import COMMITTED, UNSIGNED
 from test_checks import _trusted
 from test_office_run import DESKS, TASK, DeskEngine, _build, _repo
 from test_serve import Quick
@@ -94,7 +94,7 @@ def test_the_runs_page_lists_each_run_with_its_receipt_state(tmp_path):
     data = json.loads(receipt.read_text(encoding="utf-8"))
     data["signature"] = ("A" if data["signature"][0] != "A" else "B") + data["signature"][1:]
     receipt.write_text(json.dumps(data), encoding="utf-8")
-    page = _client(tmp_path).get("/")
+    page = _client(tmp_path).get("/runs")
     assert page.status_code == 200
     where = [page.text.index(run_id) for run_id in ids]
     assert where[2] < where[1] < where[0]  # newest first
@@ -156,7 +156,7 @@ def test_the_run_page_marks_what_the_receipt_does_not_sign(tmp_path):
     client = _client(tmp_path)
     text = client.get(f"/runs/{result.run_id}").text
     assert '<span class="ok">valid</span>' in text
-    assert html.escape(UNSIGNED, quote=True) in text  # the prompt and the answer are not signed
+    assert html.escape(COMMITTED, quote=True) in text  # it commits to the prompt and answer
     path = run_path(result.run_id) / "journal.json"
     journal = json.loads(path.read_text(encoding="utf-8"))
     [verdict] = [v for v in journal["verdicts"] if v["check"] == "scope_approval:call-1"]
@@ -165,12 +165,13 @@ def test_the_run_page_marks_what_the_receipt_does_not_sign(tmp_path):
     text = client.get(f"/runs/{result.run_id}").text
     # an approval edited into the journal is never shown beside "valid"
     assert "JOURNAL MISMATCH" in text and '<span class="ok">valid</span>' not in text
+    assert html.escape(UNSIGNED, quote=True) in text  # nor is what the receipt commits to
 
 
 def test_the_runs_page_shows_the_newest_runs_up_to_its_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(web_data, "ROW_LIMIT", 2)
     ids = [_run(tmp_path, prompt=f"task {n}").run_id for n in range(3)]
-    page = _client(tmp_path).get("/")
+    page = _client(tmp_path).get("/runs")
     assert ids[0] not in page.text and ids[1] in page.text and ids[2] in page.text
     assert "The newest 2 of 3 runs." in page.text
 
@@ -239,7 +240,7 @@ def test_an_office_page_shows_each_desks_checks(tmp_path):
 
 def test_the_runs_page_links_an_office_run(tmp_path):
     result = _office(tmp_path)
-    page = _client(tmp_path).get("/")
+    page = _client(tmp_path).get("/runs")
     assert f'href="/offices/{result.office_run_id}"' in page.text
 
 
@@ -295,7 +296,7 @@ def test_the_routines_page_shows_next_due_and_firings(tmp_path):
 def test_a_prompt_and_an_answer_render_as_text(tmp_path, payload):
     result = _run(tmp_path, Asker(answer=payload), prompt=payload)
     client = _client(tmp_path)
-    _as_text(client.get("/"), payload)
+    _as_text(client.get("/runs"), payload)
     _as_text(client.get(f"/runs/{result.run_id}"), payload)
 
 
@@ -368,7 +369,7 @@ def test_a_receipt_path_a_record_names_is_never_opened(tmp_path, home):
     rows = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
     rows[-1]["receipt"] = str(decoy)
     index.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    page = _client(tmp_path).get("/")
+    page = _client(tmp_path).get("/runs")
     assert ">valid<" in _row_of(page.text, result.run_id)  # read from where MetaBot keeps it
 
 

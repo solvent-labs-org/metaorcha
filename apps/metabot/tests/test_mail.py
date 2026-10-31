@@ -154,6 +154,19 @@ def test_send_reads_the_body_from_stdin(home, monkeypatch, capsys):
     assert mail.unread("builder")[0].body == "from a pipe"
 
 
+@pytest.mark.parametrize("given", ["stdin", "-m"])
+def test_a_note_naming_a_file_whose_name_is_not_utf_8_is_sent_escaped(home, monkeypatch, given):
+    note = b"see caf\xe9.txt\n"
+    if given == "stdin":  # as Python opens it in a UTF-8 locale, strict about what it decodes
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(note), encoding="utf-8"))
+        flags = []
+    else:
+        flags = ["-m", os.fsdecode(note)]  # as an argument's bytes are read
+    # before: a traceback on stdin, and "'utf-8' codec can't encode" for -m
+    assert main(["mail", "send", "builder", "--from", "main", *flags]) == 0
+    assert mail.unread("builder")[0].body == "see caf\\udce9.txt"  # as MetaBot prints it
+
+
 @pytest.mark.parametrize(
     "argv",
     [

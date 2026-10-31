@@ -224,8 +224,10 @@ def test_an_office_run_copies_into_the_checkout_not_the_worktrees(tmp_path, caps
     assert code == 0, err
     office_id = next(w for w in out.split() if w.startswith("mb-"))
     copies = sorted(p.name for p in (root / PROJECT_RECEIPTS).iterdir())
-    assert copies == [f"{office_id}.build.checks.json", f"{office_id}.build.json"]
-    assert f"  project copies: 2 receipts in {root / PROJECT_RECEIPTS}" in out.splitlines()
+    assert copies == [  # the desk's, its checks', and the seal over both
+        f"{office_id}.build.checks.json", f"{office_id}.build.json", f"{office_id}.json",
+    ]  # fmt: skip
+    assert f"  project copies: 3 receipts in {root / PROJECT_RECEIPTS}" in out.splitlines()
     branch = f"metabot/{office_id}/build"
     assert ".orcha" not in _git(root, "ls-tree", "-r", "--name-only", branch)
     wt = Path(engines["codex"].jobs[0].cwd)

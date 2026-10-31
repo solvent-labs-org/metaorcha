@@ -30,6 +30,7 @@ parser.add_argument("--http", type=int)
 parser.add_argument("--say-token", action="store_true")
 parser.add_argument("--pid-file")
 parser.add_argument("--linger", action="store_true")
+parser.add_argument("--slow", type=float, default=0.0)  # seconds create_issue takes, once counted
 opts = parser.parse_args()
 
 if opts.pid_file:
@@ -82,6 +83,10 @@ def list_issues(repo: str = "acme/widgets") -> str:
 def create_issue(title: str) -> str:
     """Create an issue."""
     _count("create_issue")
+    if opts.slow:
+        import time
+
+        time.sleep(opts.slow)
     return json.dumps({"number": 2, "title": title})
 
 

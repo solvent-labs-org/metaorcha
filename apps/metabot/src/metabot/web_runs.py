@@ -99,6 +99,8 @@ class LiveRun:
     state: str = "running"  # then done, stopped, or failed
     result: Any = None  # the sealed run's RunResult, or the office run's OfficeResult
     error: str | None = None
+    why: str | None = None  # a ladder's line: what it did and why, once it ends
+    answered: bool | None = None  # a ladder: whether a rung's answer was taken; None for a run
 
     def __post_init__(self) -> None:
         self.trace = Trace(out=self.out)
@@ -143,7 +145,12 @@ class Broker:
 
         try:
             live.result = await coro
-            live.state = "done"
+            unsaved = getattr(live.result, "record_error", None)
+            if unsaved:  # an office run whose record is not on disk: no page can show it
+                live.state = "failed"
+                live.error = f"the office's record could not be written: {unsaved}"
+            else:
+                live.state = "done"
         except RunCancelled as exc:  # stopped: the receipt was still sealed
             live.state = "stopped"
             if live.office is None:  # an office's record says what each desk did
