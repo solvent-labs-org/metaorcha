@@ -4,21 +4,8 @@
 # pyjwt), and ecdsa and rsa went with it, so their entries (GHSA-3qf3-8w2g-rqmx,
 # GHSA-wj6h-64fc-37mp) were removed rather than left to expire.
 #
-# Add entries only with a reason and an ignoreUntil date.
-
-# NLTK <=3.10.3 has no fixed release for GHSA-8mgp-746c-j5xp. Metaorcha uses
-# only fixed-language tokenization and English stopwords; re-review immediately
-# if NLTK usage expands.
+# NLTK 3.10.4 is in the lock since 2026-10-31. GHSA-8mgp-746c-j5xp affects
+# <=3.10.3 and GHSA-j456-xh4h-cpf2 is fixed in 3.10.4, so the NLTK entry was
+# removed, as its own reason said it would be once 3.10.4 was published.
 #
-# Renewed 2026-10-06 (the first entry lapsed 2026-10-01 and the scan went red on
-# every PR). Re-checked, not carried over: osv.dev still lists 3.10.3 as the last
-# affected release with no fix, and the advisory names only model-artifact APIs
-# (TransitionParser.train/parse, AveragedPerceptron.save/load,
-# PerceptronTagger.save_to_json, save_maxent_params). The only NLTK caller is
-# services/planning-discovery/.../resolution/keyword_extractor.py, and it calls
-# nltk.data.find, nltk.download (punkt, punkt_tab, stopwords), word_tokenize and
-# stopwords — none of them.
-[[IgnoredVulns]]
-id = "GHSA-8mgp-746c-j5xp"
-reason = "NLTK is used only for fixed-language tokenization and English stopwords; Metaorcha does not call the affected model-artifact APIs, pass caller-controlled filenames into NLTK, or rely on NLTK pathsec as a containment boundary. No patched release exists; remove this exception when NLTK 3.10.4 is published or when NLTK is replaced. Re-review immediately if NLTK usage expands."
-ignoreUntil = 2026-11-15
+# Add entries only with a reason and an ignoreUntil date.
