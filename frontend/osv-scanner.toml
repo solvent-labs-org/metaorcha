@@ -7,9 +7,9 @@
 #
 # Add entries only with a reason and an ignoreUntil date.
 
-# Both entries below are build-time packages (dev: true in package-lock.json):
+# The entries below are build-time packages (dev: true in package-lock.json):
 # they run in Vite/Tailwind/ESLint on this repository's own files and are not in
-# the bundle a browser downloads. Checked 2026-10-06.
+# the bundle a browser downloads. Checked 2026-10-06; minimatch 2026-10-31.
 
 # braces <=3.0.3: stack exhaustion on deeply nested brace patterns. No fixed
 # release. Reached only via chokidar and micromatch (file watching and globbing
@@ -26,4 +26,15 @@ ignoreUntil = 2026-12-01
 [[IgnoredVulns]]
 id = "GHSA-rj75-hqrm-r3gf"
 reason = "Build-time only (dev dependency via tailwindcss 3.4 / postcss-nested, which require ^6; the fix is 7.1.6); parses this repo's own stylesheets; not shipped to browsers. Exit: Tailwind 4, or a 6.x backport."
+ignoreUntil = 2026-12-01
+
+# minimatch <11.0.1: a glob pattern can grow its parts and then take quadratic
+# time (CPU and memory) when optimizationLevel >= 2. Fixed only in 11.0.1, but
+# eslint and @eslint/eslintrc require ^3.1.5 and @typescript-eslint/typescript-
+# estree requires ^10.2.2; on 2026-10-31 the newest eslint (10.14.0) still
+# requires ^10.2.6, so no release of the lint toolchain accepts the fix. It
+# matches this repo's own lint globs, from its config files, at lint time.
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "Build-time only (dev dependency via eslint, @eslint/eslintrc and @typescript-eslint/typescript-estree, which require ^3.1.5 and ^10.2.x; the fix is 11.0.1); the patterns are this repo's own lint globs, never user input; not shipped to browsers. Exit: an eslint toolchain on minimatch 11."
 ignoreUntil = 2026-12-01
