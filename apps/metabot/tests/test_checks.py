@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import shlex
 import shutil
 import sys
@@ -38,6 +39,7 @@ from metabot.office import OfficeError, load_office
 from metabot.office_run import office_journal_path
 from metabot.paths import receipts_dir, run_path
 from metabot.receipts import acceptance_of, journal_matches, verify_file
+from test_office import _linked_office
 from test_office_run import TASK, DeskEngine, _build, _build_and_commit, _cli, _git, _relay, _repo
 
 BUILD = {"build": {"role": "roles/build.md", "harness": "codex"}}
@@ -263,6 +265,32 @@ def test_office_trust_with_no_checks_has_nothing_to_trust(tmp_path, capsys):
     root = _repo(tmp_path, BUILD)
     code, out, err = _cli(capsys, "office", "trust", "--dir", str(root), "--yes")
     assert code == 0 and "there is nothing to trust" in out
+
+
+@pytest.mark.parametrize("start", ["the main tree", "a worktree git cannot read"])
+def test_an_office_whose_folder_name_is_not_utf_8_is_trusted(tmp_path, capsys, start):
+    team, here = _linked_office(tmp_path / os.fsdecode(b"caf\xe9"))  # its .git file holds bytes
+    _set_checks(team, {"tests": "true"}, commit=False)
+    record = team.parent / ".git" / "worktrees" / "linked"
+    record.chmod(0o000)  # git cannot read the worktree by its record: the office is the main's
+    try:
+        if os.access(record, os.X_OK):
+            pytest.skip("this user enters any folder")
+        folder = team if start == "the main tree" else here
+        code, out, err = _cli(capsys, "office", "trust", "--dir", str(folder), "--yes")
+    finally:
+        record.chmod(0o755)
+    assert code == 0 and "trusted on this machine" in out, err  # before: a traceback
+    assert runnable(load_office(team)) == ({"ready:tests": "true"}, {})
+
+
+def test_office_trust_names_a_home_whose_name_is_not_utf_8(tmp_path, capsys, monkeypatch):
+    root = _office(tmp_path, {"tests": "true"})
+    monkeypatch.setenv("METABOT_HOME", str(tmp_path / os.fsdecode(b"caf\xe9-home")))
+    code, out, err = _cli(capsys, "office", "trust", "--dir", str(root), "--yes")
+    # before: a traceback, once the trust was recorded
+    assert code == 0 and "recorded in" in out and "caf\\udce9-home" in out, err
+    assert runnable(load_office(root)) == ({"ready:tests": "true"}, {})
 
 
 # ── running them ────────────────────────────────────────────────────────────

@@ -179,6 +179,7 @@ async def test_a_firing_runs_codex_in_its_read_only_sandbox(tmp_path, monkeypatc
 
 
 async def test_a_firing_runs_cursor_in_ask_mode(tmp_path, monkeypatch):
+    save_config(Config(sandbox=False))  # cursor without bwrap runs with the sandbox off
     argv = await _fired_argv(tmp_path, monkeypatch, CursorEngine, "cursor-echo.jsonl")
     assert argv[argv.index("--mode") + 1] == "ask"
 

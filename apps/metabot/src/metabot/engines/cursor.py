@@ -22,7 +22,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from metabot import __version__
+from metabot import __version__, sandbox
 from metabot.engines.base import CliEngine, EngineJob
 from metabot.events import ErrorEvent, Event, Final, Started, TextEvent, ToolCall, ToolResult, Usage
 from metabot.paths import write_private
@@ -30,6 +30,9 @@ from metabot.paths import write_private
 PLUGIN_NAME = "metabot"
 SERVER_NAME = "metabot"
 SWITCHBOARD_PROVIDER = f"plugin-{PLUGIN_NAME}-{SERVER_NAME}"
+CURSOR_OWN = ("rules", "skills", "plugins", "commands", "agents", "hooks.json")
+CLAUDE_READ = ("CLAUDE.md", "settings.json", "plugins", "skills", "agents", "commands", "rules")
+OTHER_SKILLS = (".codex/skills", ".grok/skills")  # other tools' skill folders it reads too
 DROPPED_ARGS = frozenset({"parsingResult", "toolCallId", "requestId", "conversationId"})
 
 
@@ -72,7 +75,7 @@ def project_declares_servers(cwd: Path) -> bool:
         return False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return True
     if not isinstance(data, dict):
         return True
@@ -84,7 +87,32 @@ class CursorEngine(CliEngine):
     binary = "cursor-agent"
     tool_prefix = "cursor"
     loads_plugins = True
+    reads_rules_above = True
+    read_only_mode = "ask mode"
+    also_sees = (
+        "its bundled skills, the user rules of the account it signs in with, and, with a "
+        "connection on, the MCP servers in your ~/.cursor/mcp.json, outside the gate"
+    )
     skip_tools = (f"mcp/{SWITCHBOARD_PROVIDER}/",)
+
+    def user_instructions(
+        self, cwd: Path | None = None, *, copy_of: Path | None = None
+    ) -> list[Path]:
+        """The person's own cursor rules, skills, plugins and hooks, and Claude Code's.
+
+        cursor-agent reads Claude Code's plugins, skills and hooks as well as its own,
+        and the skills in the other tools' folders. Cursor's bundled skills
+        (``~/.cursor/skills-cursor``) stay.
+        """
+        home = sandbox.user_home()
+        cursor = [home / ".cursor" / n for n in CURSOR_OWN]
+        claude = [home / ".claude" / n for n in CLAUDE_READ]
+        others = [home / p for p in (*OTHER_SKILLS, ".agents/skills")]
+        return sandbox.present([*cursor, *claude, *others])
+
+    def fills_as_it_starts(self) -> list[Path]:
+        """cursor-agent downloads its account's plugins here as it starts."""
+        return [sandbox.user_home() / ".cursor" / "plugins"]
 
     def prepare(self, job: EngineJob) -> EngineJob:
         if not job.switchboard:

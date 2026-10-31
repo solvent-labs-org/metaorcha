@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 import signal
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -25,7 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from metabot.events import ErrorEvent, Event, TextEvent
+from metabot.events import ErrorEvent, Event, Notice, TextEvent
+from metabot.sandbox import SandboxPlan, named_file
 
 DROPPED_ENV = frozenset(
     {
@@ -47,6 +49,8 @@ DRAIN_GRACE = 2.0
 EXIT_POLL = 0.05
 MAX_LINE = 64 * 1024 * 1024
 READ_CHUNK = 64 * 1024
+NOT_FOUND = "not found; install it or check PATH"
+NOT_EXECUTABLE = "is not executable"
 
 
 @dataclass
@@ -58,6 +62,7 @@ class EngineJob:
     plugin_dirs: list[Path] = field(default_factory=list)
     read_only: bool = False
     gate_hook: list[str] | None = None  # argv of the pre-tool-use gate, for engines with hooks
+    sandbox: SandboxPlan | None = None  # what the run hides, and how; metabot.sandbox
     resume: str | None = None
     work_dir: Path | None = None  # a private directory the adapter may write to
 
@@ -69,11 +74,30 @@ class CliEngine(ABC):
     skip_tools: tuple[str, ...] = ()
     supports_hooks: bool = False  # runs a pre-tool-use gate hook in headless mode
     loads_plugins: bool = False  # takes plugin folders itself; else skills come as tools
+    reads_rules_above: bool = False  # reads every rule folder above its project, as cursor does
+    read_only_mode: str  # how it takes a turn without writing
+    also_sees: str  # what reaches it, besides the task and the project, that no run hides
 
     @property
     def own_tools_gated(self) -> bool:
         """Whether MetaBot's gate decides each of the engine's own tool calls: its hook does."""
         return self.supports_hooks
+
+    def user_instructions(
+        self, cwd: Path | None = None, *, copy_of: Path | None = None
+    ) -> list[Path]:
+        """The engine's own rules, skills or memory outside the project, that a run hides.
+
+        ``copy_of``: ``cwd`` is where MetaBot makes a copy of the git project there."""
+        return []
+
+    def fills_as_it_starts(self) -> list[Path]:
+        """Folders of those the engine fills as it starts, which a run makes to hide them."""
+        return []
+
+    def command_files(self) -> list[Path]:
+        """The files the engine's command runs, which a run never hides."""
+        return [p for p in [named_file(self.binary)] if p is not None]
 
     def prepare(self, job: EngineJob) -> EngineJob:
         """Write any files the engine needs for this job; return the job to run."""
@@ -94,7 +118,7 @@ class CliEngine(ABC):
             return []
         try:
             obj = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             return [TextEvent(text)]
         if not isinstance(obj, dict):
             return [TextEvent(text)]
@@ -167,14 +191,31 @@ class _Proc:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(self.proc.pid, sig)
 
+    async def _group_ends(self, grace: float) -> bool:
+        """Whether every process in the group is gone within ``grace`` seconds."""
+        deadline = self.loop.time() + grace
+        while True:
+            try:
+                os.killpg(self.proc.pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:  # one it may not signal is there, and stays
+                return False
+            if self.loop.time() >= deadline:
+                return False
+            await asyncio.sleep(EXIT_POLL)
+
     async def close(self) -> None:
-        """Stop the engine and everything it started in its process group."""
+        """Stop the engine and everything it started in its process group.
+
+        The grace is the whole group's, not the first process's: under bwrap the
+        first process is bwrap, which ends at the stop while the engine stops.
+        """
         if self.proc.returncode is None:
             self._signal_group(signal.SIGTERM)
-            done, _ = await asyncio.wait({self.exited}, timeout=KILL_GRACE)
-            if not done:
+            if not await self._group_ends(KILL_GRACE):
                 self._signal_group(signal.SIGKILL)
-                await self.exited
+            await self.exited
         self._signal_group(signal.SIGTERM)  # whatever it left behind
         for task in (self.pending, self.stderr_task, self.exited):
             if task is not None and not task.done():
@@ -187,6 +228,13 @@ class _Proc:
         if transport is not None:
             with contextlib.suppress(Exception):
                 transport.close()
+
+
+def _cannot_start(program: str, env: dict[str, str]) -> str | None:
+    """Why ``program`` cannot start with ``env``, as starting it would say; None if it can."""
+    if shutil.which(program, path=env.get("PATH", os.defpath)) is not None:
+        return None
+    return NOT_EXECUTABLE if "/" in program and os.path.exists(program) else NOT_FOUND
 
 
 async def _lines(read: Callable[[], Awaitable[bytes]]) -> AsyncGenerator[bytes | None, None]:
@@ -219,17 +267,37 @@ async def _lines(read: Callable[[], Awaitable[bytes]]) -> AsyncGenerator[bytes |
             buf.clear()
 
 
-async def run_cli(engine: CliEngine, job: EngineJob) -> AsyncGenerator[Event, None]:
-    """Events from one engine run. Use under ``contextlib.aclosing``."""
+async def run_cli(
+    engine: CliEngine, job: EngineJob, on_stop: Callable[[], None] | None = None
+) -> AsyncGenerator[Event, None]:
+    """Events from one engine run. Use under ``contextlib.aclosing``.
+
+    ``on_stop`` is called as the run ends, before the engine is stopped: when it was cut
+    off, the engine may still be waiting on a question to the person.
+    """
     if not Path(job.cwd).is_dir():
-        yield ErrorEvent(f"{engine.name}: working directory {job.cwd} does not exist")
+        yield ErrorEvent(f"{engine.name}: working directory {job.cwd} does not exist", True)
         return
     try:
         job = engine.prepare(job)
     except (OSError, ValueError) as exc:
-        yield ErrorEvent(f"{engine.name}: could not prepare the run: {exc}")
+        yield ErrorEvent(f"{engine.name}: could not prepare the run: {exc}", True)
         return
     argv = engine.argv(job)
+    env = engine.env()
+    if job.sandbox is not None:
+        if job.sandbox.refused:
+            yield ErrorEvent(job.sandbox.refused, True)
+            return
+        # bwrap would start and fail to start the engine: say so as a start would
+        why = _cannot_start(argv[0], env) if job.sandbox.tool else None
+        if why:
+            yield ErrorEvent(f"{engine.name}: {argv[0]} {why}", True)
+            return
+        note = job.sandbox.note()
+        if note:
+            yield Notice(note)
+        argv = job.sandbox.wrap(argv)
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -237,15 +305,17 @@ async def run_cli(engine: CliEngine, job: EngineJob) -> AsyncGenerator[Event, No
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(job.cwd),
-            env=engine.env(),
+            env=env,
             start_new_session=True,
         )
     except FileNotFoundError:
-        yield ErrorEvent(f"{engine.name}: {argv[0]} not found; install it or check PATH")
+        yield ErrorEvent(f"{engine.name}: {argv[0]} {NOT_FOUND}", True)
         return
     except PermissionError:
-        yield ErrorEvent(f"{engine.name}: {argv[0]} is not executable")
+        yield ErrorEvent(f"{engine.name}: {argv[0]} {NOT_EXECUTABLE}", True)
         return
+    if job.sandbox is not None:
+        job.sandbox.started = True
 
     running = _Proc(proc)
     state: dict[str, Any] = {}
@@ -263,4 +333,6 @@ async def run_cli(engine: CliEngine, job: EngineJob) -> AsyncGenerator[Event, No
             message = f"{engine.name} exited {rc}"
             yield ErrorEvent(f"{message}: {tail}" if tail else message)
     finally:
+        if on_stop is not None:
+            on_stop()
         await running.close()

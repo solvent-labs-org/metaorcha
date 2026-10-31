@@ -196,7 +196,7 @@ def _journal(run_id: str | None) -> dict[str, Any]:
         return {}
     try:
         journal = json.loads((run_path(run_id) / "journal.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return journal if isinstance(journal, dict) else {}
 

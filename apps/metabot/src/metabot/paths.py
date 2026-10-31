@@ -8,12 +8,42 @@ config are written 0600, atomically.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import re
 import secrets
+import stat
 import tempfile
 import time
 from pathlib import Path
+
+# What Path.is_file and is_dir take for "nothing is there" through Python 3.13 at least; a
+# later one may say False for any error, a folder it cannot enter included.
+NOT_THERE = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
+
+
+def _kind(path: Path) -> int | None:
+    """The type bits of what ``path`` names, links followed; None when nothing is there.
+
+    One it cannot look at raises, on every Python, so a folder MetaBot cannot enter is never
+    taken for one with nothing in it.
+    """
+    try:
+        return stat.S_IFMT(os.stat(path).st_mode)
+    except ValueError:  # a name no file can have
+        return None
+    except OSError as exc:
+        if exc.errno in NOT_THERE:
+            return None
+        raise
+
+
+def is_file(path: Path) -> bool:
+    return _kind(path) == stat.S_IFREG
+
+
+def is_dir(path: Path) -> bool:
+    return _kind(path) == stat.S_IFDIR
 
 
 def private_dir(path: Path) -> Path:
@@ -30,8 +60,10 @@ def private_dir(path: Path) -> Path:
 
 
 def _home_path() -> Path:
+    """The home, named whole: a hook or a switchboard told a path in it reads that path
+    in the folder its engine runs in, not in this one."""
     raw = os.environ.get("METABOT_HOME")
-    return Path(raw).expanduser() if raw else Path.home() / ".metabot"
+    return Path(raw).expanduser().absolute() if raw else Path.home() / ".metabot"
 
 
 def metabot_home() -> Path:
@@ -78,7 +110,17 @@ def run_path(run_id: str) -> Path:
 
 def receipt_path(run_id: str) -> Path:
     """A run's kept receipt for a lookup: nothing is created, so a check leaves no trace."""
-    return _home_path() / "receipts" / f"{safe_id(run_id)}.json"
+    return kept_receipts() / f"{safe_id(run_id)}.json"
+
+
+def kept_receipts() -> Path:
+    """The folder of kept receipts, for a lookup: nothing is created."""
+    return _home_path() / "receipts"
+
+
+def kept_home() -> Path:
+    """The MetaBot home, for a lookup: nothing is created."""
+    return _home_path()
 
 
 def models_path() -> Path:
@@ -99,13 +141,14 @@ def new_run_id() -> str:
     return f"mb-{stamp}-{secrets.token_hex(3)}"
 
 
-def write_private(path: Path, data: str) -> None:
-    """Write ``data`` to ``path`` atomically with mode 0600."""
+def write_private(path: Path, data: str, errors: str = "strict") -> None:
+    """Write ``data`` to ``path`` atomically with mode 0600. ``errors`` is as ``open``
+    takes it: ``backslashreplace`` keeps a name whose bytes are not UTF-8 escaped."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", errors=errors) as fh:
             fh.write(data)
         os.replace(tmp, path)
     except BaseException:

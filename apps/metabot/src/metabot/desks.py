@@ -170,8 +170,16 @@ def _plain(text: str) -> str:
 
 
 def commit_message(desk: str, task: str, run_id: str) -> tuple[str, str]:
-    """The subject from the task's first line, and the run id line."""
+    """The subject from the task's first line, and the run id line.
+
+    A commit is a record, and a branch may be pushed: every secret a record must not keep
+    is taken out of the line before it is cut to length.
+    """
+    from metabot.connections import record_secrets
+    from metabot.receipts import scrub
+
     first = next((line.strip() for line in task.splitlines() if line.strip()), "")
+    first = scrub(first, record_secrets())
     subject = _plain(f"{desk}: {first}" if first else desk)[:SUBJECT_LIMIT].rstrip()
     return subject, f"{TRAILER}: {safe_id(run_id)}"
 

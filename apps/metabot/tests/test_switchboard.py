@@ -6,7 +6,9 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
+import anyio
 import pytest
 
 from conftest import FAKE_MCP
@@ -139,6 +141,87 @@ async def test_revoked_fails_closed_before_request(store, count_file):
     assert step["success"] is False
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError(),  # the runner gave no answer in time
+        ConnectionRefusedError(),  # the runner is gone
+        ValueError("the runner replied with something other than an object"),
+    ],
+    ids=["timed-out", "runner-gone", "no-reply"],
+)
+async def test_a_call_whose_question_got_no_answer_is_recorded_declined(store, count_file, failure):
+    steps: list[dict] = []
+
+    async def approve(msg):
+        raise failure
+
+    async def record(step):
+        steps.append(step)
+
+    async with Switchboard(store, approve=approve, record=record) as board:
+        result = await board.call("gh__create_issue", {"title": "x"})  # before: it raised
+    assert result.is_error is True
+    assert result.content[0].text == "metabot: write call not allowed (declined: cancelled)"
+    assert _calls(count_file) == []  # never made
+    [step] = steps
+    assert step["tool"].endswith("#create_issue") and step["args"] == {"title": "x"}
+    assert step["output"] == {"error": "declined: cancelled"} and step["success"] is False
+
+
+@pytest.mark.parametrize("name", ["gh__create_issues", "skills__load"])
+async def test_a_call_to_a_tool_it_does_not_have_is_recorded_failed(store, name):
+    h = Harness(store)
+    async with h.board as board:
+        result = await board.call(name, {"title": "x"})
+    assert result.is_error is True
+    assert result.content[0].text == f"metabot: no tool named {name}"
+    [step] = h.steps  # before: in no record, while the engine said it called it
+    assert step["tool"] == f"metabot/{name}" and step["args"] == {"title": "x"}
+    assert step["output"] == {"error": f"no tool named {name}"} and step["success"] is False
+
+
+# Each way a call ends, and the step its record gets: (tool called, args, output, success).
+STOPPED_AS_RECORDED = {
+    "declined": ("gh__create_issue", {"title": "x"}, {"error": "declined: cancelled"}, False),
+    "no-answer": ("gh__create_issue", {"title": "x"}, {"error": "declined: cancelled"}, False),
+    "no-such-tool": (
+        "gh__create_issues", {"title": "x"}, {"error": "no tool named gh__create_issues"}, False
+    ),
+    "revoked": ("gh__create_issue", {"title": "x"}, {"error": "connection gh is revoked"}, False),
+    "made": ("gh__list_issues", {"repo": "acme/widgets"}, None, True),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("how", list(STOPPED_AS_RECORDED))
+async def test_a_call_s_step_is_kept_when_the_run_stops_as_it_is_recorded(store, count_file, how):
+    name, args, output, ok = STOPPED_AS_RECORDED[how]
+    steps: list[dict] = []
+    recording = asyncio.Event()
+
+    async def approve(msg):
+        if how == "no-answer":
+            raise TimeoutError()
+        return {"allow": False, "reason": "declined: cancelled"}  # a run that is stopping
+
+    async def record(step):
+        recording.set()
+        await asyncio.sleep(0.2)  # on its way to the runner
+        steps.append(step)
+
+    async with Switchboard(store, approve=approve, record=record) as board:
+        if how == "revoked":
+            ConnectionStore().revoke("gh")
+        async with anyio.create_task_group() as calls:
+            calls.start_soon(board.call, name, args)
+            await recording.wait()
+            calls.cancel_scope.cancel()  # the stop signal comes as the step is sent
+    [step] = steps  # before: the stop cut it off, and the call was in no record
+    assert step["args"] == args and step["success"] is ok
+    assert output is None or step["output"] == output
+    assert _calls(count_file) == (["list_issues"] if how == "made" else [])
+
+
 async def test_token_echo_redacted(store):
     h = Harness(store, approver=Scripted([True]))
     async with h.board as board:
@@ -166,6 +249,89 @@ async def test_a_dead_connection_is_skipped(store, tmp_path):
         names = {t.name for t in board.tools()}
     assert "gone" in board.skipped
     assert "gh__list_issues" in names
+
+
+@pytest.mark.parametrize("where", ["relative", "moved", "climbs"])
+async def test_a_plugin_server_saved_outside_this_home_is_never_started(
+    store, tmp_path, monkeypatch, where
+):
+    # a plugin enabled under a home named by a relative path, as 0.2.0 saved its server, also
+    # one that climbs and then spells this home's whole path, or under a home since moved: in
+    # the engine's folder, where the switchboard runs, that path can name a file anyone put there
+    copy = f"plugins/tools@{'a' * 64}"
+    work = tmp_path / "work" / "deep"
+    work.mkdir(parents=True)
+    word = {
+        "relative": f"rh/{copy}/server.py",
+        "moved": f"{tmp_path}/old-home/{copy}/server.py",
+        "climbs": f"../..{metabot_home()}/{copy}/server.py",
+    }[where]
+    planted = Path(word) if where == "moved" else work / word
+    planted.parent.mkdir(parents=True)
+    ran = tmp_path / "ran"
+    planted.write_text(f"open({str(ran)!r}, 'w').close()\n", encoding="utf-8")
+    store.add(name="tools-db", transport="stdio", command=[sys.executable, word])
+    monkeypatch.chdir(work)
+    h = Harness(store)
+    async with h.board as board:
+        names = {t.name for t in board.tools()}
+    assert not ran.exists()  # before: it ran, as the person, before any gate
+    assert f"metabot plugin enable {'a' * 12} --add-servers" in board.skipped["tools-db"]
+    assert "gh__list_issues" in names  # the person's own connections still open
+
+
+async def test_a_plugin_server_past_a_folder_since_removed_is_refused(store, tmp_path):
+    # its home was named past a folder that is gone: no system call can follow that path, so
+    # the server could never start, and enabling it again names the copy whole
+    copy = metabot_home() / "plugins" / f"tools@{'a' * 64}"
+    copy.mkdir(parents=True)
+    word = f"{tmp_path}/gone/../{copy.relative_to(tmp_path)}/server.py"
+    store.add(name="tools-db", transport="stdio", command=[sys.executable, word])
+    h = Harness(store)
+    async with h.board as board:
+        names = {t.name for t in board.tools()}
+    # before: it was started, failed, and nothing said what would mend it
+    assert f"metabot plugin enable {'a' * 12} --add-servers" in board.skipped["tools-db"]
+    assert "gh__list_issues" in names
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        "whole",
+        "by a link",
+        "past ..",
+        "as an option's value",
+        "in a shell line",
+        "quoted in a shell line",
+    ],
+)
+async def test_a_plugin_server_naming_its_copy_in_this_home_starts(
+    store, tmp_path, count_file, named
+):
+    copy = metabot_home() / "plugins" / f"tools@{'a' * 64}"
+    copy.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(metabot_home())
+    (tmp_path / "next-door").mkdir()
+    spelled = {
+        "by a link": tmp_path / "link" / copy.relative_to(metabot_home()),
+        "past ..": tmp_path / "next-door" / ".." / copy.relative_to(tmp_path),
+    }.get(named, copy)
+    # as enable names it: the copy whole, in an argument too, the home named as it was then
+    command = [sys.executable, str(FAKE_MCP), "--count-file", f"{spelled}/calls"]
+    if named == "as an option's value":
+        command = [*command[:2], "=".join(command[2:])]
+    if named.endswith("in a shell line"):  # a plugin's server may be a line for sh
+        mark = '"' if named.startswith("quoted") else ""
+        line = f"exec {sys.executable} {FAKE_MCP} --count-file {mark}{spelled}/calls{mark}"
+        command = ["sh", "-c", line]
+    store.add(name="tools-db", transport="stdio", command=command)
+    h = Harness(store)
+    async with h.board as board:
+        names = {t.name for t in board.tools()}
+    # before: a link or a .. in the home's name refused it, and so did a shell line
+    assert board.skipped == {}
+    assert {"tools-db__list_issues", "gh__list_issues"} <= names
 
 
 async def test_serve_stdio_end_to_end(store, tmp_path):
@@ -395,3 +561,47 @@ def test_a_stopped_switchboard_stops_its_servers(tmp_path, home, stop):
             os.kill(pid, signal.SIGKILL)
         proc.stdin.close()
         proc.stdout.close()
+
+
+async def test_a_read_only_job_is_offered_a_connection_s_reads_alone(store, tmp_path):
+    from metabot.config import Config
+    from metabot.engines.base import EngineJob
+    from metabot.engines.openai_compat import OpenAIEngine
+
+    h = Harness(store)
+    engine = OpenAIEngine(base_url="http://127.0.0.1:9/v1", model="tiny", config=Config())
+    async with h.board as board:
+        every = {t.name: t.description for t in board.tools()}
+        reads = {t.name for t in board.tools(read_only=True)}
+        offered = engine._tools(EngineJob("go", tmp_path, read_only=True), board)
+    assert reads == {name for name, said in every.items() if said.startswith("[read]")}
+    assert "gh__list_issues" in reads and not {"gh__create_issue", "gh__delete_repo"} & reads
+    names = {tool["function"]["name"] for tool in offered}
+    assert "gh__list_issues" in names and "read_file" in names
+    assert not {"gh__create_issue", "gh__delete_repo", "write_file", "shell"} & names
+
+
+async def test_a_read_only_openai_job_cannot_call_a_tool_it_was_not_offered(
+    store, count_file, chat, tmp_path
+):
+    from fake_chat import answer, call
+    from metabot.commands import ask_once
+    from metabot.config import Config
+    from metabot.engines.openai_compat import OpenAIEngine
+    from metabot.paths import run_path
+
+    script = [call("gh__create_issue", {"title": "x"}, "c1"), answer("done")]
+    fake = chat(script)
+    result = await ask_once(
+        engine_name="openai", engine=OpenAIEngine(base_url=fake.url, model="tiny", config=Config()),
+        prompt="read the issues", cwd=tmp_path, read_only=True, allow_write=True,
+        allows=["gh#create_issue"], approver=DenyAll(), plugins=False,
+    )  # fmt: skip
+    assert "create_issue" not in (count_file.read_text() if count_file.exists() else "")
+    said = fake.requests[1]["messages"][-1]
+    assert said["role"] == "tool" and said["content"] == "no tool named gh__create_issue"
+    policy = json.loads((run_path(result.run_id) / "policy.json").read_text(encoding="utf-8"))
+    assert policy["allow_write"] is False and not policy["allows"]  # every write is asked
+    steps = json.loads(result.receipt.read_text(encoding="utf-8"))["steps"]
+    assert [(s["tool"], s["success"]) for s in steps] == [("metabot/gh__create_issue", False)]
+    assert result.steps == 1 and result.failed == 1  # refused, and recorded as such

@@ -101,7 +101,7 @@ def parse_args(raw: Any) -> dict[str, Any] | None:
             return {}
         try:
             raw = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             return None
     return raw if isinstance(raw, dict) else None
 
@@ -118,7 +118,7 @@ def _values(text: str) -> list[Any] | None:
             break
         try:
             value, at = decoder.raw_decode(text, at)
-        except ValueError:
+        except (ValueError, RecursionError):
             return None
         values.append(value)
     return values
@@ -196,7 +196,7 @@ def leading_calls(
             return None  # it all parsed: calls_in_text decides
         try:
             value, at = decoder.raw_decode(text, at)
-        except ValueError:
+        except (ValueError, RecursionError):
             return calls if calls and text[at] == "{" else None
         name, raw, shaped = _name_and_args(value)
         tool = resolve_name(name, offered) if shaped else None

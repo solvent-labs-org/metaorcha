@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import threading
 
+import anyio
 import pytest
 
 from fake_tty import FakeTty
 from metabot import approvals
-from metabot.approvals import ApprovalRequest, DenyAll, Scripted, TtyApprover
+from metabot.approvals import ApprovalRequest, DenyAll, Labelled, Scripted, TtyApprover
+from metabot.control import ControlServer, request, socket_path
 from metabot.scope_classes import ScopeClass
 
 
@@ -83,6 +85,95 @@ async def test_cancel_lets_go_of_the_terminal(tty):
     await tty.wait_for("cancelled; declined")
 
 
+@pytest.mark.parametrize("cancels", [1, 2, 3])
+async def test_a_question_taken_back_says_so_before_the_next_one_is_put(tty, cancels):
+    approver = TtyApprover(tty.path)
+    first = asyncio.create_task(approver.ask(_req(ScopeClass.WRITE, preview="first one")))
+    await tty.wait_for("allow?")
+    second = asyncio.create_task(approver.ask(_req(ScopeClass.WRITE, preview="second one")))
+    await asyncio.sleep(0.05)  # it waits its turn
+    for _ in range(cancels):  # its asker gave up on it, and then the run stopped as well
+        first.cancel()
+        await asyncio.sleep(0.005)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(first, 5.0)
+    await tty.wait_for("second one")
+    await asyncio.sleep(approvals.STOP_POLL_S * 3)  # all the first had left to say
+    shown = tty.screen()
+    # before: the first's line came under the second's prompt, which was still asked
+    assert shown.index("cancelled; declined") < shown.index("second one")
+    assert "cancelled; declined: claude-code/Bash" in shown  # it names the call
+    tty.type("y\n")
+    assert await asyncio.wait_for(second, 5.0) is True
+
+
+async def test_a_stopped_run_s_question_says_so_before_another_run_s_is_put(tty, tmp_path):
+    """Two runs share the terminal, as an office's desks do. One stops while its question is
+    on it: its server takes the question back, and then its engine, stopped, hangs up."""
+    approver = TtyApprover(tty.path)
+    servers = []
+    for who in ("desk-a", "desk-b"):
+        run_dir = tmp_path / who
+        run_dir.mkdir()
+        sock, asks = socket_path(run_dir), Labelled(approver, who)
+
+        async def on_approve(msg, asks=asks):
+            allowed = await asks.ask(_req(ScopeClass.WRITE, preview=msg["call_id"]))
+            return {"allow": allowed, "reason": "test"}
+
+        servers.append(
+            ControlServer(
+                sock,
+                on_approve=on_approve,
+                on_step=lambda s: None,
+                cleanup_dir=sock.parent != run_dir,
+            )
+        )
+    a, b = servers
+    for srv in servers:
+        await srv.start()
+    try:
+        ask = {"op": "approve", "cls": "write"}
+        engine_a = asyncio.create_task(request(a.path, {**ask, "call_id": "first one"}))
+        await tty.wait_for("allow?")
+        engine_b = asyncio.create_task(request(b.path, {**ask, "call_id": "second one"}))
+        await asyncio.sleep(0.05)  # desk-b's question waits its turn
+        a.withdraw()  # desk-a's run is ending
+        await asyncio.sleep(0.005)
+        engine_a.cancel()  # and its engine, stopped, hangs up
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(engine_a, 5.0)
+        await tty.wait_for("second one")
+        await asyncio.sleep(approvals.STOP_POLL_S * 3)  # all desk-a had left to say
+        shown = tty.screen()
+        # before: desk-a's line came under desk-b's prompt, which was still asked
+        assert shown.index("desk-a: cancelled; declined") < shown.index("second one")
+        tty.type("y\n")
+        assert (await asyncio.wait_for(engine_b, 5.0))["allow"] is True
+    finally:
+        for srv in servers:
+            await srv.close()
+
+
+async def test_a_question_whose_task_group_stops_says_so_before_the_ask_ends(tty):
+    """An in-process run's connections hold it in a task group, whose stop is said again on
+    every turn of the loop until it ends."""
+    approver = TtyApprover(tty.path)
+    shown: list[str] = []
+
+    async def asks() -> None:
+        try:
+            await approver.ask(_req(ScopeClass.WRITE))
+        finally:
+            shown.append(tty.screen())  # the terminal, as the ask ended
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(asks)
+        await tty.wait_for("allow?")
+        group.cancel_scope.cancel()
+    assert "cancelled; declined" in shown[0]  # before: the ask ended first
+
+
 async def test_deny_all_and_scripted():
     assert await DenyAll().ask(_req(ScopeClass.WRITE)) is False
     scripted = Scripted([True, False])
@@ -108,6 +199,8 @@ def test_terminal_safe_keeps_text_and_escapes_what_moves_the_cursor():
     assert terminal_safe("tab\there\nnext") == "tab\there\nnext"
     assert terminal_safe("\x1b[2J\x07\x00\x7f\x9b") == "\\x1b[2J\\x07\\x00\\x7f\\x9b"
     assert terminal_safe("\u202eabc\u2066d\u200f") == "\\u202eabc\\u2066d\\u200f"
+    # a byte of a name that is not UTF-8, as Python reads it, cannot be written out
+    assert terminal_safe("caf\udce9") == "caf\\udce9"
     # joiners, accents and emoji are text, not controls
     assert (
         terminal_safe("caf\u00e9 \U0001f469\u200d\U0001f4bb")

@@ -19,9 +19,9 @@ import urllib.request
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
-from metabot.config import MODEL_RE, Config, load_config, save_config
+from metabot.config import MODEL_RE, Config, ConfigError, endpoint_of, load_config, save_config
 from metabot.connections import LOCAL_HOSTS
-from metabot.engines import BINARIES, ENGINES, available
+from metabot.engines import BINARIES, available, engine_names, known_engine
 
 ROLES = ("fast", "build", "review", "second", "private")
 ABOUT = {
@@ -68,8 +68,25 @@ def listed_models(base_url: str) -> list[str]:
 
 
 def stays_here(entry: Mapping[str, str], cfg: Config) -> bool:
-    """Whether a run on this entry keeps the work on this machine."""
-    return entry.get("engine") == "openai" and urlparse(cfg.openai_base_url).hostname in LOCAL_HOSTS
+    """Whether a run on this entry keeps the work on this machine.
+
+    The address judged is the one the run calls: the endpoint the entry names, or the
+    openai settings when it names none. An endpoint the config does not have is never here.
+    """
+    if entry.get("engine") != "openai":
+        return False
+    name = entry.get("endpoint")
+    if name is None:
+        base_url = cfg.openai_base_url
+    else:
+        try:
+            base_url = endpoint_of(cfg, name).base_url
+        except (ConfigError, KeyError, TypeError):
+            return False
+    try:
+        return isinstance(base_url, str) and urlparse(base_url).hostname in LOCAL_HOSTS
+    except ValueError:  # an address that does not parse is not known to be here
+        return False
 
 
 def here(cfg: Config) -> tuple[dict[str, str | None], bool]:
@@ -108,7 +125,7 @@ def _table(cfg: Config) -> dict[str, object]:
 
 def _mine(cfg: Config, role: str) -> Entry | None:
     raw = _table(cfg).get(role)
-    if not isinstance(raw, dict) or raw.get("engine") not in ENGINES:
+    if not isinstance(raw, dict) or not known_engine(raw.get("engine")):
         return None
     model = raw.get("model")
     entry = {"engine": str(raw["engine"])}
@@ -230,8 +247,8 @@ def cmd_roster_set(args: argparse.Namespace) -> int:
     if args.role not in ROLES:
         _err(f"no role {args.role!r}; the roles are {', '.join(ROLES)}")
         return 2
-    if args.engine not in ENGINES:
-        _err(f"unknown engine {args.engine!r}; choose one of: {', '.join(ENGINES)}")
+    if not known_engine(args.engine):
+        _err(f"unknown engine {args.engine!r}; choose one of: {', '.join(engine_names())}")
         return 2
     if args.model is not None and not MODEL_RE.match(args.model):
         _err(f"{args.model!r} is not a model name")

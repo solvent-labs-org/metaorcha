@@ -39,6 +39,14 @@ def claude_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _no_sandbox_here(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No run hides with this machine's bwrap, or finds this machine's own rule folders."""
+    monkeypatch.setattr("metabot.sandbox.find_bwrap", lambda: None)
+    monkeypatch.setattr("metabot.sandbox.user_home", lambda: tmp_path / "user-home")
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _nothing_installed_here(monkeypatch: pytest.MonkeyPatch) -> None:
     """The roster sees no engine CLI and no local model server unless a test says so."""
     nothing = {"claude": None, "codex": None, "cursor": None}
@@ -58,6 +66,17 @@ def not_on_path(monkeypatch: pytest.MonkeyPatch, *commands: str) -> None:
 
     absent = {engine: binary for engine, binary in BINARIES.items() if binary in commands}
     monkeypatch.setattr("metabot.office.missing_command", absent.get)
+
+
+@pytest.fixture(params=["raising", "lenient"])
+def path_checks(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Path.is_file and is_dir raise for a path they cannot look at through Python 3.13, as its
+    sources show; a later one may say False, as os.path does. What MetaBot reads must not
+    depend on the Python it runs on."""
+    if request.param == "lenient":
+        monkeypatch.setattr(Path, "is_file", lambda self, **_: os.path.isfile(self))
+        monkeypatch.setattr(Path, "is_dir", lambda self, **_: os.path.isdir(self))
+    return str(request.param)
 
 
 @pytest.fixture
@@ -167,6 +186,7 @@ _STARTED: list[str] = []
 def _engine_started(call: dict, ours: tuple[Path, ...]) -> str | None:
     """The engine CLI of this machine that a new process would run, if any."""
     from metabot.engines import BINARIES
+    from metabot.sandbox import inner_argv
 
     args = call["args"]
     if call["shell"]:
@@ -175,6 +195,9 @@ def _engine_started(call: dict, ours: tuple[Path, ...]) -> str | None:
     else:
         first = args if isinstance(args, (str, bytes, os.PathLike)) else args[0]
         name = os.fsdecode(call["executable"] if call["executable"] is not None else first)
+        if not isinstance(args, (str, bytes, os.PathLike)) and os.path.basename(name) == "bwrap":
+            inner = inner_argv([os.fsdecode(a) for a in args])  # the engine bwrap starts
+            name = inner[0] if inner else ""
     if os.path.basename(name) not in BINARIES.values():
         return None
     search = os.pathsep.join(os.get_exec_path(call["env"]))
@@ -211,8 +234,49 @@ def _tests_start_no_engine_of_this_machine(tmp_path_factory: pytest.TempPathFact
         subprocess.Popen._execute_child = execute
 
 
+# Tests keep out of this machine's MetaBot home. A test whose own ``home`` never ran (a
+# parametrize argument of that name takes the fixture's place) finds a home in the session's
+# temp folder instead of ``~/.metabot``; if it writes there, it is named in the summary and the
+# run fails.
+_HOMELESS: list[str] = []
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_home_of_this_machine(tmp_path_factory: pytest.TempPathFactory):
+    stray = tmp_path_factory.getbasetemp() / "no-test-home"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("METABOT_HOME", str(stray / "home"))
+        mp.setenv("ORCHA_KEY_PATH", str(stray / "orcha-key"))
+        mp.setenv("CLAUDE_CONFIG_DIR", str(stray / "claude-config"))
+        yield stray
+
+
+@pytest.fixture(autouse=True)
+def _a_test_writes_only_its_own_home(
+    _no_home_of_this_machine: Path, request: pytest.FixtureRequest
+):
+    yield
+    stray = _no_home_of_this_machine
+    if stray.exists():
+        _HOMELESS.append(f"{request.node.nodeid}: wrote {_clear_stray(stray)}")
+
+
+def _clear_stray(stray: Path) -> list[str]:
+    """What a test wrote in the stray home, which then goes, also a folder in it that lost the
+    bits it is emptied by; one that still cannot go is moved aside, so no test after it finds a
+    stray home and is named for it."""
+    from metabot.plugins import _open_up
+
+    _open_up(stray)
+    wrote = sorted(p.name for p in stray.iterdir())
+    shutil.rmtree(stray, ignore_errors=True)
+    if stray.exists():
+        stray.rename(stray.with_name(f"{stray.name}-{len(_HOMELESS)}"))
+    return wrote
+
+
 def pytest_sessionfinish(session, exitstatus):
-    if _REACHED or _STARTED:
+    if _REACHED or _STARTED or _HOMELESS:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
@@ -220,6 +284,7 @@ def pytest_terminal_summary(terminalreporter):
     for title, lines in (
         ("tests reached for another host", _REACHED),
         ("tests started an engine CLI of this machine", _STARTED),
+        ("tests ran without their own MetaBot home", _HOMELESS),
     ):
         if lines:
             terminalreporter.section(title)

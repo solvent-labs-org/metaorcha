@@ -164,6 +164,29 @@ def test_mcp_call_to_another_server_is_a_step(ok_status):
     assert isinstance(events[1], ToolResult) and events[1].ok is True
 
 
+@pytest.mark.parametrize(
+    ("error", "result", "shown"),
+    [
+        (None, {"content": [{"type": "text", "text": "metabot: declined"}]}, "metabot: declined"),
+        ({"message": "server gone"}, None, "server gone"),
+    ],
+)
+def test_a_failed_mcp_call_shows_why(error, result, shown):
+    item = {
+        "id": "i9",
+        "type": "mcp_tool_call",
+        "server": "metabot",
+        "tool": "web__browser_navigate",
+        "arguments": {"url": "http://127.0.0.2:8765/"},
+        "result": result,
+        "error": error,
+        "status": "failed",
+    }
+    events = CodexEngine().parse_line(json.dumps({"type": "item.completed", "item": item}), {})
+    assert isinstance(events[1], ToolResult) and events[1].ok is False
+    assert shown in json.dumps(events[1].output)
+
+
 async def test_runs_through_the_engine_base(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_FIXTURE", str(FIXTURES / "codex-echo.jsonl"))
     engine = wrap(CodexEngine)

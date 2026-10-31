@@ -26,12 +26,37 @@ worktree is put back. An advisor of ``you`` reviews the office's work once
 every desk is done, and its advice goes to the person only. Advisors do not
 run in a fan.
 
+A desk with ``read_only: true`` takes its turn as any desk does, but the way
+an advisor runs: read-only, in a worktree with no branch, with every write
+asked. Its answer goes into the next desks' inboxes, and the next desk is
+its child; it files nothing, so the next desk starts where it started.
+
 With ``checks``, the office's gate checks run on each desk's work once the
 desk ends with an answer: its work is committed first, the checks judge that
 commit, and the worktree goes back to it afterwards, so nothing a check
 leaves becomes the desk's work. They are sealed as the desk's checks run,
 ``<desk run>.checks`` (see ``metabot.checks``). A desk whose checks fail is
 not ok, so a relay stops there.
+
+With ``rounds`` above one (``--until-checks``), a desk whose checks fail
+goes again, up to that many rounds: in the same worktree, on the same branch,
+from the commit its last round made, with what the failed checks said in its
+inbox as ``<desk>.checks.r<n>.md``. Round n's run id is ``<desk run>.r<n>``
+and its parent is the round before. When the run's one desk that may write,
+run as one copy, changes no file in round 1, the checks judge the work as it
+stands, so a desk that claims work it did not do goes again. The loop stops
+when the checks pass, when the rounds run out, when a later round changes no
+file, or when the office's money cap is spent; a run that ends in an error,
+at a limit or in a stop, or that had a call declined, is never tried again.
+Only a desk's last round counts: the next desk starts from it, and it alone
+may be offered.
+
+With ``max_cost_musd``, every desk run of the office run, each round and
+each advisor, runs under what is left of that one cap, one run at a time,
+and a desk whose engine MetaBot cannot price refuses the run before it
+starts. A run whose tokens have no price, or whose engine reported no usage
+MetaBot could read, has an unknown cost, so the cap cannot be kept: nothing
+more runs under it. A run that never reached its model cost nothing.
 
 A desk with a ``kit`` gets its skills as a plugin for its runs (see
 ``metabot.kits``). Every running desk's kit is found and copied before any
@@ -62,6 +87,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import functools
 import json
 import os
 import shutil
@@ -73,9 +100,16 @@ from typing import Any
 from emerge.journal import utc_now
 
 from metabot.approvals import Approver, Labelled, printable
-from metabot.checks import CheckError, ChecksCancelled, run_gate, runnable
+from metabot.checks import (
+    CHECKS_SUFFIX,
+    CheckError,
+    ChecksCancelled,
+    feedback_text,
+    run_gate,
+    runnable,
+)
 from metabot.config import Config, load_config, project_receipts_on
-from metabot.connections import ConnectionStore
+from metabot.connections import ConnectionStore, record_secrets
 from metabot.desks import (
     HANDOFF_DIR,
     DeskGitError,
@@ -88,9 +122,10 @@ from metabot.desks import (
     is_ancestor,
     resolve_commit,
     restore_worktree,
+    worktree_path,
 )
 from metabot.engines import get_engine
-from metabot.events import Event, Notice
+from metabot.events import ErrorEvent, Event, Notice
 from metabot.gate import Policy
 from metabot.gitcmd import GitError, toplevel
 from metabot.kits import KitError, build_kit, kits_root
@@ -104,6 +139,7 @@ from metabot.office import (
     fan_cap_of,
 )
 from metabot.paths import (
+    kept_home,
     metabot_home,
     new_run_id,
     private_dir,
@@ -112,12 +148,30 @@ from metabot.paths import (
     safe_id,
     write_private,
 )
-from metabot.receipts import journal_matches, scrub, verify_file
-from metabot.runner import Limits, RunCancelled, run_job
+from metabot.receipts import (
+    budget_verdict,
+    declined_and_failed,
+    journal_matches,
+    project_copy,
+    provenance_verdicts,
+    scrub,
+    signed_cost,
+    verdicts_of,
+    verify_file,
+)
+from metabot.runner import Limits, RunCancelled, run_job, unpriced
+from metabot.seals import Member, seal_runs
+from metabot.spend import dollars, uncounted
+from metabot.steps import ascii_text
 
 OFFICE_FORMAT = "metabot.office/1"
 ROLE_LIMIT = 64 * 1024
 ARTEFACT = "artefact.md"
+# how a desk's answer is written down: a name in it whose bytes are not UTF-8 is kept
+# escaped, as `ask` prints it, and never stops the office
+SHOWN = "backslashreplace"
+ROUNDS_DEFAULT = 3  # what --until-checks gives a desk when --rounds is not said
+ROUNDS_MAX = 10
 
 
 @dataclass
@@ -137,7 +191,14 @@ class DeskResult:
     checks: str | None = None  # pass, or fail naming each check; None when none ran
     checks_receipt: Path | None = None  # the checks' own run, <run_id>.checks
     advises: str | None = None  # the desk this advisor reviewed, or you; None for a desk
+    read_only: bool = False  # a read-only desk: it files nothing, as an advisor does
+    round: int | None = None  # its round, once its desk ran more than one; else None
+    next_round: str | None = None  # the run id of the round after it
+    stopped: str | None = None  # why its desk's loop ended here, on a loop's last round
+    cost_musd: int | None = None  # what its run cost; None when it has no price
+    declined: int = 0  # the calls of its run the gate declined
     answer: str = ""
+    feedback: str = ""  # what its failed checks said, for the next round
 
     @property
     def label(self) -> str:
@@ -148,6 +209,7 @@ class DeskResult:
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("answer")
+        data.pop("feedback")
         data["label"] = self.label
         data["receipt"] = str(self.receipt) if self.receipt else None
         data["artefact"] = str(self.artefact) if self.artefact else None
@@ -165,14 +227,19 @@ class OfficeResult:
     project_copies: list[Path] = field(default_factory=list)  # receipts copied into the project
     project_errors: list[str] = field(default_factory=list)  # why some were not
     offer: list[str] = field(default_factory=list)  # labels of the runs to pick from
+    seal: Path | None = None  # the receipt over every run of it; None if it could not be signed
+    cost_unknown: list[str] = field(default_factory=list)  # runs under the cap it cannot count
+    record_error: str | None = None  # why the office run's record could not be written
 
     @property
     def ok(self) -> bool:
-        return bool(self.rows) and all(row.ok for row in self.rows)
+        last = [row for row in self.rows if row.next_round is None]  # a loop's last rounds
+        return bool(last) and all(row.ok for row in last)
 
 
 def office_journal_path(office_run_id: str) -> Path:
-    return metabot_home() / "offices" / f"{safe_id(office_run_id, 'office run id')}.json"
+    """An office run's record, for a lookup: nothing is created; a writer makes the folder."""
+    return kept_home() / "offices" / f"{safe_id(office_run_id, 'office run id')}.json"
 
 
 def _save(record: dict[str, Any], rows: list[DeskResult]) -> None:
@@ -267,7 +334,7 @@ def handoff(wt: Path, earlier: Sequence[tuple[str, str]]) -> list[Path]:
         target = inbox / f"{label}.md"
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise OfficeError("handoff", f"{target} is not a plain file; nothing was handed on")
-        target.write_text(answer, encoding="utf-8")
+        target.write_text(answer, encoding="utf-8", errors=SHOWN)
         paths.append(target)
     return paths
 
@@ -290,6 +357,9 @@ def desk_prompt(
     branch: str,
     copy: int | None = None,
     picks: Sequence[str] = (),
+    read_only: bool = False,
+    round_of: tuple[int, int, Path] | None = None,
+    changed_before: bool = True,
 ) -> str:
     parts = [_role_text(office, desk)]
     parts.append(f"Task:\n{task.strip()}")
@@ -312,6 +382,26 @@ def desk_prompt(
             "the same task on its own branch, and the next desk or the person picks one."
         )
     parts.append(_kit_line(desk))
+    if read_only:
+        parts.append(
+            f"You are the {desk.name} desk of the {office.name} office, working read-only in "
+            "a git worktree: read what you need, and change nothing, for nothing you change is "
+            "kept. End with a short answer: it goes to the desks after you."
+        )
+        return "\n\n".join(part for part in parts if part)
+    if round_of is not None:
+        n, of, said = round_of
+        before = (
+            "Your work from the round before is on this branch, and the gate's checks failed on it"
+            if changed_before
+            else "Your round before changed no file, and the gate's checks fail on the work "
+            "as it stands"
+        )
+        parts.append(
+            f"This is round {n} of {of}. {before}; what they said is in {said}. Read it, and "
+            "fix the work, not the checks: do not change the checks, the office file, or "
+            "the tests they run."
+        )
     parts.append(
         f"You are the {desk.name} desk of the {office.name} office, working in a git worktree "
         f"on the branch {branch}. Do not switch branches, commit or push: when you finish, "
@@ -389,6 +479,10 @@ class _Office:
     project: Path | None = None  # the checkout that takes a copy of each receipt
     kits: dict[str, Path] = field(default_factory=dict)  # desk: its kit, as a plugin folder
     git: asyncio.Lock = field(default_factory=asyncio.Lock)  # one git step at a time
+    rounds: int = 1  # the most rounds a desk whose checks fail runs
+    cap_musd: int | None = None  # the office run's money cap, over every desk run
+    spent_musd: int = 0
+    uncounted: str | None = None  # why the first run under the cap has no cost
 
 
 def _advisors(
@@ -415,6 +509,26 @@ def _advisors(
     return found
 
 
+def _priced(
+    office: OfficeSpec, names: Sequence[str], roster: Mapping[str, Mapping[str, str]] | None
+) -> None:
+    """Under a money cap, each desk that runs needs a price; OfficeError names one without."""
+    from metabot.prices import price_for, read_prices
+
+    cfg = load_config()
+    mine = read_prices(cfg.prices)
+    for name in dict.fromkeys(names):
+        engine, model = desk_engine(office.desks[name], roster)
+        model = model or cfg.models.get(engine)
+        base_url = cfg.openai_base_url if engine == "openai" else None
+        if unpriced(price_for(engine, model, base_url, mine), engine, model):
+            raise OfficeError(
+                "max_cost",
+                f"desk {name} runs on {engine}/{model or 'default'}, which has no price: "
+                "add its rates under prices in config.json, or run without a money cap",
+            )
+
+
 @dataclass(frozen=True)
 class Start:
     """Where an office run that can start begins, and what it runs."""
@@ -435,6 +549,8 @@ def check_start(
     roster: Mapping[str, Mapping[str, str]] | None,
     checks: bool = False,
     advisors: bool = False,
+    rounds: int = 1,
+    max_cost_musd: int | None = None,
 ) -> Start:
     """Whether an office run can start, found without starting it; OfficeError says why not.
 
@@ -446,8 +562,14 @@ def check_start(
     repo = toplevel(office.root)
     if repo is None:
         raise OfficeError("office", "an office run needs the office inside a git repository")
+    if not 1 <= rounds <= ROUNDS_MAX:
+        raise OfficeError("rounds", f"between 1 and {ROUNDS_MAX}")
+    if rounds > 1 and not checks:
+        raise OfficeError("rounds", "a desk goes again only when its checks fail: run the checks")
     names = chosen_desks(office, desks, roster)
     advisor_map = _advisors(office, names, roster) if advisors else {}
+    if max_cost_musd is not None:
+        _priced(office, [*names, *(n for mine in advisor_map.values() for n in mine)], roster)
     run_checks: dict[str, str] = {}
     skipped: dict[str, str] = {}
     if checks:
@@ -490,11 +612,16 @@ def _open(
     checks: bool = False,
     advisors: bool = False,
     office_run_id: str | None = None,
+    rounds: int = 1,
+    max_cost_musd: int | None = None,
 ) -> _Office:
     """Check the office run can start, and write its record."""
     from metabot.plugins import enabled_plugins
 
-    start = check_start(office, task, desks=desks, roster=roster, checks=checks, advisors=advisors)
+    start = check_start(
+        office, task, desks=desks, roster=roster, checks=checks, advisors=advisors,
+        rounds=rounds, max_cost_musd=max_cost_musd,
+    )  # fmt: skip
     if office_run_id is None:
         office_run_id = new_run_id()
     office_journal_path(office_run_id)  # an unsafe id is refused before any work
@@ -508,13 +635,15 @@ def _open(
         "root": str(office.root),
         "repo": str(start.repo),
         "mode": mode,
-        "task": scrub(task, store.redaction_map()),
+        "task": scrub(task, record_secrets()),
         "base": start.base,
         "checks": sorted(start.checks),
         "checks_skipped": start.checks_skipped,
         "advisors": start.advisors,
         "started_at": utc_now(),
         "finished_at": None,
+        **({"rounds": rounds} if rounds > 1 else {}),
+        **({"max_cost_musd": max_cost_musd, "spent_musd": 0} if max_cost_musd is not None else {}),
     }
     result = OfficeResult(office_run_id, mode, checks_skipped=start.checks_skipped)
     _claim(record)
@@ -546,7 +675,8 @@ def _open(
         chosen=chosen,
         pins={"plugins": [p.pin for p in chosen]} if chosen else {},
         store=store,
-        slots=asyncio.Semaphore(fan_cap_of(cfg.fan_cap)),
+        # under a cap, one run at a time, so each starts under what is truly left
+        slots=asyncio.Semaphore(1 if max_cost_musd is not None else fan_cap_of(cfg.fan_cap)),
         result=result,
         record=record,
         checks=start.checks,
@@ -554,6 +684,8 @@ def _open(
         advisors=start.advisors,
         project=start.repo if project_receipts_on() else None,
         kits=kit_dirs,
+        rounds=rounds,
+        cap_musd=max_cost_musd,
     )
 
 
@@ -598,21 +730,95 @@ async def _off_loop(
 
 
 async def _opened(*args: Any, **kw: Any) -> _Office:
-    """``_open`` off the loop; an office run stopped while it opened is closed, then stopped."""
-    job = asyncio.ensure_future(asyncio.to_thread(_open, *args, **kw))
+    """``_open`` off the loop; an office run stopped while it opened is closed, then stopped,
+    however often it is stopped before the open ends."""
+    # A future, not a task: a loop that shuts down cancels its tasks, and the open would go
+    # on in its thread with nobody left to close it.
+    call = functools.partial(contextvars.copy_context().run, _open, *args, **kw)
+    job = asyncio.get_running_loop().run_in_executor(None, call)
     try:
         return await asyncio.shield(job)
     except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
-            _close(await job)
+        while not job.done():  # a stop again waits too: wait() never cancels what it waits on
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait([job])
+        if not job.cancelled() and job.exception() is None:
+            with contextlib.suppress(Exception):
+                _close(job.result())
         raise
 
 
 def _close(run: _Office) -> None:
     run.record["finished_at"] = utc_now()
+    if run.cap_musd is not None:
+        run.record["spent_musd"] = run.spent_musd
     if run.kits:  # the desks are done with their kits
         shutil.rmtree(kits_root(run.result.office_run_id), ignore_errors=True)
-    _save(run.record, run.result.rows)
+    try:
+        run.result.seal = _seal(run)
+        run.record["seal"] = str(run.result.seal)
+    except (OSError, ValueError) as exc:  # the record says so, and every desk receipt stands
+        run.record["seal"], run.record["seal_error"] = None, str(exc)
+        _said(run, f"the office run could not be sealed: {exc}")
+    else:  # beside the desks' copies, so the project's folder checks alone
+        copied, why = project_copy(run.result.seal, run.project)
+        if copied is not None:
+            run.result.project_copies.append(copied)
+        if why is not None and why not in run.result.project_errors:  # said once, as the desks'
+            run.result.project_errors.append(why)
+    try:
+        _save(run.record, run.result.rows)
+    except OSError as exc:  # a full disk: the rows and what they spent are still said
+        run.result.record_error = str(exc)
+        _said(run, f"the office's record could not be written: {exc}")
+
+
+def _said(run: _Office, error: str) -> None:
+    """An error at the close, said however the office run ends: also when it was stopped."""
+    if run.on_event is not None:
+        with contextlib.suppress(Exception):  # a trace that cannot print never stops it
+            run.on_event(ErrorEvent(error))
+
+
+def _seal(run: _Office) -> Path:
+    """One receipt over every desk run and checks run of the office run, in order."""
+    members: list[Member] = []
+    for row in run.result.rows:
+        role = "desk" if row.advises is None else "advisor"
+        # what each run left, also when a stop came before the row was told of it
+        receipt = Path(row.receipt) if row.receipt else receipts_dir() / f"{row.run_id}.json"
+        if row.receipt is None and receipt.is_file():
+            row.receipt = receipt  # and the record names what the seal holds
+        members.append(Member(row.run_id, role, receipt, row.ok))
+        checked = row.run_id + CHECKS_SUFFIX
+        kept = receipts_dir() / f"{checked}.json"
+        if row.checks_receipt is None and kept.is_file():
+            row.checks_receipt = kept
+        if row.checks_receipt is not None:
+            members.append(
+                Member(checked, "checks", Path(row.checks_receipt), row.checks == "pass")
+            )
+    task = str(run.record.get("task", ""))
+    workflow = (
+        f"office_sha256={run.office.sha256 or 'unknown'};"
+        f"checks={'on' if run.checks else 'off'};rounds={run.rounds};"
+        f"allow_write={'true' if run.allow_write else 'false'}"
+    )
+    verdicts = [
+        {"check": "workflow", "result": "pass", "detail": ascii_text(workflow, limit=1000)},
+        *([budget_verdict(run.cap_musd, _counted(run))] if run.cap_musd is not None else []),
+        *provenance_verdicts(run.pins),
+    ]
+    name, mode = ascii_text(run.office.name).replace(";", "_"), run.result.mode
+    return seal_runs(
+        run.result.office_run_id,
+        members,
+        delivered=run.result.ok,
+        kind_detail=f"kind=office;name={name};mode={mode}",
+        verdicts=verdicts,
+        started_at=str(run.record["started_at"]),
+        meta={"sealed": "office", "office_name": run.office.name, "task": task},
+    )
 
 
 def _save_so_far(run: _Office) -> None:
@@ -631,15 +837,19 @@ def _copies(desk: DeskSpec) -> list[int | None]:
 
 def _new_row(run: _Office, name: str, copy: int | None, advises: str | None = None) -> DeskResult:
     label = desk_label(name, copy) if advises is None else advisor_label(name, advises)
-    engine_name, model = desk_engine(run.office.desks[name], run.roster)
+    desk = run.office.desks[name]
+    engine_name, model = desk_engine(desk, run.roster)
+    read_only = desk.read_only and advises is None
+    files = advises is None and not read_only
     row = DeskResult(
         desk=name,
         copy=copy,
         run_id=f"{run.result.office_run_id}.{label}",
-        branch=None if advises is not None else desk_branch(run.result.office_run_id, label),
+        branch=desk_branch(run.result.office_run_id, label) if files else None,
         engine=engine_name,
         model=model or run.cfg.models.get(engine_name),
         advises=advises,
+        read_only=read_only,
     )
     run.result.rows.append(row)
     return row
@@ -668,27 +878,43 @@ async def _run_row(
     picks: Sequence[str] = (),
     together: bool = False,
     since: str | None = None,
+    round_of: tuple[int, int] | None = None,
+    last_commit: str | None = None,
 ) -> None:
     """One desk run: its worktree from ``start``, its run, its checks, and its commit.
 
+    A later round (``round_of``) works in the worktree its desk's first round
+    made, from ``last_commit``, the commit the round before made; its work is
+    what it changed since then, and its diff stat counts from ``start``.
+
     An advisor's run (``row.advises``) has a worktree with no branch, runs
     read-only with every write asked and nothing allowed ahead, and files
-    nothing; ``since`` is where the work it reviews began.
+    nothing; ``since`` is where the work it reviews began. A read-only desk
+    (``row.read_only``) runs the same way, on a desk's prompt.
     """
     from metabot.cmdline import resolve_allows
 
     desk = run.office.desks[row.desk]
     advisor = row.advises is not None
+    files = not (advisor or row.read_only)  # else it runs read-only and files nothing
     began = False
     try:
         async with run.slots:
+            left = None if run.cap_musd is None else run.cap_musd - run.spent_musd
+            unkept = _unkept(run)
+            if unkept is not None:
+                row.error = row.stopped = unkept
+                return
             try:
-                wt = await _off_loop(
-                    run.git,
-                    create_worktree,
-                    *(run.repo, run.result.office_run_id, row.label, start),
-                    detached=advisor,
-                )
+                if round_of is None:
+                    wt = await _off_loop(
+                        run.git,
+                        create_worktree,
+                        *(run.repo, run.result.office_run_id, row.label, start),
+                        detached=not files,
+                    )
+                else:
+                    wt = worktree_path(run.result.office_run_id, row.label)
                 cwd = desk_cwd(wt, run.office, run.repo, desk)
                 inbox = handoff(wt, earlier)
                 if row.advises is not None:
@@ -697,7 +923,16 @@ async def _run_row(
                     )
                 else:
                     prompt = desk_prompt(
-                        run.office, desk, run.task, inbox, str(row.branch), row.copy, picks
+                        run.office,
+                        desk,
+                        run.task,
+                        inbox,
+                        str(row.branch),
+                        row.copy,
+                        picks,
+                        read_only=row.read_only,
+                        round_of=(*round_of, inbox[-1]) if round_of else None,
+                        changed_before=last_commit is not None,
                     )
             except (DeskGitError, OfficeError, OSError) as exc:
                 row.error = str(exc)
@@ -707,10 +942,10 @@ async def _run_row(
                 run.on_desk(row)
             engine = run.make(row.engine)
             policy = Policy(
-                allow_write=run.allow_write and not advisor,
-                allows=frozenset()
-                if advisor
-                else resolve_allows(list(run.allows), engine, run.store),
+                allow_write=run.allow_write and files,
+                allows=resolve_allows(list(run.allows), engine, run.store)
+                if files
+                else frozenset(),
             )
             began = True
             events = _events_for(run.on_event, row.label) if together else run.on_event
@@ -734,14 +969,27 @@ async def _run_row(
                         "copy": row.copy,
                         "parent": parent,
                         **({"advises": row.advises} if advisor else {}),
+                        **({"read_only": True} if row.read_only else {}),
+                        **({"round": row.round} if round_of else {}),
                         **run.pins,
                     },
-                    limits=Limits(max_tool_calls=desk.turns, max_tokens=desk.budget),
-                    read_only=advisor,
+                    limits=Limits(
+                        max_tool_calls=desk.turns, max_tokens=desk.budget, max_cost_musd=left
+                    ),
+                    read_only=not files,
                     project=run.project,
                 )
             except RunCancelled as exc:
-                if advisor:
+                _spend(
+                    run,
+                    row,
+                    exc.result.cost_musd,
+                    exc.result.tokens,
+                    exc.result.lost,
+                    exc.result.named_late,
+                )
+                row.declined = exc.result.declined
+                if not files:
                     await _off_loop(run.git, _finish_advice, row, exc.result, wt)
                 else:
                     await _off_loop(
@@ -749,16 +997,27 @@ async def _run_row(
                     )
                 row.error = "cancelled"
                 raise
-            except Exception as exc:  # an engine adapter broke: its run sealed what it saw
+            except Exception as exc:  # an engine adapter broke, or a file could not be written
                 row.error = printable(f"{type(exc).__name__}: {exc}", 300)
                 sealed = receipts_dir() / f"{row.run_id}.json"
                 row.receipt = sealed if sealed.is_file() else None
+                if row.receipt is not None:  # what it spent still counts
+                    _spend(run, row, signed_cost(row.receipt), None)
+                    row.declined = declined_and_failed((), verdicts_of(row.receipt))[0]
+                elif run_path(row.run_id).is_dir():  # it began, and no seal says what it spent
+                    _spend(run, row, None, None)
+                else:  # it stopped before its run began: nothing ran
+                    _spend(run, row, 0, 0)
+                if isinstance(exc, OSError):  # a full disk: the desk failed, and the office says so
+                    return
                 raise
+            _spend(run, row, result.cost_musd, result.tokens, result.lost, result.named_late)
+            row.declined = result.declined
             _copied(run, result)
             hint = limit_hint(row.desk, result.limit)
             if hint and events is not None:  # said where the person watches, as it happens
                 events(Notice(hint))
-            if advisor:
+            if not files:
                 await _off_loop(run.git, _finish_advice, row, result, wt)
                 return
             if not (run.checks and result.ok):
@@ -767,7 +1026,7 @@ async def _run_row(
             # The checks judge the desk's commit, and what they leave is not its work.
             try:
                 row.commit = await _off_loop(
-                    run.git, _commit_work, row, wt, run.task, run.repo, start
+                    run.git, _commit_work, row, wt, run.task, run.repo, last_commit or start
                 )
             except DeskGitError as exc:
                 await _off_loop(
@@ -782,7 +1041,11 @@ async def _run_row(
                     commit_error=str(exc),
                 )
                 return
-            if row.commit is None:  # it changed no file: there is no work of its to judge
+            # A desk that changed no file has no work of its to judge, save in a loop's
+            # round 1 for the run's one writer: the checks say whether the task is done,
+            # and if not it goes again, unless a call of it was declined.
+            judged = run.rounds > 1 and round_of is None and _sole_writer(run) == row.desk
+            if row.commit is None and not judged:
                 await _off_loop(
                     run.git,
                     _finish_desk,
@@ -827,6 +1090,8 @@ async def _run_row(
                 raise
             _copied(run, gate)
             row.checks, row.checks_receipt = gate.summary, gate.receipt
+            if run.rounds > 1 and gate.summary not in (None, "pass"):
+                row.feedback = feedback_text(gate, row.round or 1, changed=row.commit is not None)
             await _off_loop(
                 run.git, _finish_desk, row, result, wt, run.task, run.repo, start, committed=True
             )
@@ -836,6 +1101,134 @@ async def _run_row(
         raise
     finally:
         _save_so_far(run)
+
+
+def _sole_writer(run: _Office) -> str | None:
+    """The run's one desk that may write, run as one copy; None when there are more.
+
+    A desk that may write but is not there to, a planner, or one after copies,
+    changes no file and is right to: only the one writer is held to the checks.
+    """
+    writers = [
+        name
+        for name in run.names
+        if not (run.office.desks[name].read_only or run.office.desks[name].is_advisor)
+    ]
+    if len(writers) != 1 or run.office.desks[writers[0]].fan > 1:
+        return None
+    return writers[0]
+
+
+def _spend(
+    run: _Office,
+    row: DeskResult,
+    cost_musd: int | None,
+    tokens: int | None,
+    lost: bool = False,
+    late: bool = False,
+) -> None:
+    """Count what a desk run cost toward the office's cap; ``tokens`` is what it counted,
+    ``lost`` that a request it sent never said what it spent, ``late`` that its engine
+    reported tokens before it named a model that prices them otherwise."""
+    row.cost_musd = cost_musd
+    run.spent_musd += cost_musd or 0
+    if run.cap_musd is not None:
+        run.record["spent_musd"] = run.spent_musd
+        if cost_musd is None:  # under a cap: tokens with no price, or none counted
+            later = row.round is not None and row.round > 1
+            label = row.label + (f" r{row.round}" if later else "")
+            run.result.cost_unknown.append(label)
+            run.record["cost_unknown"] = list(run.result.cost_unknown)
+            run.uncounted = run.uncounted or uncounted(label, tokens, lost, late)
+
+
+def _spent(run: _Office) -> str:
+    return f"the office's {dollars(run.cap_musd or 0)} is spent"
+
+
+def _unkept(run: _Office) -> str | None:
+    """Why nothing more runs under the office's cap; None while it holds."""
+    if run.cap_musd is None:
+        return None
+    if run.uncounted is not None:
+        return f"{run.uncounted}, so the office's {dollars(run.cap_musd)} cannot be kept"
+    return _spent(run) if run.spent_musd >= run.cap_musd else None
+
+
+def _counted(run: _Office) -> int | None:
+    """What the office run spent, for its seal; None when a run's cost is unknown."""
+    return None if run.result.cost_unknown else run.spent_musd
+
+
+def _new_round(run: _Office, row: DeskResult, n: int) -> DeskResult:
+    """The desk's next round: its run id is the first round's, then ``.r<n>``."""
+    first = row.run_id.rsplit(".r", 1)[0] if row.round and row.round > 1 else row.run_id
+    nxt = DeskResult(
+        desk=row.desk,
+        copy=row.copy,
+        run_id=f"{first}.r{n}",
+        branch=row.branch,
+        engine=row.engine,
+        model=row.model,
+        round=n,
+    )
+    row.next_round = nxt.run_id
+    run.result.rows.append(nxt)
+    return nxt
+
+
+async def _run_rounds(
+    run: _Office,
+    row: DeskResult,
+    start: str,
+    earlier: Sequence[tuple[str, str]],
+    parent: str | None,
+    picks: Sequence[str] = (),
+    together: bool = False,
+) -> None:
+    """A desk's run, and while its checks fail, its next rounds; see the module doc."""
+    await _run_row(run, row, start, earlier, parent, picks, together)
+    while run.rounds > 1 and row.checks not in (None, "pass"):
+        n = (row.round or 1) + 1
+        if n > run.rounds:
+            row.stopped = f"{run.rounds} rounds used; the checks still fail"
+            return
+        if row.declined:  # it would be asked the same again
+            calls = "a declined call" if row.declined == 1 else f"{row.declined} declined calls"
+            row.stopped = f"round {row.round or 1} had {calls}; the checks still fail"
+            return
+        unkept = _unkept(run)
+        if unkept is not None:
+            row.stopped = unkept
+            return
+        row.round = row.round or 1
+        said = (f"{row.label}.checks.r{row.round}", row.feedback)
+        last = row.commit
+        row = _new_round(run, row, n)
+        await _run_row(
+            run, row, start, [*earlier, said], row_parent(run, row), picks, together,
+            round_of=(n, run.rounds), last_commit=last,
+        )  # fmt: skip
+        if row.ok and row.checks is None and row.error is None:  # it changed no file
+            row.ok = False
+            row.stopped = f"round {n} changed no file; the checks still fail"
+            row.error = "the gate's checks still fail"
+            return
+    if row.round and row.checks == "pass":
+        row.stopped = f"the checks passed in round {row.round}"
+
+
+def row_parent(run: _Office, row: DeskResult) -> str:
+    """A later round's parent: the round before it."""
+    return next(r.run_id for r in run.result.rows if r.next_round == row.run_id)
+
+
+def _last_round(run: _Office, row: DeskResult) -> DeskResult:
+    """The desk run its loop ended on: ``row`` itself when it ran once."""
+    by_id = {r.run_id: r for r in run.result.rows}
+    while row.next_round is not None:
+        row = by_id[row.next_round]
+    return row
 
 
 async def _together(jobs: Sequence[Coroutine[Any, Any, None]]) -> None:
@@ -894,6 +1287,8 @@ async def run_relay(
     checks: bool = False,
     advisors: bool = True,
     office_run_id: str | None = None,
+    rounds: int = 1,
+    max_cost_musd: int | None = None,
 ) -> OfficeResult:
     """Run desks one after another; a desk with no good run stops the relay.
 
@@ -905,7 +1300,8 @@ async def run_relay(
         office, task, "relay", approver=approver, desks=desks, allow_write=allow_write,
         allows=allows, roster=roster, connections=connections, plugins=plugins,
         on_event=on_event, on_desk=on_desk, make_engine=make_engine, checks=checks,
-        advisors=advisors, office_run_id=office_run_id,
+        advisors=advisors, office_run_id=office_run_id, rounds=rounds,
+        max_cost_musd=max_cost_musd,
     )  # fmt: skip
     earlier: list[tuple[str, str]] = []
     start, parent = run.base, None
@@ -916,8 +1312,9 @@ async def run_relay(
             rows = [_new_row(run, name, copy) for copy in _copies(office.desks[name])]
             together = len(rows) > 1
             await _together(
-                [_run_row(run, row, start, earlier, parent, picks, together) for row in rows]
+                [_run_rounds(run, row, start, earlier, parent, picks, together) for row in rows]
             )
+            rows = [_last_round(run, row) for row in rows]
             good = [row for row in rows if row.ok]
             if not good:
                 break
@@ -925,7 +1322,7 @@ async def run_relay(
             parent = ",".join(row.run_id for row in good)
             if together:  # the next desk starts where the copies started, and picks
                 picks = tuple(str(row.branch) for row in good if row.commit is not None)
-            else:
+            elif good[0].branch is not None:  # a read-only desk files nothing: start stays
                 start, picks = f"refs/heads/{good[0].branch}", ()
             earlier.extend(await _advise(run, name, start, began_at, earlier, parent, picks))
         else:
@@ -953,6 +1350,8 @@ async def run_fan(
     make_engine: Callable[[str], Any] | None = None,
     checks: bool = False,
     office_run_id: str | None = None,
+    rounds: int = 1,
+    max_cost_musd: int | None = None,
 ) -> OfficeResult:
     """Run every chosen desk at once from one base; nothing is handed between them.
 
@@ -962,14 +1361,14 @@ async def run_fan(
         office, task, "fan", approver=approver, desks=desks, allow_write=allow_write,
         allows=allows, roster=roster, connections=connections, plugins=plugins,
         on_event=on_event, on_desk=on_desk, make_engine=make_engine, checks=checks,
-        office_run_id=office_run_id,
+        office_run_id=office_run_id, rounds=rounds, max_cost_musd=max_cost_musd,
     )  # fmt: skip
     try:
         rows = [
             _new_row(run, name, copy) for name in run.names for copy in _copies(office.desks[name])
         ]
         together = len(rows) > 1
-        await _together([_run_row(run, row, run.base, (), None, (), together) for row in rows])
+        await _together([_run_rounds(run, row, run.base, (), None, (), together) for row in rows])
     finally:
         _close(run)
     run.result.offer = _offer(run)
@@ -1012,7 +1411,8 @@ def _offer(run: _Office) -> list[str]:
         if not any(other != tip and is_ancestor(run.repo, tip, other) for other in latest)
     ]
     offered = {row.label for tip in heads for row in latest[tip]}
-    return [row.label for row in run.result.rows if row.label in offered]
+    # a loop's rounds share one label and one branch: each label is offered once
+    return list(dict.fromkeys(row.label for row in run.result.rows if row.label in offered))
 
 
 def _join(*errors: str | None) -> str | None:
@@ -1066,7 +1466,7 @@ def _finish_desk(
     row.receipt, row.ok, row.answer = run.receipt, run.ok, run.final_text
     row.error = _join(run.error, limit_hint(row.desk, run.limit), commit_error)
     row.artefact = run_path(row.run_id) / ARTEFACT
-    write_private(row.artefact, run.final_text)
+    write_private(row.artefact, run.final_text, errors=SHOWN)
     try:
         if committed:
             restore_worktree(wt)
@@ -1088,7 +1488,7 @@ def _finish_advice(row: DeskResult, run: Any, wt: Path) -> None:
     row.receipt, row.ok, row.answer = run.receipt, run.ok, run.final_text
     row.error = _join(run.error, limit_hint(row.desk, run.limit))
     row.artefact = run_path(row.run_id) / ARTEFACT
-    write_private(row.artefact, run.final_text)
+    write_private(row.artefact, run.final_text, errors=SHOWN)
     try:
         restore_worktree(wt)
     except DeskGitError as exc:
@@ -1103,7 +1503,7 @@ def load_record(office_run_id: str) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) and data.get("format") == OFFICE_FORMAT else None
 

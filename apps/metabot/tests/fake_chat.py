@@ -53,7 +53,8 @@ class FakeChat:
                     fake.release.wait(delay)
                 reply = dict(fake.script.pop(0) if fake.script else fake.repeat or answer("?"))
                 status = reply.pop("__status__", 200)  # a scripted error: refused(...)
-                data = json.dumps(reply).encode()
+                raw = reply.pop("__raw__", None)  # a body as some proxy sends it, not JSON
+                data = raw.encode() if raw is not None else json.dumps(reply).encode()
                 try:
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")

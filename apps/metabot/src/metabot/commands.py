@@ -6,11 +6,10 @@ import argparse
 import asyncio
 import getpass
 import json
-import os
 import sys
 import tempfile
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +19,29 @@ from metabot.cmdline import (
     EXIT_FAILED,
     EXIT_OK,
     EXIT_USAGE,
+    given_folder,
     read_prompt,
     resolve_allows,
 )
-from metabot.config import load_config, project_receipts_on, save_config
+from metabot.config import Config, load_config, project_receipts_on, save_config
 from metabot.connections import Connection, ConnectionStore
 from metabot.console import Trace
-from metabot.engines import BINARIES, ENGINES, available, get_engine
+from metabot.engines import (
+    BINARIES,
+    ENGINES,
+    available,
+    bridge_table,
+    engine_names,
+    get_engine,
+    known_engine,
+    missing_command,
+)
+from metabot.engines.base import CliEngine
+from metabot.engines.bridge import BridgeEngine
 from metabot.gate import Policy
-from metabot.paths import metabot_home, receipt_path, run_path
+from metabot.gitcmd import toplevel
+from metabot.paths import kept_home, metabot_home, receipt_path, run_path
+from metabot.plugins import PluginError, enabled_plugins
 from metabot.prices import PRICES_AS_OF
 from metabot.receipts import (
     answer_caveat,
@@ -39,7 +52,8 @@ from metabot.receipts import (
     unread_caveat,
     verify_file,
 )
-from metabot.roster import RosterError, fast_model, fill, local_status, pick
+from metabot.roster import RosterError, fast_model, fill, local_status, pick, roster_entries
+from metabot.sandbox import foresee
 from metabot.spend import dollars
 from metabot.suggest import Suggestion, reason, suggest_here
 from metabot.text import ascii_digits
@@ -56,7 +70,7 @@ def _err(text: str) -> None:
 def default_engine() -> str:
     """The configured engine, else the first installed CLI, else the local endpoint."""
     cfg = load_config()
-    if cfg.default_engine in ENGINES:
+    if known_engine(cfg.default_engine):
         return cfg.default_engine
     found = available()
     return next((n for n in ENGINE_ORDER if found.get(n)), "openai")
@@ -81,14 +95,14 @@ def cmd_init(args: argparse.Namespace) -> int:
     _key, did = ensure_key()
     cfg = load_config()
     if args.engine:
-        if args.engine not in ENGINES:
-            _err(f"unknown engine {args.engine!r}; choose one of: {', '.join(ENGINES)}")
+        if not known_engine(args.engine):
+            _err(f"unknown engine {args.engine!r}; choose one of: {', '.join(engine_names())}")
             return EXIT_USAGE
         cfg.default_engine = args.engine
-    elif cfg.default_engine not in ENGINES:
+    elif not known_engine(cfg.default_engine):
         cfg.default_engine = default_engine()
     save_config(cfg)
-    print(f"home      {metabot_home()}")
+    print(f"home      {printable(str(metabot_home()), 2000)}")
     print(f"signer    {did}")
     print(f"engine    {cfg.default_engine}")
     print('next      metabot ask "what is in this directory?"')
@@ -123,6 +137,7 @@ SETTINGS = {
     "project_receipts": (_on_off, "also copy each receipt to <project>/.orcha/receipts/"),
     "fan_cap": (_fan_cap, "how many desk runs go at once"),
     "ladder_attempts": (_attempts, "how many rungs of the ladder one task may run"),
+    "sandbox": (_on_off, "hide instructions outside the project from engine commands"),
 }
 
 
@@ -150,10 +165,29 @@ def cmd_config_set(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_engines(_args: argparse.Namespace) -> int:
+def cmd_engines(args: argparse.Namespace) -> int:
     cfg = load_config()
     found = available()
     chosen = default_engine()
+    cwd: Path | None = None
+    if getattr(args, "manifest", False):
+        cwd, usable = given_folder(args.cwd)
+        if not usable:
+            _err(f"{cwd} is not a directory")
+            return EXIT_USAGE
+    elif getattr(args, "cwd", None):
+        _err("--cwd goes with --manifest")
+        return EXIT_USAGE
+    roles = roster_entries(cfg) if cwd is not None else {}
+    # the work tree an office desk or a ladder rung copies, as git says it
+    project = toplevel(cwd) if cwd is not None else None
+    if cwd is not None:  # every run that takes plugins checks each one first
+        try:
+            enabled_plugins()
+        except PluginError as exc:
+            said = _shown(exc, 300)
+            print(f"plugins  every run that takes plugins refuses: {said}; ", end="")
+            print("--no-plugins runs without them")
     for name in ENGINES:
         mark = "*" if name == chosen else " "
         if name == "openai":
@@ -162,7 +196,86 @@ def cmd_engines(_args: argparse.Namespace) -> int:
         else:
             status = found.get(name) or f"not installed ({BINARIES[name]} not on PATH)"
         print(f"{mark} {name:<7} {status}")
+        if cwd is not None:
+            _manifest(get_engine(name), cfg, roles, cwd, project)
+    for name, (spec, plugin) in bridge_table().items():
+        mark = "*" if name == chosen else " "
+        missing = missing_command(name)
+        said = printable(" ".join(map(str, spec.get("command", []))), 300)  # a plugin's words
+        status = f"bridge{f' from {plugin.ref}' if plugin else ''}: {said}"
+        status += f" ({printable(missing, 80)} not found)" if missing else ""
+        print(f"{mark} {name:<7} {status}")
+        if cwd is not None:
+            try:
+                engine = get_engine(name)  # as a run makes it: a plugin's copy is checked
+            except PluginError as exc:
+                print(f"    {'refuses':<10} {exc}")
+            else:
+                _manifest(engine, cfg, roles, cwd, project)
     return EXIT_OK
+
+
+def _manifest(
+    engine: Any,
+    cfg: Config,
+    roles: Mapping[str, Mapping[str, str]],
+    cwd: Path,
+    project: Path | None,
+) -> None:
+    """One engine as it stands here: how it takes a turn without writing, the models
+    each role runs on it, what the sandbox does in ``cwd`` and in a copy of ``project``,
+    the git work tree holding it, and what still reaches it."""
+    used = [
+        f"{role}: {_runs_on(engine.name, entry, cfg)}"
+        for role, entry in roles.items()
+        if entry.get("engine") == engine.name
+    ]
+    offers = engine.models if isinstance(engine, BridgeEngine) else []  # a bridge says them
+    models = "; ".join(
+        [*([f"offers {', '.join(offers)}"] if offers else []), ", ".join(used) or "no role uses it"]
+    )
+    if isinstance(engine, CliEngine):
+        hides = foresee(engine, cwd, enabled=cfg.sandbox)
+        # an office desk, or a ladder rung in a git project, works in a copy under the
+        # home MetaBot keeps, so the folders above it are not the project's
+        copy = kept_home() / "desks" / "run" / "desk"
+        copied = []
+        if project is not None:  # outside a work tree an office refuses, and a rung works in place
+            line = foresee(engine, copy, enabled=cfg.sandbox, where="in a copy", copy_of=project)
+            copied = [("in a copy", line)]
+    else:
+        hides, copied = "none needed: it reads no instructions of its own", []
+    rows = [
+        ("read-only", engine.read_only_mode),
+        ("models", models),
+        *([("endpoints", _endpoints(cfg))] if engine.name == "openai" else []),
+        ("sandbox", hides),
+        *copied,
+        ("also sees", engine.also_sees),
+    ]
+    for key, value in rows:
+        print(f"    {key:<10} {value}")
+
+
+def _runs_on(engine: str, entry: Mapping[str, str], cfg: Config) -> str:
+    """The model a run on this role gets, as ask and an office desk pick it."""
+    if entry.get("model"):
+        return entry["model"]
+    if cfg.models.get(engine):
+        return f"{cfg.models[engine]} (models in config.json)"
+    return cfg.openai_model if engine == "openai" else "its default"
+
+
+def _endpoints(cfg: Config) -> str:
+    """Each endpoint a ladder rung may name, with its model and tier."""
+    from metabot.config import DEFAULT_ENDPOINT, endpoint_of
+    from metabot.ladder import tier_of_endpoint
+
+    said = []
+    for name in (DEFAULT_ENDPOINT, *cfg.endpoints):
+        ep = endpoint_of(cfg, name)
+        said.append(f"{name}: {ep.model or 'no model set'}, {ep.tier or tier_of_endpoint(ep)}")
+    return "; ".join(said)
 
 
 # ── ask ─────────────────────────────────────────────────────────────────────
@@ -202,7 +315,12 @@ async def ask_once(
     chosen = enabled_plugins() if plugins else []
     store = ConnectionStore()
     allowed = resolve_allows(allows or [], engine, store)
-    policy = Policy(allow_write=allow_write, allows=allowed, interactive=True)
+    # a read-only run takes no write ahead: each one it tries is asked, as on a read-only desk
+    policy = Policy(
+        allow_write=allow_write and not read_only,
+        allows=frozenset() if read_only else allowed,
+        interactive=True,
+    )
     meta: dict[str, Any] = {"plugins": [p.pin for p in chosen]} if chosen else {}
     if role:
         meta["role"] = role
@@ -240,7 +358,29 @@ def cost_line(result: Any, engine_name: str) -> str:
         return f"[metabot] cost {dollars(cost)}, by {whose} rates"
     if source == "plan":
         return f"[metabot] {result.tokens} tokens on your {engine_name} plan; MetaBot has no price"
-    return f"[metabot] {result.tokens} tokens; no price for this model: add one under prices"
+    if source == "unsent":
+        return f"[metabot] cost $0.00: {engine_name}'s model was never reached"
+    if getattr(result, "lost", False):
+        return (
+            f"[metabot] {engine_name} sent a request that never said what it spent, so there "
+            "is no cost to show"
+        )
+    if getattr(result, "named_late", False):
+        return (
+            f"[metabot] {result.tokens} tokens, some reported before {engine_name} named its "
+            "model, so there is no cost to show"
+        )
+    if not result.tokens:  # nothing counted: a price would not help
+        if getattr(result, "usage_reported", False):
+            return (
+                f"[metabot] {engine_name}'s usage report has no token counts MetaBot can "
+                "read, so there is no cost to show"
+            )
+        return f"[metabot] {engine_name} reported no usage, so there is no cost to show"
+    names = getattr(result, "unpriced", None) or []  # each model whose price counts them
+    model = " and ".join(printable(name, 64) for name in names) or "this model"
+    each = "one for each" if len(names) > 1 else "one"
+    return f"[metabot] {result.tokens} tokens; no price for {model}: add {each} under prices"
 
 
 def receipt_line(result: Any) -> tuple[str, bool]:
@@ -280,8 +420,8 @@ def cmd_ask(args: argparse.Namespace) -> int:
             _err(str(exc))
             return EXIT_USAGE
     engine_name = engine_name or default_engine()
-    if engine_name not in ENGINES:
-        _err(f"unknown engine {engine_name!r}; choose one of: {', '.join(ENGINES)}")
+    if not known_engine(engine_name):
+        _err(f"unknown engine {engine_name!r}; choose one of: {', '.join(engine_names())}")
         return EXIT_USAGE
     if role is None and args.engine is None and model is None:  # a plain ask
         model = fast_model(engine_name)
@@ -292,8 +432,8 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if not prompt.strip():
         _err("the prompt is empty")
         return EXIT_USAGE
-    cwd = Path(args.cwd or os.getcwd()).resolve()
-    if not cwd.is_dir():
+    cwd, usable = given_folder(args.cwd)
+    if not usable:
         _err(f"{cwd} is not a directory")
         return EXIT_USAGE
     if suggested is not None:
@@ -379,15 +519,39 @@ def _show_result(
     return valid
 
 
-def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
-    """``ask --ladder``: the cheapest rung first, climbing only on a failure the record shows."""
+class LadderSetupError(ValueError):
+    """A ladder that cannot start here, and why: the CLI prints it, the page shows it."""
+
+
+@dataclass
+class LadderSetup:
+    """Everything a ladder needs before its first rung runs."""
+
+    prompt: str
+    cwd: Path
+    checks: dict[str, str]
+    cfg: Any
+    rungs: list[Any]
+    most: int
+    whose: str
+    private: bool
+    ladder_id: str
+    copies: Any
+
+
+def ladder_setup(
+    args: argparse.Namespace, trace: Trace, prompt: str, ladder_id: str | None = None
+) -> LadderSetup:
+    """The checks, rungs, copies and ids a ladder runs with.
+
+    ``ladder_id`` is the id a page already shows for it; a new one is drawn without it.
+    Raises LadderSetupError when it cannot start.
+    """
     from metabot.checks import refusal
-    from metabot.engines import get_engine
-    from metabot.ladder import LadderError, Rung, attempts, effective_ladder, run_ladder, spent_line
+    from metabot.ladder import LadderError, attempts, effective_ladder
     from metabot.ladder_copies import Copies, CopyError
     from metabot.paths import new_run_id
     from metabot.roster import RosterError
-    from metabot.runner import Limits, NoPrice, RunCancelled
     from metabot.suggest import match
 
     clash = [
@@ -402,33 +566,30 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
     ]
     if clash or args.role not in (None, "private"):
         said = clash[0] if clash else f"--role {args.role}"
-        _err(f"--ladder picks each rung itself; {said} does not go with it (--role private does)")
-        return EXIT_USAGE
-    prompt = read_prompt(args.prompt)
+        raise LadderSetupError(
+            f"--ladder picks each rung itself; {said} does not go with it (--role private does)"
+        )
     if not prompt.strip():
-        _err("the prompt is empty")
-        return EXIT_USAGE
-    cwd = Path(args.cwd or os.getcwd()).resolve()
-    if not cwd.is_dir():
-        _err(f"{cwd} is not a directory")
-        return EXIT_USAGE
+        raise LadderSetupError("the prompt is empty")
+    cwd, usable = given_folder(args.cwd)
+    if not usable:
+        raise LadderSetupError(f"{cwd} is not a directory")
     checks = {f"ask:{n}": command for n, command in enumerate(args.check or [], 1)}
     refused = refusal(checks)
     if refused:
-        _err(refused.replace("change them in office.yaml", "change the --check"))
-        return EXIT_USAGE
+        raise LadderSetupError(refused.replace("change them in office.yaml", "change the --check"))
     cfg = load_config()
     try:
         rungs, whose, note = effective_ladder(cfg)
         most = attempts(cfg)
     except (LadderError, RosterError) as exc:
-        _err(str(exc))
-        return EXIT_USAGE
+        raise LadderSetupError(str(exc)) from exc
     if note:
         trace.note(f"[metabot] {note}")
     if not rungs:
-        _err("no rung here: install an engine CLI, or start and probe the local model server")
-        return EXIT_USAGE
+        raise LadderSetupError(
+            "no rung here: install an engine CLI, or start and probe the local model server"
+        )
     rule, _word = match(prompt)
     private = args.role == "private" or (rule is not None and rule.role == "private")
     trace.note(
@@ -437,7 +598,7 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
         + ("; private, so only rungs on this machine" if private else "")
     )
 
-    ladder_id = new_run_id()
+    ladder_id = ladder_id or new_run_id()
     copies = None
     if not args.read_only:  # a read-only rung changes nothing, so it needs no copy
         try:
@@ -450,6 +611,22 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
             trace.note(
                 f"[metabot] each rung works in its own copy of the project ({copies.base[:12]})"
             )
+    return LadderSetup(
+        prompt=prompt, cwd=cwd, checks=checks, cfg=cfg, rungs=rungs, most=most,
+        whose=whose, private=private, ladder_id=ladder_id, copies=copies,
+    )  # fmt: skip
+
+
+async def ladder_run(
+    setup: LadderSetup, args: argparse.Namespace, trace: Trace, approver: Any = None
+) -> Any:
+    """Run the rungs in order; the record decides each climb.
+
+    ``approver`` answers the gate; None is this terminal.
+    """
+    from metabot.engines import get_engine
+    from metabot.ladder import Rung, run_ladder, rung_engine
+    from metabot.runner import Limits, NoPrice
 
     async def run_rung(
         rung: Rung, run_id: str, meta: dict[str, Any], cap: int | None, where: Path | None
@@ -457,10 +634,11 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
         trace.note(f"[metabot] rung {meta['rung']}: {rung.label()} ({rung.tier})")
         return await ask_once(
             engine_name=rung.engine,
-            prompt=prompt,
-            cwd=where or cwd,
-            receipt_project=cwd,
+            prompt=setup.prompt,
+            cwd=where or setup.cwd,
+            receipt_project=setup.cwd,
             model=rung.model,
+            engine=rung_engine(rung, setup.cfg),  # an openai rung on the settings the ladder read
             allow_write=args.allow_write,
             allows=args.allow,
             read_only=args.read_only,
@@ -472,30 +650,44 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
             run_id=run_id,
             limits=Limits(max_cost_musd=cap) if cap is not None else None,
             extra_meta=meta,
+            approver=approver,
         )
 
     def gated(engine: str) -> bool:
         return bool(getattr(get_engine(engine), "own_tools_gated", False))
 
+    return await run_ladder(
+        setup.rungs,
+        run_rung,
+        cfg=setup.cfg,
+        ladder_id=setup.ladder_id,
+        max_attempts=setup.most,
+        max_cost_musd=args.max_cost,
+        private=setup.private,
+        gated=gated,
+        on_line=lambda text: trace.note(f"[metabot] {printable(text, 600)}"),  # a rung's error
+        no_price=NoPrice,
+        checks=setup.checks or None,
+        copies=setup.copies,
+        task=setup.prompt,
+        cwd=setup.cwd,
+        project=setup.cwd if project_receipts_on(args.project_receipt) else None,
+    )
+
+
+def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
+    """``ask --ladder``: the cheapest rung first, climbing only on a failure the record shows."""
+    from metabot.ladder import spent_line
+    from metabot.runner import RunCancelled
+
+    prompt = read_prompt(args.prompt)
     try:
-        ladder = asyncio.run(
-            run_ladder(
-                rungs,
-                run_rung,
-                cfg=cfg,
-                ladder_id=ladder_id,
-                max_attempts=most,
-                max_cost_musd=args.max_cost,
-                private=private,
-                gated=gated,
-                on_line=lambda text: trace.note(f"[metabot] {text}"),
-                no_price=NoPrice,
-                checks=checks or None,
-                copies=copies,
-                task=prompt,
-                cwd=cwd,
-            )
-        )
+        setup = ladder_setup(args, trace, prompt)
+    except LadderSetupError as exc:
+        _err(str(exc))
+        return EXIT_USAGE
+    try:
+        ladder = asyncio.run(ladder_run(setup, args, trace))
     except (RunCancelled, KeyboardInterrupt) as exc:
         cancelled = cancelled_result(exc)
         tail = f"; receipt {cancelled.receipt}" if cancelled is not None else ""
@@ -503,16 +695,19 @@ def _ask_ladder(args: argparse.Namespace, trace: Trace) -> int:
         return EXIT_CANCELLED
     result = ladder.final
     if ladder.stopped:  # why there is no answer, so said even when quiet
-        trace.line(f"[metabot] the ladder stopped: {ladder.stopped}")
+        trace.line(f"[metabot] the ladder stopped: {printable(ladder.stopped, 600)}")
+    from metabot.ladder import why_line
+
+    trace.note(f"[metabot] {why_line(ladder)}")
     if ladder.applied is False and ladder.apply_note:  # the work is not in the project
-        trace.line(f"[metabot] {ladder.apply_note}")
+        trace.line(f"[metabot] {printable(ladder.apply_note, 600)}")  # git's, naming a path
     if result is None:
         if args.json:
             print(json.dumps({"ok": False, "ladder": ladder.to_json()}))
         return EXIT_FAILED
     engine_name = next(r.engine for r in ladder.rows if r.run_id == result.run_id)
     valid = _show_result(
-        args, trace, result, engine_name, prompt, cwd, {"ladder": ladder.to_json()}
+        args, trace, result, engine_name, setup.prompt, setup.cwd, {"ladder": ladder.to_json()}
     )
     trace.note(f"[metabot] {spent_line(ladder)}")
     return EXIT_OK if ladder.answered and valid else EXIT_FAILED
@@ -545,6 +740,13 @@ def cmd_connect_add(args: argparse.Namespace) -> int:
     except ValueError as exc:
         _err(str(exc))
         return EXIT_USAGE
+    if args.command:  # one that names a plugin's copy so that it never starts is never saved
+        from metabot.upstream import misplaced_copy
+
+        said = misplaced_copy(args.command)
+        if said is not None:
+            _err(f"{args.name} would never start: {said}")
+            return EXIT_USAGE
     token = _read_token(args.name, args.no_token)
     try:
         conn = ConnectionStore().add(
@@ -706,7 +908,8 @@ COST_SOURCES = {
     "config": "by your rates",
     "local": "on this machine",
     "plan": "on your plan, not priced",
-    "unknown": "no price",
+    "unsent": "never reached the model",
+    "unknown": "no price, or no usage counted",
 }
 
 
@@ -763,10 +966,10 @@ def cmd_receipts_show(args: argparse.Namespace) -> int:
 
     record = load_record(args.run)
     if record is not None:  # an office run: the tree of its desks
-        return show_office(record)
+        return show_office(record, args.run)
     try:
         journal = json.loads((run_path(args.run) / "journal.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         _err(f"no run {args.run!r} ({type(exc).__name__})")
         return EXIT_USAGE
     meta = journal.get("meta", {})
@@ -785,6 +988,10 @@ def cmd_receipts_show(args: argparse.Namespace) -> int:
     if meta.get("final"):
         print(f"answer    {printable(str(meta['final']), 600)}")
     print(f"receipt   {_shown(journal.get('receipt'), 600)}")
+    if any(isinstance(v, dict) and v.get("check") == "seal" for v in journal.get("verdicts", [])):
+        from metabot.seals import seal_state  # a ladder's seal: whether its rungs hold
+
+        print(f"seal      {seal_state(receipt_path(args.run), args.run)}")
     return EXIT_OK
 
 
@@ -796,7 +1003,7 @@ def cmd_receipts_verify(args: argparse.Namespace) -> int:
     verdict = verify_file(path)
     checks = "  " + ", ".join(f"{k} {'ok' if v else 'FAILED'}" for k, v in verdict.checks.items())
     if not verdict.valid:
-        print(f"INVALID  {path}")
+        print(f"INVALID  {_shown(path, 2000)}")
         print(checks)
         return EXIT_FAILED
     run_id = verdict.run_id or ""
@@ -805,11 +1012,50 @@ def cmd_receipts_verify(args: argparse.Namespace) -> int:
     except ValueError:
         kept_here = False
     same = journal_matches(run_id) if kept_here else None
-    # The first line is the verdict the exit code gives: a journal that does not
-    # match makes the whole check fail, though the receipt's own checks pass.
-    print(f"{'INVALID' if same is False else 'VALID'}  {path}")
+    # asked for by run id: the receipt kept under it must sign that id, not another run's
+    elsewhere = not Path(args.ref).is_file() and run_id != args.ref
+    sealed = _seal_problems(path)
+    problems = sealed[0] if sealed is not None else None
+    # The first line is the verdict the exit code gives: a receipt of another run,
+    # a journal that does not match, or a seal whose members do not hold, makes
+    # the whole check fail, though the receipt's own checks pass.
+    failed = elsewhere or same is False or bool(problems)
+    print(f"{'INVALID' if failed else 'VALID'}  {_shown(path, 2000)}")
     print(checks)
+    if elsewhere:
+        print(f"  the receipt kept as {args.ref} is run {printable(run_id, 130)}'s")
     print(f"  signer {verdict.signer_did}, {verdict.step_count} steps")
     if same is not None:
         print(f"  journal {'re-derives every hash' if same else 'DOES NOT MATCH the receipt'}")
-    return EXIT_FAILED if same is False else EXIT_OK
+    if sealed is not None:
+        problems, none = sealed
+        count = verdict.step_count or 0
+        if problems:
+            print(f"  {len(problems)} problem(s) with its {count} members:")
+        elif none:  # a run that never sealed a receipt is signed as having none
+            held = count - len(none)
+            print(
+                f"  {count} members: {held} present, unchanged, and valid; "
+                f"{len(none)} sealed with no receipt"
+            )
+        else:
+            print(f"  {count} members: each present, unchanged, and valid")
+        for problem in problems:
+            print(f"    {printable(problem, 400)}")
+        if problems and none:
+            print(f"  {len(none)} sealed with no receipt")
+    return EXIT_FAILED if failed else EXIT_OK
+
+
+def _seal_problems(path: Path) -> tuple[list[str], list[str]] | None:
+    """What does not hold between a seal and its members, and the members it signs as
+    having no receipt; None when ``path`` is no seal."""
+    from metabot.seals import is_seal, member_problems, unsealed_members
+
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(envelope, dict) or not is_seal(envelope):
+        return None
+    return member_problems(envelope, path.parent), unsealed_members(envelope)

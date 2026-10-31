@@ -243,8 +243,39 @@ def test_a_call_that_runs_code_is_destructive_on_any_origin(name):
 def test_hints_and_settings_only_tighten():
     conn = _browser(overrides={"screenshot": "write"})
     assert classify(conn, _tool("screenshot"), {}, DEV) is WRITE
-    assert classify(_browser(), _tool("screenshot", destructive_hint=True), {}, DEV) is DESTRUCTIVE
+    assert classify(_browser(), _tool("screenshot", read_only_hint=False), {}, DEV) is WRITE
     assert classify(_browser(), _tool("click", read_only_hint=True), {}, DEV) is WRITE
+
+
+# What a browser server says of each tool, as one sends it: every action destructive.
+ACTION = {"read_only_hint": False, "destructive_hint": True, "open_world_hint": True}
+LOOK = {"read_only_hint": True, "destructive_hint": False, "open_world_hint": True}
+
+
+def test_on_an_allowed_origin_the_origin_rule_decides_not_the_servers_destructive_hint():
+    def cls(name, args, last=None, **hints):
+        return classify(_browser(), _tool(name, **hints), args, last)
+
+    assert cls("browser_navigate", {"url": DEV + "/"}, **ACTION) is WRITE
+    assert cls("browser_click", {"ref": "e3"}, DEV, **ACTION) is WRITE
+    assert cls("browser_type", {"ref": "e4", "text": "2"}, DEV, **ACTION) is WRITE
+    assert cls("browser_snapshot", {}, DEV, **LOOK) is READ
+    assert class_label(_browser(), _tool("browser_click", **ACTION)).startswith("write on ")
+    # The origin rule still holds where it says destructive.
+    assert cls("browser_navigate", {"url": "https://bank.example/"}, DEV, **ACTION) is DESTRUCTIVE
+    assert cls("browser_click", {"ref": "e3"}, None, **ACTION) is DESTRUCTIVE  # page unknown
+    assert cls("browser_evaluate", {"function": "() => 1"}, DEV, **ACTION) is DESTRUCTIVE
+    assert cls("browser_delete_cookies", {}, DEV, **ACTION) is DESTRUCTIVE  # a destructive word
+    # The person's settings still tighten.
+    conn = _browser(overrides={"browser_click": "destructive"})
+    assert classify(conn, _tool("browser_click", **ACTION), {"ref": "e3"}, DEV) is DESTRUCTIVE
+
+
+def test_a_connection_that_is_no_browser_still_takes_the_servers_destructive_hint():
+    conn = Connection(
+        id="did:orcha:agent:conn-000000000002", name="gh", transport="stdio", command=["x"]
+    )
+    assert classify(conn, _tool("create_issue", **ACTION)) is DESTRUCTIVE
 
 
 def test_a_url_under_another_name_counts():
@@ -332,6 +363,99 @@ def test_a_tool_is_labelled_by_its_class_on_the_allowed_origins():
 )
 def test_a_url_under_targets_or_a_nested_page_is_where_the_call_acts(args):
     assert _cls("navigate", args, last=DEV) is DESTRUCTIVE
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"target": "e6"},
+        {"target": "e12", "text": "2"},
+        {"fields": [{"target": "e4", "value": "2"}, {"target": "e5", "value": "x"}]},
+        {"targets": ["e6", "e7"]},
+        {"startTarget": "e3", "endTarget": "e9"},
+    ],
+)
+def test_an_element_named_under_target_is_no_place_the_page_acts_where_it_is(args):
+    assert _cls("click", args, last=DEV) is WRITE  # an element of the page, as Playwright names one
+    assert _cls("click", args, last="https://bank.example:443") is DESTRUCTIVE
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "f1e12",  # an element in a frame of the page, which may be another site's
+        "f2e3",
+        "localhost",  # bare words a browser may read as a host
+        "intranet",
+        "2130706433",
+        "e6 ",
+        "intranet.example",
+        "//evil.example/",
+        "evil.example:443",
+        "button:has-text('Order')",
+        "a\\b",
+        7,
+        None,
+    ],
+)
+def test_under_target_anything_that_could_be_a_place_still_counts(value):
+    assert _cls("click", {"target": value}, last=DEV) is DESTRUCTIVE
+    assert _cls("drag", {"startTarget": "e3", "endTarget": value}, last=DEV) is DESTRUCTIVE
+    assert _cls("fill_form", {"fields": [{"target": value, "value": "x"}]}, last=DEV) is DESTRUCTIVE
+
+
+# @playwright/mcp 0.0.83's own tools, with the hints it sends, on the person's dev server.
+PLAYWRIGHT_ON_DEV = [
+    ("browser_navigate", ACTION, {"url": DEV + "/"}, WRITE),
+    ("browser_navigate_back", ACTION, {}, WRITE),
+    ("browser_click", ACTION, {"target": "e7"}, WRITE),
+    ("browser_type", ACTION, {"target": "e6", "text": "2"}, WRITE),
+    ("browser_press_key", ACTION, {"key": "Enter"}, WRITE),
+    ("browser_fill_form", ACTION, {"fields": [{"target": "e4", "value": "2"}]}, WRITE),
+    ("browser_select_option", ACTION, {"target": "e9", "values": ["2"]}, WRITE),
+    ("browser_hover", ACTION, {"target": "e3"}, WRITE),
+    ("browser_drag", ACTION, {"startTarget": "e3", "endTarget": "e9"}, WRITE),
+    ("browser_file_upload", ACTION, {"paths": ["notes.txt"]}, WRITE),
+    ("browser_snapshot", LOOK, {}, READ),
+    ("browser_take_screenshot", LOOK, {}, READ),
+    # Code in the page, or a call on the whole browser, reaches every site.
+    ("browser_evaluate", ACTION, {"function": "() => 1"}, DESTRUCTIVE),
+    ("browser_run_code_unsafe", ACTION, {"code": "1"}, DESTRUCTIVE),
+    ("browser_cookie_clear", ACTION, {}, DESTRUCTIVE),
+    (
+        "browser_cookie_set",
+        ACTION,
+        {"name": "sid", "value": "x", "domain": "bank.example"},
+        DESTRUCTIVE,
+    ),
+    ("browser_cookie_get", LOOK, {"name": "sid"}, DESTRUCTIVE),
+    ("browser_cookie_list", LOOK, {}, DESTRUCTIVE),
+    ("browser_set_storage_state", ACTION, {"filename": "s.json"}, DESTRUCTIVE),
+    ("browser_storage_state", LOOK, {}, DESTRUCTIVE),
+    ("browser_route", ACTION, {"pattern": "https://bank.example/**"}, DESTRUCTIVE),
+    ("browser_unroute", ACTION, {}, DESTRUCTIVE),
+    # A click at a point may land in another site's frame.
+    ("browser_mouse_click_xy", ACTION, {"x": 10, "y": 20}, DESTRUCTIVE),
+    (
+        "browser_mouse_drag_xy",
+        ACTION,
+        {"startX": 1, "startY": 2, "endX": 3, "endY": 4},
+        DESTRUCTIVE,
+    ),
+    # Not an act on the page: the server's own hint stands.
+    ("browser_tabs", ACTION, {"action": "close", "index": 1}, DESTRUCTIVE),
+    ("browser_close", ACTION, {}, DESTRUCTIVE),
+    ("browser_handle_dialog", ACTION, {"accept": True}, DESTRUCTIVE),
+    ("browser_resize", ACTION, {"width": 800, "height": 600}, DESTRUCTIVE),
+]
+
+
+@pytest.mark.parametrize(("name", "hints", "args", "cls"), PLAYWRIGHT_ON_DEV)
+def test_a_real_browser_servers_tools_on_the_persons_dev_server(name, hints, args, cls):
+    assert classify(_browser(), _tool(name, **hints), args, DEV) is cls
+    if "url" not in args:  # a call that says where it goes is classed by that
+        elsewhere = "https://bank.example:443"
+        assert classify(_browser(), _tool(name, **hints), args, elsewhere) is DESTRUCTIVE
 
 
 def test_allowed_targets_are_where_the_call_acts():

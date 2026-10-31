@@ -79,7 +79,9 @@ def send(to: str, body: str, *, sender: str, thread: str | None = None) -> Path:
     safe_id(sender, "mailbox")
     if thread is not None:
         safe_id(thread, "thread")
-    body = body.strip()
+    # a name whose bytes are not UTF-8, as stdin or an argument carries it, is kept escaped,
+    # as MetaBot prints one
+    body = body.strip().encode("utf-8", "backslashreplace").decode("utf-8")
     if not body:
         raise MailError("empty message")
     if len(body.encode("utf-8")) > BODY_LIMIT:

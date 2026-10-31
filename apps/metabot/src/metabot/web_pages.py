@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from metabot.approvals import terminal_safe
+from metabot.spend import dollars
 from metabot.web_data import is_safe_id
 
 STYLE = """
@@ -43,7 +44,8 @@ form.ask { border: 1px solid #e5e5e2; padding: 4px 12px 8px; margin: 12px 0; bac
 """
 
 NAV: Sequence[tuple[str, str]] = (
-    ("/", "Runs"),
+    ("/", "Home"),
+    ("/runs", "Runs"),
     ("/chat", "Chat"),
     ("/office", "Office"),
     ("/connections", "Connections"),
@@ -52,6 +54,7 @@ NAV: Sequence[tuple[str, str]] = (
 FOOT = "This page runs on this machine only, until metabot ui stops."
 CLIP = 160  # characters of a value in a table cell
 TEXT_LIMIT = 20_000  # characters of a prompt, an answer, or a step's arguments or output
+WHY_LIMIT = 2000  # characters of a ladder's line; its reasons are cut, not its end
 NO_RUNS = "No runs yet: metabot ask, chat and office run make them."
 
 
@@ -94,7 +97,8 @@ def message_page(title: str, text: str, nonce: str, *, back: str | None = None) 
 
 
 def _state(state: str) -> str:
-    cls = "ok" if state == "valid" else "muted" if state == "no receipt" else "bad"
+    good = state == "valid" or state.startswith("valid, ")  # a seal says how many members
+    cls = "ok" if good else "muted" if state == "no receipt" else "bad"
     return f'<span class="{cls}">{e(state)}</span>'
 
 
@@ -194,6 +198,18 @@ UNSIGNED = (
     "this page comes from the run's journal, which it does not sign: the prompt, the "
     "answer, the status and what the run ran on."
 )
+COMMITTED = (
+    "The receipt signs the steps, the verdicts, the signer and the times, and commits "
+    "to the prompt and the answer below, as the run's journal keeps them, by a salted "
+    "hash, so a change to either shows here as a journal mismatch. The rest of this page "
+    "comes from the journal, which the receipt does not sign: the status and what the "
+    "run ran on."
+)
+
+
+def _notice(view: dict[str, Any]) -> str:
+    """What the receipt covers on this page: the prompt and the answer only when it commits."""
+    return COMMITTED if {"prompt", "final"} <= set(view.get("commits") or ()) else UNSIGNED
 
 
 def run_page(view: dict[str, Any], nonce: str) -> str:
@@ -214,7 +230,7 @@ def run_page(view: dict[str, Any], nonce: str) -> str:
     body = [
         _error(view.get("error")),
         _facts(facts),
-        f'<p class="muted">{e(UNSIGNED)}</p>',
+        f'<p class="muted">{e(_notice(view))}</p>',
         "<h2>Prompt</h2>" + _pre(meta.get("prompt", "")),
     ]
     if meta.get("final"):
@@ -244,6 +260,8 @@ def _desk_row(row: dict[str, Any], going: bool = False) -> str:
     result = "ok" if ok else "running" if running else "error"
     if row.get("error"):
         result += f": {clip(row['error'], 300)}"
+    if isinstance(row.get("stopped"), str):
+        result += f" ({clip(row['stopped'], 200)})"
     checks = row.get("checks")
     checks_cell = "-"
     if "checks_state" in row:
@@ -289,6 +307,23 @@ def office_page(view: dict[str, Any], nonce: str) -> str:
         ("from commit", f"<code>{e(clip(view.get('base') or '-', 64))}</code>"),
         ("checks", e(clip(gate, 300))),
     ]
+    if type(view.get("rounds")) is int:
+        facts.append(("rounds", e(f"at most {view['rounds']}")))
+    cap, spent = view.get("max_cost_musd"), view.get("spent_musd")
+    if type(cap) is int:
+        so_far = dollars(spent) if type(spent) is int else "?"
+        unknown = view.get("cost_unknown")
+        names = [str(name) for name in unknown] if isinstance(unknown, list) else []
+        if names:  # a run that counted no usage: what was spent is a floor
+            said = f"{dollars(cap)}, spent at least {so_far}: the cost of {', '.join(names)}"
+            said += " is unknown"
+            facts.append(("money cap", e(clip(said, 300))))
+        else:
+            facts.append(("money cap", e(f"{dollars(cap)}, spent {so_far}")))
+    sealed = view.get("seal_state")
+    if isinstance(sealed, str):  # the receipt over every run of it, checked as the page is drawn
+        cls = "ok" if sealed.startswith("valid") else "bad"
+        facts.append(("seal", f'<span class="{cls}">{e(clip(sealed, 300))}</span>'))
     body = [
         _error(view.get("error")),
         _facts(facts) if not view.get("error") else "",
@@ -463,6 +498,52 @@ def chat_page(
     return layout("Chat", body, nonce)
 
 
+EVERYDAY_NOTE = (
+    "MetaBot tries the cheapest model first. It moves to the next one only when a run shows "
+    "it failed, and it says why in the run's page. Anything that writes asks you first. "
+    "Anything destructive always stops."
+)
+
+
+CHECK_NOTE = (
+    "optional: a command such as pytest, run in the folder on each try's work. "
+    "A try passes only when it does."
+)
+
+
+def everyday_page(
+    nonce: str,
+    csrf: str,
+    *,
+    values: dict[str, str],
+    started: Sequence[Any],
+    error: str | None = None,
+) -> str:
+    """The home page for someone who wants a task done: one box, one folder, one button."""
+    form = (
+        '<form method="post" action="/">'
+        + _hidden(csrf)
+        + '<p><label>What should MetaBot do?<br><textarea name="prompt" rows="5" cols="80">'
+        + e(values.get("prompt", ""))
+        + '</textarea></label></p><p><label>In this folder <input name="folder" size="70" value="'
+        + e(values.get("folder", ""))
+        + '"></label></p><p><label>Check it with <input name="check" size="50" value="'
+        + e(values.get("check", ""))
+        + f'"></label> <span class="muted">{e(CHECK_NOTE)}</span></p>'
+        + "<p><button>Do it</button></p></form>"
+    )
+    body = (
+        _error(error)
+        + form
+        + f'<p class="muted">{e(EVERYDAY_NOTE)}</p>'
+        + '<p class="muted">Want to pick models, engines or roles yourself? '
+        + '<a href="/chat">Use the developer chat</a>.</p>'
+        + "<h2>Recent</h2>"
+        + _table(("run", "state", "runs on", "task"), map(_started_row, started), "Nothing yet.")
+    )
+    return layout("What should MetaBot do?", body, nonce)
+
+
 MODES = (
     ("relay", "relay: each desk in turn, from the work before it"),
     ("fan", "fan: every desk at once, from one start"),
@@ -516,6 +597,23 @@ def office_form_page(
         if found["checks"]:
             checks = values.get("checks") == "1"
             extra += _box("checks", checks, "Run the office's checks on each desk's work")
+            until = values.get("until_checks") == "1"
+            extra += _box(
+                "until_checks",
+                until,
+                "Until the checks pass: a desk whose checks fail goes again, with what they said",
+            )
+            extra += (
+                '<p><label>Rounds, at most <input name="rounds" size="3" inputmode="numeric" '
+                f'value="{e(clip(values.get("rounds", ""), 3))}"></label> '
+                '<span class="muted">three when empty, ten at most</span></p>'
+            )
+        extra += (
+            '<p><label>Money cap, in dollars <input name="max_cost" size="8" '
+            f'value="{e(clip(values.get("max_cost", ""), 20))}"></label> '
+            '<span class="muted">one cap over every desk run and round; '
+            "empty for none</span></p>"
+        )
         if found["advisors"]:
             said = "In a relay, its advisors review the work: " + ", ".join(found["advisors"])
             blocked = found["advisors_blocked"]
@@ -609,7 +707,10 @@ def live_page(
         ]
     if state is not None:
         facts.append(("receipt", f"{_state(state)} {link('/runs/', live.run_id, 'the run')}"))
-    body = [_error(live.error), _facts(facts)]
+    body = [_error(live.error)]
+    if getattr(live, "why", None):
+        body.append(f'<p class="why">{e(clip(live.why, WHY_LIMIT))}</p>')
+    body.append(_facts(facts))
     if asks:
         body.append("<h2>Waiting for you</h2>" + "".join(_ask_form(a, csrf) for a in asks))
     if going:
@@ -623,7 +724,9 @@ def live_page(
             body.append("<h2>Pick</h2>" + _offer(office))
     result = live.result
     if live.office is None and result is not None and result.final_text:
-        body.append("<h2>Answer</h2>" + _pre(result.final_text))
+        taken = getattr(live, "answered", None) is not False
+        heading = "Answer" if taken else "The last try's answer, which the ladder did not take"
+        body.append(f"<h2>{heading}</h2>" + _pre(result.final_text))
         caveat = answer_caveat(result.declined, result.failed)
         if caveat:
             body.append(f'<p class="bad">{e(caveat)}</p>')

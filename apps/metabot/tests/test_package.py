@@ -131,17 +131,19 @@ def test_the_readme_office_example_loads_as_written(tmp_path, monkeypatch):
     example = section.split("```yaml\n", 1)[1].split("```", 1)[0]
     (tmp_path / "office.yaml").write_text(example, encoding="utf-8")
     (tmp_path / "roles").mkdir()
-    for role in ("build", "review"):
+    for role in ("plan", "build", "review"):
         (tmp_path / "roles" / f"{role}.md").write_text(f"You are {role}.\n", encoding="utf-8")
     office = load_office(tmp_path)
     kinds = {name: (desk.harness, desk.engine) for name, desk in office.desks.items()}
     assert kinds == {
+        "plan": ("cursor", "cursor"),
         "build": ("claude", "claude"),
         "second": ("codex", "codex"),
         "local": ("any", "openai"),
         "review": ("codex", "codex"),
     }
     assert office.desks["review"].advises == ("build",)
+    assert office.desks["plan"].read_only and not office.desks["build"].read_only
     assert office.checks() == {"done:tests": "make test"}
     assert all(desk_problem(desk) is None for desk in office.desks.values())
     assert "metabot office run --desks build,local" in section

@@ -17,6 +17,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx2
 
@@ -37,6 +38,8 @@ from metabot.paths import metabot_home, private_dir, safe_id, write_private
 from metabot.scope_classes import ScopeClass
 from metabot.shell import TIMEOUT_EXIT, run_shell, stop_group
 from metabot.shell_policy import classify_shell
+from metabot.spend import spend_of
+from metabot.steps import ID_LIMIT, ascii_text
 from metabot.toolcalls import (
     call_shaped,
     calls_in_fences,
@@ -55,7 +58,6 @@ OUTPUT_LIMIT = 20_000
 LIST_LIMIT = 500
 NUDGE_LIMIT = 2_000  # how much of the request is said again after each step, in JSON mode
 CALL_ALONE_ASKS = 2  # how often a run asks a model to make a call it wrote inside its answer
-SWITCHBOARD_PREFIX = "mcp__metabot__"
 
 SYSTEM = (
     "You are MetaBot, a local assistant working in the directory {cwd}. "
@@ -98,9 +100,10 @@ WRITERS = frozenset({"write_file", "shell"})
 
 
 class EngineHTTPError(RuntimeError):
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, unsent: bool = False) -> None:
         super().__init__(message)
         self.status = status  # the HTTP status the server answered with, if it answered
+        self.unsent = unsent  # the model ran nothing: the request never went, or was refused
 
 
 def _inside(cwd: Path, raw: Any) -> Path:
@@ -152,9 +155,11 @@ class _Shells:
 class OpenAIEngine:
     name = "openai"
     tool_prefix = "metabot"
-    skip_tools = (SWITCHBOARD_PREFIX,)
+    skip_tools: tuple[str, ...] = ()  # each call is recorded; the switchboard's step replaces it
     supports_hooks = False
     own_tools_gated = True  # MetaBot runs each of its tools, and only once the gate allows it
+    read_only_mode = "no write tools offered"
+    also_sees = "only what the run sends it"
 
     def __init__(
         self,
@@ -164,15 +169,32 @@ class OpenAIEngine:
         config: Config | None = None,
         tool_mode: str | None = None,
         save_sessions: bool = True,
+        endpoint: str | None = None,
     ) -> None:
         cfg = config if config is not None else load_config()
         self.base_url = (base_url or cfg.openai_base_url).rstrip("/")
+        self._probed_url = cfg.openai_base_url.rstrip("/")  # where doctor --models probes
+        self.endpoint = endpoint  # the endpoint's name in config.json; None for the default
         self.model = model or cfg.openai_model
         self.key_env = key_env if key_env is not None else cfg.openai_key_env
         # native: the model's own tool calls, repaired when it writes them as text;
         # json: one step at a time by schema. None: what the last probe found.
         self.tool_mode = tool_mode
         self.save_sessions = save_sessions
+
+    @property
+    def receipt_meta(self) -> dict[str, Any]:
+        """Where the prompt went, for the receipt to sign: the server's address.
+
+        A name or password in the address, a query and a fragment are left out,
+        so no secret that rides in the address reaches the record.
+        """
+        parts = urlsplit(self.base_url)
+        address = urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+        where: dict[str, Any] = {"base_url": address.rstrip("/")}
+        if self.endpoint is not None:
+            where = {"name": self.endpoint, **where}
+        return {"endpoint": where}
 
     def redaction_map(self) -> dict[str, str]:
         """``{VAR: key}`` for the model's key, so no copy of it reaches the record."""
@@ -188,7 +210,7 @@ class OpenAIEngine:
         if self.key_env:
             key = os.environ.get(self.key_env)
             if not key:
-                raise EngineHTTPError(f"{self.key_env} is not set")
+                raise EngineHTTPError(f"{self.key_env} is not set", unsent=True)
             headers["Authorization"] = f"Bearer {key}"
         url = f"{self.base_url}/chat/completions"
         try:
@@ -203,11 +225,19 @@ class OpenAIEngine:
             ) from None
         except httpx2.HTTPError as exc:
             reason = str(exc) or type(exc).__name__
-            raise EngineHTTPError(f"cannot reach {self.base_url}: {reason}") from None
+            # before the request went out: no connection, or a proxy that would not make one
+            unsent = isinstance(
+                exc, (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.ProxyError)
+            )
+            raise EngineHTTPError(
+                f"cannot reach {self.base_url}: {reason}", unsent=unsent
+            ) from None
         if response.status_code >= 400:
             body = response.text[:500]
             raise EngineHTTPError(
-                f"{self.base_url} answered {response.status_code}: {body}", response.status_code
+                f"{self.base_url} answered {response.status_code}: {body}",
+                response.status_code,
+                unsent=turned_away(response.status_code),
             )
         return json.loads(response.content.decode("utf-8"))
 
@@ -220,7 +250,7 @@ class OpenAIEngine:
     def _load_session(self, session_id: str) -> list[dict[str, Any]]:
         try:
             data = json.loads(self._session_path(session_id).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return []
         return data if isinstance(data, list) else []
 
@@ -272,7 +302,7 @@ class OpenAIEngine:
 
     def _tools(self, job: EngineJob, board: Any) -> list[dict[str, Any]]:
         tools = [t for n, t in BUILTINS.items() if not (job.read_only and n in WRITERS)]
-        for tool in board.tools() if board is not None else []:
+        for tool in board.tools(read_only=job.read_only) if board is not None else []:
             schema = tool.input_schema or {"type": "object", "properties": {}}
             function = {
                 "name": tool.name,
@@ -288,7 +318,9 @@ class OpenAIEngine:
     ) -> tuple[Any, bool]:  # fmt: skip
         """(output, ok) for one call; the switchboard records its own calls."""
         if board is not None and board.has(name):
-            result = await board.call(name, args)
+            if not board.offers(name, read_only=job.read_only):  # a write it was never offered
+                return f"no tool named {name}", False
+            result = await board.call(name, args, call_id)
             text = "\n".join(getattr(c, "text", "") for c in result.content) or "(no output)"
             return text, not result.is_error
         if name not in BUILTINS or (job.read_only and name in WRITERS):
@@ -329,6 +361,21 @@ class OpenAIEngine:
 
         return "json" if cached_mode(self.base_url, model) == "json" else "native"
 
+    def _probe_hint(self, model: str) -> str:
+        """For a model never probed: the command that finds how it calls tools.
+
+        ``doctor --models`` probes the default server, and only on this machine,
+        so a model on any other server is not sent to it.
+        """
+        from metabot.models import cached_mode
+        from metabot.prices import is_local
+
+        if self.tool_mode is not None or cached_mode(self.base_url, model) is not None:
+            return ""
+        if self.base_url != self._probed_url or not is_local(self.base_url):
+            return ""
+        return f". metabot doctor --models {model} checks how it calls tools"
+
     async def _loop(
         self, job: EngineJob, board: Any, approve: Approve, shells: _Shells
     ) -> AsyncGenerator[Event, None]:
@@ -349,15 +396,16 @@ class OpenAIEngine:
         schema = mode == "json"  # dropped once, if the server refuses it
         steps = 0
         asked_alone = 0
+        used: set[str] = set()  # the call ids of this run's record
         for turn in range(MAX_TURNS):
             payload: dict[str, Any] = {"model": model, "messages": messages}
             if mode != "json":
                 payload["tools"] = tools
             elif schema:
                 payload["response_format"] = _step_format(tools)
+            # A request that went out and never said what it spent leaves the cost unknown.
             try:
                 response = await self._post(payload)
-                message = response["choices"][0]["message"]
             except EngineHTTPError as exc:
                 if schema and exc.status == 400:
                     schema = False
@@ -365,16 +413,25 @@ class OpenAIEngine:
                         f"openai: {self.base_url} refused the response schema; asking without it"
                     )
                     continue
+                yield ErrorEvent(f"openai: {exc}", exc.unsent, lost=not exc.unsent)
+                yield Final(last_text, session_id)
+                self._save_session(session_id, messages)
+                return
+            except (ValueError, RecursionError) as exc:  # an answer that does not read
+                yield ErrorEvent(f"openai: {exc}", lost=True)
+                yield Final(last_text, session_id)
+                self._save_session(session_id, messages)
+                return
+            usage = response.get("usage") if isinstance(response, dict) else None
+            usage = usage if isinstance(usage, dict) else {}
+            yield Usage(usage, lost=not spend_of(usage).tokens)  # every turn's, before its calls
+            try:
+                message = _message(response)
+            except (KeyError, IndexError, TypeError) as exc:
                 yield ErrorEvent(f"openai: {exc}")
                 yield Final(last_text, session_id)
                 self._save_session(session_id, messages)
                 return
-            except (KeyError, IndexError, TypeError, ValueError) as exc:
-                yield ErrorEvent(f"openai: {exc}")
-                yield Final(last_text, session_id)
-                self._save_session(session_id, messages)
-                return
-            yield Usage(response.get("usage") or {})  # every turn's, before its calls run
             content = message.get("content") or ""
             if mode == "json":
                 step = step_in_text(content, names)
@@ -427,6 +484,7 @@ class OpenAIEngine:
                     messages.append({"role": "assistant", "content": content})
                     yield ErrorEvent(
                         "openai: the model answered with a tool call MetaBot could not read"
+                        + self._probe_hint(model)
                     )
                     yield Final(content, session_id)
                     self._save_session(session_id, messages)
@@ -438,7 +496,7 @@ class OpenAIEngine:
                     if asked_alone >= CALL_ALONE_ASKS:
                         yield ErrorEvent(
                             "openai: the model kept writing tool calls inside its answer; "
-                            "none was made"
+                            "none was made" + self._probe_hint(model)
                         )
                         yield Final(content, session_id)
                         self._save_session(session_id, messages)
@@ -467,7 +525,8 @@ class OpenAIEngine:
             for i, call in enumerate(calls):
                 fn = call.get("function") or {}
                 asked = str(fn.get("name") or "")
-                call_id = str(call.get("id") or f"call-{turn}-{i}")
+                given = str(call.get("id") or f"call-{turn}-{i}")
+                call_id = _unique(given, used)  # in the record; the model hears its own
                 name = asked
                 if asked not in names:
                     name = resolve_name(asked, names) or asked
@@ -487,7 +546,7 @@ class OpenAIEngine:
                             output = event.output
                         yield event
                 messages.append(
-                    {"role": "tool", "tool_call_id": call_id, "content": str(output)[:OUTPUT_LIMIT]}
+                    {"role": "tool", "tool_call_id": given, "content": str(output)[:OUTPUT_LIMIT]}
                 )
         yield ErrorEvent(f"openai: stopped after {MAX_TURNS} turns without an answer")
         yield Final(last_text, session_id)
@@ -497,11 +556,48 @@ class OpenAIEngine:
         self, call_id: str, name: str, args: dict[str, Any], job: EngineJob, board: Any,
         approve: Approve, shells: _Shells,
     ) -> AsyncGenerator[Event, None]:  # fmt: skip
-        """A call as two events: what was asked, recorded first, then what came of it."""
-        recorded = f"{SWITCHBOARD_PREFIX}{name}" if board and board.has(name) else name
-        yield ToolCall(call_id, recorded, args)
+        """A call as two events: what was asked, recorded first, then what came of it.
+
+        A call the switchboard takes is recorded again by it, under the same id, in place
+        of the call asked: once made, with what its connection saw; cut off once sent, as
+        one that may have run.
+        """
+        yield ToolCall(call_id, name, args)
         output, ok = await self._call(call_id, name, args, job, board, approve, shells)
         yield ToolResult(call_id, output, ok)
+
+
+def _message(response: Any) -> dict[str, Any]:
+    """The answer's message, or TypeError when its shape is not one a chat answer has."""
+    message = response["choices"][0]["message"]
+    if not isinstance(message, dict):
+        raise TypeError("the answer's message is not an object")
+    if not isinstance(message.get("content") or "", str):
+        raise TypeError("the answer's content is not text")
+    calls = message.get("tool_calls") or []
+    if not isinstance(calls, list) or not all(
+        isinstance(call, dict) and isinstance(call.get("function") or {}, dict) for call in calls
+    ):
+        raise TypeError("the answer's tool calls are not objects")
+    return message
+
+
+def _unique(given: str, used: set[str]) -> str:
+    """A call's id in the run's record: the one the model gave, as the record keeps it,
+    printable and cut at its limit, or, when the run has that one already, numbered, so
+    each call, its approval and its step stay its own."""
+    call_id, n = ascii_text(given), 1
+    while call_id in used:
+        n += 1
+        call_id = ascii_text(given, limit=ID_LIMIT - len(f"-{n}")) + f"-{n}"
+    used.add(call_id)
+    return call_id
+
+
+def turned_away(status: int) -> bool:
+    """A status that turns a request away before any model runs it: one in the 400s other
+    than 408. A 5xx or a 408 may come once the model has run, as a gateway's timeout does."""
+    return 400 <= status < 500 and status != 408
 
 
 def _nudge(prompt: str) -> str:

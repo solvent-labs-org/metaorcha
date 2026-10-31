@@ -3,10 +3,10 @@
 A plugin is a folder in the plugin layout the ``claude`` CLI reads: ``.claude-plugin/
 plugin.json`` (or ``.cursor-plugin/plugin.json``), ``skills/*/SKILL.md``,
 ``commands/``, ``agents/``, ``hooks/``, ``.mcp.json`` and ``.lsp.json``, plus
-MetaBot's ``metabot/routines/*.yaml``. A marketplace is a folder whose
-``.claude-plugin/marketplace.json`` lists plugins by path. This version
-installs from folders on this machine; an entry that must be fetched needs
-the network and is refused.
+MetaBot's ``metabot/routines/*.yaml`` and ``metabot/bridges/*.yaml``. A
+marketplace is a folder whose ``.claude-plugin/marketplace.json`` lists
+plugins by path. This version installs from folders on this machine; an
+entry that must be fetched needs the network and is refused.
 
 Install copies the plugin first, and everything shown and hashed is that
 copy, kept at ``<METABOT_HOME>/plugins/<name>@<tree hash>``. Records are
@@ -21,6 +21,11 @@ holds for hooks and servers in a skill's or agent's front matter too. A
 plugin's MCP servers run only as connections, behind the gate, and only when
 the person asks. The view carries a ``.claude-plugin`` and a
 ``.cursor-plugin`` manifest, so either engine loads it.
+
+A plugin's bridges, programs that run as engines, are engines only once the
+person allows them. A path in a bridge's command names a file the plugin
+holds, so what a bridge runs is the installed copy, and its hash is checked
+again before each run.
 """
 
 from __future__ import annotations
@@ -41,8 +46,12 @@ from typing import Any
 import yaml
 from emerge.journal import utc_now
 
+from metabot.approvals import printable
+from metabot.config import bridge_ok
 from metabot.connections import NAME_RE as CONNECTION_NAME
-from metabot.connections import ConnectionStore, check_spec
+from metabot.connections import RESERVED as RESERVED_NAMES
+from metabot.connections import ConnectionStore, check_spec, new_connection_id
+from metabot.engines import ENGINES
 from metabot.paths import metabot_home, private_dir, write_private
 
 CLAUDE_MANIFEST = Path(".claude-plugin") / "plugin.json"
@@ -88,6 +97,7 @@ class PluginFacts:
     servers: dict[str, str]  # name -> command line or url
     routines: tuple[str, ...]
     lsp_servers: dict[str, str] = field(default_factory=dict)  # never run by MetaBot
+    bridges: dict[str, str] = field(default_factory=dict)  # name -> its command line
 
 
 @dataclass
@@ -103,6 +113,8 @@ class InstalledPlugin:
     connections: list[str] = field(default_factory=list)  # ids of connections it added
     seq: int = 0  # install order: a clock can tie, this cannot
     view_tree: str = ""  # hash of the view enable built; empty while the plugin is off
+    # name -> spec, its paths in the installed copy; empty unless the person allowed them
+    bridges: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def ref(self) -> str:
@@ -125,12 +137,26 @@ class InstalledPlugin:
 # ── the tree ────────────────────────────────────────────────────────────────
 
 
+def _utf_8(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _files(root: Path) -> list[tuple[str, Path]]:
-    """Every file of a plugin, sorted by path; a link or special file is refused."""
+    """Every file of a plugin, sorted by path; a link or special file is refused, and so is a
+    folder in it that cannot be listed, which would be installed as nothing."""
     if root.is_symlink() or not root.is_dir():
         raise PluginError(f"{root} is not a plugin folder")
     found: list[tuple[str, Path]] = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def unread(exc: OSError) -> None:
+        folder = os.path.abspath(exc.filename) if exc.filename else root.absolute()
+        raise PluginError(f"{folder} cannot be read: {exc.strerror or exc}")
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unread, followlinks=False):
         here = Path(dirpath)
         for name in list(dirnames):
             if (here / name).is_symlink():
@@ -143,6 +169,8 @@ def _files(root: Path) -> list[tuple[str, Path]]:
             rel = path.relative_to(root).as_posix()
             if _CONTROL.search(rel):
                 raise PluginError(f"{rel!r}: a control character in a file name")
+            if not _utf_8(rel):
+                raise PluginError(f"{rel!r}: a file name that is not UTF-8")
             if path.is_symlink():
                 raise PluginError(f"{rel!r} is a link; a plugin holds plain files")
             if not stat.S_ISREG(path.lstat().st_mode):
@@ -389,6 +417,76 @@ def _front_matter_risks(root: Path) -> tuple[dict[str, list[str]], dict[str, str
     return hooks, servers
 
 
+BRIDGES = Path("metabot") / "bridges"
+BRIDGE_SHAPE = (
+    "a bridge has a command (a list of words), and may have models, tools (own or "
+    "switchboard) and read_only (honored or no); its file's name is lower-case letters, "
+    "digits and '-'"
+)
+
+
+def _a_path(word: str) -> bool:
+    """Whether a command word names a file: it has a slash, and is no flag or address."""
+    return ("/" in word or "\\" in word) and not word.startswith("-") and "://" not in word
+
+
+def _bridge_specs(root: Path) -> dict[str, dict[str, Any]]:
+    """The bridges a plugin carries, by name, as ``metabot/bridges/<name>.yaml`` says them.
+
+    A path in a command names a file the plugin holds. One outside it, or one
+    it does not hold, is refused, so the install hash covers what a bridge runs.
+    """
+    folder = root / BRIDGES
+    if not folder.is_dir():
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(p for p in folder.glob("*.y*ml") if p.is_file()):
+        rel, name = (BRIDGES / path.name).as_posix(), path.stem
+        if name in ENGINES:
+            raise PluginError(f"{rel}: {name} is a built-in engine's name")
+        try:
+            spec = yaml.safe_load(_text(path))
+        except (yaml.YAMLError, RecursionError):
+            raise PluginError(f"{rel}: it does not read as YAML") from None
+        if not bridge_ok(name, spec):
+            raise PluginError(f"{rel}: {BRIDGE_SHAPE}")
+        for word in filter(_a_path, spec["command"]):
+            if not _inside(root, word, rel).is_file():  # an absolute path is outside too
+                raise PluginError(f"{rel}: its command names {word}, which the plugin lacks")
+        if name in found:
+            raise PluginError(f"{rel}: two files name the bridge {name}")
+        found[name] = spec
+    return found
+
+
+def bridge_refused(name: str, command: list[str]) -> str | None:
+    """Why a plugin's bridge must not run ``command``, as a server must not: it names the copy
+    other than by a whole path, or under a home whose path holds what a program can split or
+    expand, as a shell behind env reads it again."""
+    from metabot.upstream import refused_copy
+
+    refusal = refused_copy(command)
+    if refusal is None:
+        return None
+    home = metabot_home()
+    if refusal.odd:
+        return (
+            f"bridge {name} runs its plugin's copy in {home}/plugins, and the home's path holds "
+            f"{refusal.odd}, which a program can split or expand: move the home to a path "
+            "without them, then enable it again, or enable it --without-bridges"
+        )
+    return (
+        f"bridge {name} names a plugin's copy where MetaBot cannot tell it is the one in "
+        f"{home}/plugins: enable it again, or enable it --without-bridges"
+    )
+
+
+def _resolved(root: Path, spec: dict[str, Any]) -> dict[str, Any]:
+    """A bridge's spec with each path in its command made a path in ``root``."""
+    words = [str(root / w) if _a_path(w) else w for w in spec["command"]]
+    return {**spec, "command": words}
+
+
 def inspect_plugin(root: Path) -> PluginFacts:
     manifest = _manifest(root)
     hooks: dict[str, list[str]] = {}
@@ -417,6 +515,7 @@ def inspect_plugin(root: Path) -> PluginFacts:
             else []
         ),
         lsp_servers=dict(sorted(lsp.items())),
+        bridges={n: " ".join(spec["command"]) for n, spec in _bridge_specs(root).items()},
     )
 
 
@@ -450,6 +549,7 @@ def permission_diff(old: PluginFacts, new: PluginFacts) -> list[str]:
     lines += [f"- hook {e}: {c}" for e, c in sorted(before_hooks - after_hooks)]
     lines += _diff_named("server", old.servers, new.servers)
     lines += _diff_named("lsp", old.lsp_servers, new.lsp_servers)
+    lines += _diff_named("bridge", old.bridges, new.bridges)
     return lines
 
 
@@ -467,7 +567,7 @@ def _state(name: str) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, ValueError) as exc:  # a UnicodeDecodeError is a ValueError
+    except (OSError, ValueError, RecursionError) as exc:  # a UnicodeDecodeError is a ValueError
         raise PluginError(f"cannot read {path}: {exc}") from None
     if not isinstance(data, dict):
         raise PluginError(f"cannot read {path}: it holds no object")
@@ -715,6 +815,32 @@ def _connection_spec(root: Path, server: str, config: Any) -> dict[str, Any]:
         check_spec(spec["transport"], command=spec.get("command"), url=spec.get("url"))
     except ValueError as exc:
         raise PluginError(f"server {server}: {exc}") from None
+    from metabot.upstream import refused_copy
+
+    # a connection that never starts, and enabling again writes it so: each cause and its mend
+    refusal = refused_copy(spec["command"]) if spec["transport"] == "stdio" else None
+    if refusal is not None:
+        mends = []
+        if refusal.odd:
+            mends.append(
+                f"the home's path holds {refusal.odd}, which a program can split or expand: "
+                "move the home to a path without them"
+            )
+        if refusal.misnamed:
+            mends.append(
+                "add it yourself with metabot connect add, the copy's path whole, by no blank, "
+                "quote or operator: a word of its own, after the last '=', ':' or ',' in one, or "
+                "a word of a line for sh -c with no '#', '<<', '(', '{' or '`'"
+            )
+        where = (
+            "a plugin's copy where MetaBot cannot tell it is the one in"
+            if refusal.misnamed
+            else "its copy in"
+        )
+        raise PluginError(
+            f"server {server} names {where} {metabot_home()}/plugins, so MetaBot would not "
+            f"start it; {', then '.join(mends)}"
+        )
     return spec
 
 
@@ -722,7 +848,79 @@ def _connection_name(plugin: str, server: str) -> str:
     name = re.sub(r"[^a-z0-9-]+", "-", f"{plugin}-{server}".lower()).strip("-")[:32].rstrip("-")
     if not CONNECTION_NAME.match(name):
         raise PluginError(f"server {server} has no name a connection can take")
+    if name in RESERVED_NAMES:
+        raise PluginError(f"server {server} would be the connection {name}, which MetaBot keeps")
     return name
+
+
+def _add_connection(
+    plugin: InstalledPlugin, store: ConnectionStore, name: str, spec: dict[str, Any]
+) -> None:
+    """One of its connections, listed in its record before it is added, so a retry, a
+    disable or a remove takes it whichever write fails: one the store never held is passed
+    over."""
+    conn_id = new_connection_id()
+    plugin.connections.append(conn_id)
+    _save(plugin)
+    store.add(name=name, conn_id=conn_id, **spec)
+
+
+def _set_connections(
+    plugin: InstalledPlugin, store: ConnectionStore, specs: dict[str, dict[str, Any]]
+) -> None:
+    """Its servers as connections. One it holds by a server's name is written again in place,
+    keeping its id, its scope settings and its state, and so the routines that name it; one it
+    holds by no server's name goes; a server it holds none for is added."""
+    held = {c.name: c for c in store.list() if c.id in plugin.connections}
+    for name, conn in held.items():
+        if name not in specs:
+            store.remove(conn.id)
+    plugin.connections = [c.id for name, c in held.items() if name in specs]
+    _save(plugin)
+    for name, spec in specs.items():
+        if name in held:
+            store.respec(held[name].id, **spec)
+        else:
+            _add_connection(plugin, store, name, spec)
+
+
+def _take_connections(
+    plugin: InstalledPlugin,
+    family: list[InstalledPlugin],
+    store: ConnectionStore,
+    servers: dict[str, str],
+) -> None:
+    """The connections another version holds for a server this one serves, under the same
+    connection name and the same server, become this one's, listed here before they leave its
+    record, so turning that version off keeps them, and each is written again in place: its
+    id, its scope settings and its state stay. A connection name is cut at 32 characters, so
+    another server can share it; its connection goes with that version."""
+    names = {c.id: c.name for c in store.list()}
+    for other in family:
+        if other.tree == plugin.tree or not other.connections:
+            continue
+        theirs = _servers(other) or {}  # a copy that cannot be read hands nothing on
+        taken = [
+            conn_id
+            for conn_id in other.connections
+            if (name := names.get(conn_id)) in servers and theirs.get(name) == servers[name]
+        ]
+        if not taken:
+            continue
+        plugin.connections += [conn_id for conn_id in taken if conn_id not in plugin.connections]
+        _save(plugin)
+        other.connections = [conn_id for conn_id in other.connections if conn_id not in taken]
+        _save(other)
+
+
+def _servers(plugin: InstalledPlugin) -> dict[str, str] | None:
+    """Each connection name ``plugin``'s servers get, with the server it is for; None when
+    its copy cannot be read."""
+    try:
+        configs = _configs(plugin.root, _manifest(plugin.root), MCP_FILES, "mcpServers")
+        return {_connection_name(plugin.name, server): server for server in configs}
+    except (PluginError, OSError, ValueError, RecursionError):
+        return None
 
 
 def _drop_connections(plugin: InstalledPlugin, store: ConnectionStore) -> None:
@@ -785,13 +983,26 @@ def _build_view(plugin: InstalledPlugin, keep_hooks: bool) -> Path:
         os.replace(building, plugin.view)
     finally:
         for leftover in (building, old):
-            if leftover.exists():
-                shutil.rmtree(leftover)
+            _delete(leftover)
     return plugin.view
 
 
+def verify_installed(plugin: InstalledPlugin) -> None:
+    """The installed copy must still be the one its hash names; a bridge runs from it. Its
+    view must still be the one enable built: a plugin a disable left without one is not on."""
+    _verify(plugin)
+    _verify_view(plugin)
+
+
 def _verify(plugin: InstalledPlugin) -> None:
-    if not plugin.root.is_dir() or tree_sha256(plugin.root) != plugin.tree:
+    try:
+        same = plugin.root.is_dir() and tree_sha256(plugin.root) == plugin.tree
+    except (OSError, PluginError) as exc:  # a file or folder in it that cannot be read
+        why = (exc.strerror or type(exc).__name__) if isinstance(exc, OSError) else str(exc)
+        raise PluginError(
+            f"cannot read {plugin.ref}'s installed copy ({why}); remove it and install it again"
+        ) from None
+    if not same:
         raise PluginError(
             f"{plugin.ref}'s installed copy changed since it was installed; "
             "remove it and install it again"
@@ -803,22 +1014,63 @@ def _verify_view(plugin: InstalledPlugin) -> None:
     changed = f"{plugin.ref}'s view changed since it was enabled; disable it and enable it again"
     try:
         digest = tree_sha256(plugin.view)
-    except PluginError:
+    except (PluginError, OSError):
         raise PluginError(changed) from None
     if digest != plugin.view_tree:
         raise PluginError(changed)
 
 
+def _bridges_taken(family: list[InstalledPlugin]) -> dict[str, str]:
+    """Bridge names in use outside this plugin's versions, each with where it comes from."""
+    from metabot.config import ConfigError, load_config
+
+    try:
+        table = load_config().bridges
+    except ConfigError:
+        table = {}
+    taken = {name: "config.json" for name in table} if isinstance(table, dict) else {}
+    own = {p.tree for p in family}
+    for other in installed():
+        if other.enabled and other.tree not in own:
+            taken.update({name: other.ref for name in other.bridges})
+    return taken
+
+
+def enabled_bridges() -> dict[str, tuple[InstalledPlugin, dict[str, Any]]]:
+    """The bridges of enabled plugins that the person allowed, by name, from the records.
+
+    No file is hashed here; a bridge's plugin is checked when the bridge runs.
+    """
+    found: dict[str, tuple[InstalledPlugin, dict[str, Any]]] = {}
+    for plugin in installed():
+        if not plugin.enabled or not isinstance(plugin.bridges, dict):
+            continue
+        for name, spec in plugin.bridges.items():
+            if bridge_ok(name, spec):
+                found.setdefault(name, (plugin, spec))
+    return found
+
+
 def enable(
-    ref: str, *, allow_hooks: bool = False, without_hooks: bool = False, add_servers: bool = False
+    ref: str,
+    *,
+    allow_hooks: bool = False,
+    without_hooks: bool = False,
+    add_servers: bool = False,
+    allow_bridges: bool = False,
+    without_bridges: bool = False,
 ) -> InstalledPlugin:
     """Turn a plugin on: its newest version, unless a hash says which. Others go off.
 
-    ``add_servers`` makes its MCP servers connections, behind the gate. They
-    are made again on each enable that asks, and go when the plugin goes off.
+    ``add_servers`` makes its MCP servers connections, behind the gate. One it
+    already holds, in this version or another, is written again in place, so its
+    id, its scope settings and its state stay; they go when the plugin goes off.
+    ``allow_bridges`` makes its bridges engines, run from the installed copy.
     """
     if allow_hooks and without_hooks:
         raise PluginError("choose one of --allow-hooks and --without-hooks")
+    if allow_bridges and without_bridges:
+        raise PluginError("choose one of --allow-bridges and --without-bridges")
     plugin = resolve(ref)
     _verify(plugin)
     facts = inspect_plugin(plugin.root)
@@ -828,8 +1080,29 @@ def enable(
             f"{plugin.ref} has hooks, which run outside MetaBot's gate: {listed}. "
             "Enable it with --allow-hooks to run them, or --without-hooks to leave them out"
         )
+    if facts.bridges and not (allow_bridges or without_bridges):
+        listed = "; ".join(f"{name}: {cmd}" for name, cmd in facts.bridges.items())
+        raise PluginError(
+            f"{plugin.ref} has bridges, programs that run as engines, outside MetaBot's gate: "
+            f"{listed}. Enable it with --allow-bridges to make them engines, or "
+            "--without-bridges to leave them out"
+        )
     everyone = installed()
     family = [p for p in everyone if p.ref == plugin.ref]
+    bridges: dict[str, dict[str, Any]] = {}
+    if allow_bridges and facts.bridges:
+        taken = _bridges_taken(family)
+        for name in facts.bridges:
+            if name in taken:
+                raise PluginError(
+                    f"a bridge named {name} is already an engine here, from {taken[name]}; "
+                    "remove that one first, or enable this plugin --without-bridges"
+                )
+        bridges = {n: _resolved(plugin.root, s) for n, s in _bridge_specs(plugin.root).items()}
+        for name, spec in bridges.items():
+            said = bridge_refused(name, spec["command"])
+            if said is not None:
+                raise PluginError(said)
     namesake = next(
         (p for p in everyone if p.name == plugin.name and p.ref != plugin.ref and p.enabled), None
     )
@@ -840,62 +1113,148 @@ def enable(
         )
     store = ConnectionStore()
     specs: dict[str, dict[str, Any]] = {}
+    servers: dict[str, str] = {}
     if add_servers:
         configs = _configs(plugin.root, _manifest(plugin.root), MCP_FILES, "mcpServers")
+        servers = {_connection_name(plugin.name, server): server for server in configs}
         specs = {
-            _connection_name(plugin.name, server): _connection_spec(plugin.root, server, cfg)
-            for server, cfg in configs.items()
+            name: _connection_spec(plugin.root, server, configs[server])
+            for name, server in servers.items()
         }
         if len(specs) != len(configs):
             raise PluginError("two of its servers would get one connection name")
+        conns = store.list()  # one that does not read refuses here, while all is as it was
         own = {conn_id for p in family for conn_id in p.connections}
         for name in specs:
-            if any(c.name == name and c.id not in own for c in store.list()):
-                raise PluginError(f"a connection named {name} already exists; remove it first")
+            if any(c.name == name and c.id not in own for c in conns):
+                raise PluginError(
+                    f"a connection named {name} already exists, and keeps its name when "
+                    "revoked, so none of its servers is added: enable it without "
+                    "--add-servers, then add its servers with metabot connect add, this one "
+                    f"under another name (metabot plugin show {plugin.tree[:12]} lists them)"
+                )
     keep_hooks = allow_hooks and bool(facts.hooks)
     _build_view(plugin, keep_hooks)
-    plugin.view_tree = tree_sha256(plugin.view)
-    for other in family:
-        if other.tree != plugin.tree and (other.enabled or other.connections):
-            _turn_off(other, store)
-    if add_servers:
-        _drop_connections(plugin, store)
-        for name, spec in specs.items():
-            plugin.connections.append(store.add(name=name, **spec).id)
-    plugin.enabled = True
-    plugin.hooks_allowed = keep_hooks
-    _save(plugin)
+    view_tree = tree_sha256(plugin.view)  # in the record only with the rest enable decides
+    again = f"{_ref_and_version(plugin)} is not on: enable it again"
+    try:
+        if add_servers:  # before another version goes off, which drops the connections it holds
+            _take_connections(plugin, family, store, servers)
+        for other in family:
+            if other.tree != plugin.tree and (other.enabled or other.connections):
+                _turn_off(other, store, again)
+        if add_servers:
+            _set_connections(plugin, store, specs)
+        plugin.enabled = True
+        plugin.hooks_allowed = keep_hooks
+        plugin.bridges = bridges
+        plugin.view_tree = view_tree
+        _save(plugin)
+    except OSError as exc:
+        raise PluginError(
+            f"{_ref_and_version(plugin)}: the enable did not finish "
+            f"({exc.strerror or type(exc).__name__}); enable it again"
+        ) from None
     return plugin
 
 
-def _turn_off(plugin: InstalledPlugin, store: ConnectionStore) -> None:
-    _drop_connections(plugin, store)
-    if plugin.view.exists():
-        shutil.rmtree(plugin.view)
+def enable_line(plugin: InstalledPlugin) -> str:
+    """The command that enables this version again with its servers, its hooks and its bridges
+    run or left out as they are: enable takes no plugin that has them without saying which."""
+    line = f"metabot plugin enable {plugin.tree[:12]} --add-servers"
+    try:
+        facts = inspect_plugin(plugin.root)
+    except (PluginError, OSError, ValueError, RecursionError):
+        return line  # which then says what is wrong
+    if facts.hooks:
+        line += " --allow-hooks" if plugin.hooks_allowed else " --without-hooks"
+    if facts.bridges:
+        line += " --allow-bridges" if plugin.bridges else " --without-bridges"
+    return line
+
+
+def _delete(tree: Path) -> None:
+    """Delete a copy MetaBot keeps, also one with a folder that lost the bits it is emptied by.
+
+    Each folder in it gets its owner's bits back, and the copy is deleted again. A copy that
+    still cannot be deleted is a refusal that names it.
+    """
+    if not tree.exists():
+        return
+    try:
+        shutil.rmtree(tree)
+    except OSError:
+        try:
+            _open_up(tree)
+            shutil.rmtree(tree)
+        except OSError as exc:
+            raise PluginError(
+                f"cannot delete {tree} ({exc.strerror or type(exc).__name__}); "
+                "delete it yourself, then try again"
+            ) from None
+
+
+def _open_up(tree: Path) -> None:
+    """Give the owner of each folder in ``tree`` the bits to list and empty it; links stay."""
+    folders = [str(tree)]
+    while folders:
+        folder = folders.pop()
+        if os.path.islink(folder) or not os.path.isdir(folder):
+            continue
+        os.chmod(folder, stat.S_IMODE(os.lstat(folder).st_mode) | stat.S_IRWXU)
+        with os.scandir(folder) as entries:
+            folders += [e.path for e in entries if e.is_dir(follow_symlinks=False)]
+
+
+def _ref_and_version(plugin: InstalledPlugin) -> str:
+    """The plugin and its version, in a message: a long version never hides the rest."""
+    return f"{plugin.ref} {printable(plugin.version, 64)}"
+
+
+def _turn_off(plugin: InstalledPlugin, store: ConnectionStore, again: str) -> None:
+    """One version off. ``again``: what finishes it, said when a step of it fails."""
+    if plugin.connections:  # a store that does not read refuses while the plugin is whole
+        store.list()
+    _delete(plugin.view)  # a view that stays keeps the plugin on, with its connections
     plugin.enabled = False
     plugin.hooks_allowed = False
+    plugin.bridges = {}
     plugin.view_tree = ""
+    named = _ref_and_version(plugin)
+    try:  # off before its connections go: those that cannot stay listed, for a retry
+        _save(plugin)
+    except OSError as exc:  # its view is gone: a run refuses it until it is off
+        raise PluginError(
+            f"{named}'s view is deleted, but it could not be recorded as off "
+            f"({exc.strerror or type(exc).__name__}); {again}"
+        ) from None
+    try:
+        _drop_connections(plugin, store)
+    except OSError as exc:
+        raise PluginError(
+            f"{named} is off, and its connections could not be removed "
+            f"({exc.strerror or type(exc).__name__}); {again}"
+        ) from None
     _save(plugin)
 
 
-def disable(ref: str) -> list[InstalledPlugin]:
+def disable(ref: str, again: str = "disable it again") -> list[InstalledPlugin]:
     """Turn off what a ref means: every version of a name, or the one a hash names."""
     store = ConnectionStore()
     plugins = versions(ref)
     for plugin in plugins:
-        _turn_off(plugin, store)
+        _turn_off(plugin, store, again)
     return plugins
 
 
 def remove(ref: str) -> list[InstalledPlugin]:
     """Delete what a ref means, with its views and the connections it added."""
-    plugins = disable(ref)
-    data = _state(RECORDS)
+    plugins = disable(ref, "no copy was removed: remove it again")
     for plugin in plugins:
-        if plugin.root.exists():
-            shutil.rmtree(plugin.root)
+        _delete(plugin.root)
+        data = _state(RECORDS)  # its record goes with its copy, so a refusal keeps the rest true
         data.pop(plugin.tree, None)
-    _store_state(RECORDS, data)
+        _store_state(RECORDS, data)
     return plugins
 
 
@@ -916,7 +1275,7 @@ def skill_description(path: Path) -> str:
 
 def enabled_plugins() -> list[InstalledPlugin]:
     """Enabled plugins whose install and view still match the hashes they were pinned with."""
-    chosen = [p for p in installed() if p.enabled and p.view.is_dir()]
+    chosen = [p for p in installed() if p.enabled]  # one with no view refuses: it is not off
     for plugin in chosen:
         _verify(plugin)
         _verify_view(plugin)
