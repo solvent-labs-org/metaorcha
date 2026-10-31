@@ -17,9 +17,23 @@ a tool call the model wrote that MetaBot could not read, a limit), a call
 did not succeed, or its declared acceptance failed. The ladder stops instead
 when climbing would not be the person's choice or would start from a changed
 project: a call was declined, a write was let through, or an engine whose own
-tools run unasked failed. A private task skips every rung that sends the
+tools run unasked failed. In a copy, a call declined because no one was
+there to ask does not stop it: no person said no, and the next rung starts
+from the same snapshot and meets the same gate. A private task skips every rung that sends the
 work off this machine. ``--max-cost`` covers the whole ladder: each rung
 gets what is left, and a rung MetaBot cannot price under a cap is skipped.
+
+The person's ``--check`` commands run on each rung that reached its end
+within its limits, sealed as ``<rung run>.checks`` as an office desk's checks
+are. They then judge the work: a failing check climbs, and a passing one
+answers even when a call on the way did not succeed, such as a test the model
+ran before its fix. The record cannot show wrong work, a check can.
+
+In a git checkout, each rung works in its own copy of the project
+(``metabot.ladder_copies``), so a failed rung's writes in its copy never
+reach the project, and a write no longer stops the ladder; the answering
+rung's work is brought back. A copy is not a sandbox: a write the gate allows
+to an absolute path reaches that path.
 """
 
 from __future__ import annotations
@@ -34,9 +48,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from metabot.checks import run_gate
 from metabot.config import MODEL_RE, Config, load_config
 from metabot.connections import LOCAL_HOSTS
 from metabot.engines import ENGINES
+from metabot.ladder_copies import Copies, CopyError
 from metabot.models import cached_mode
 from metabot.paths import metabot_home, private_dir, safe_id, write_private
 from metabot.receipts import acceptance_of, verdicts_of
@@ -172,6 +188,11 @@ class RungRow:
     cost_musd: int | None = None
     cost_source: str | None = None
     tokens: int = 0
+    check: str | None = None  # pass, or fail naming each check; None when none ran
+    checks_run: str | None = None  # the run the checks were sealed as
+    workspace: str | None = None  # the copy the rung worked in
+    commit: str | None = None  # what it changed there, committed
+    relinked: bool = False  # its work changed the copy's .git file, and MetaBot put it back
 
 
 @dataclass
@@ -184,6 +205,10 @@ class LadderResult:
     spent_musd: int = 0
     unpriced: int = 0  # rungs that ran with no price
     tokens: int = 0  # every rung's, summed
+    base: str | None = None  # the snapshot every rung started from, in copies
+    applied: bool | None = None  # the answer's work brought back; None: nothing to bring
+    apply_note: str | None = None
+    patch: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -193,6 +218,10 @@ class LadderResult:
             "spent_musd": self.spent_musd,
             "unpriced": self.unpriced,
             "tokens": self.tokens,
+            "base": self.base,
+            "applied": self.applied,
+            "apply_note": self.apply_note,
+            "patch": self.patch,
             "rungs": [asdict(row) for row in self.rows],
         }
 
@@ -244,23 +273,65 @@ def declined_why(receipt: Path | str) -> str:
     return "declined"
 
 
-def judge(result: Any, gated: bool) -> tuple[str, str]:
+NOBODY = "declined: no human present"  # the gate had no one to ask; no person said no
+
+
+def declined_by_nobody(receipt: Path | str) -> bool:
+    """Every call the receipt declines was declined because no person was there to ask."""
+    details = [
+        str(v.get("detail"))
+        for v in verdicts_of(receipt)
+        if str(v.get("check")).startswith("scope_approval:") and v.get("result") == "warn"
+    ]
+    return bool(details) and all(detail == NOBODY for detail in details)
+
+
+def finished(result: Any) -> bool:
+    """The run reached its own end within its limits, so its work is there to check."""
+    return bool(not result.limit and result.ok)
+
+
+def ended_well(result: Any) -> bool:
+    """The run's own record holds no failure: the answer stands until a check says otherwise."""
+    return bool(finished(result) and not result.failed and acceptance_of(result.receipt) != "fail")
+
+
+def judge(
+    result: Any, gated: bool, *, check: str | None = None, copied: bool = False
+) -> tuple[str, str]:
     """What a rung's run means for the ladder: answered, climb, or stop, and why.
 
     ``gated``: every tool the engine runs goes through MetaBot's gate first, so
-    a failed run on it changed nothing the receipt does not show.
+    a failed run on it changed nothing the receipt does not show. ``check``:
+    the person's checks on the rung's work, pass or fail. ``copied``: the rung
+    worked in a copy of the project, so what it wrote is not in the project,
+    and a decline with no one to ask climbs instead of stopping.
     """
     if result.limit:
         return STOPPED, f"it passed a limit: {result.limit}"
-    if result.ok and not result.failed and acceptance_of(result.receipt) != "fail":
+    if check is None and ended_well(result):
         return ANSWERED, ""  # a declined call leaves the answer standing, with its caveat
-    if result.declined:
+    if check == "pass" and finished(result) and acceptance_of(result.receipt) != "fail":
+        # The person's check judges the work; a call that failed on the way does not undo it.
+        if result.failed:
+            return ANSWERED, f"its check passed; {result.failed} call(s) on the way did not succeed"
+        return ANSWERED, ""
+    nobody = bool(result.declined) and copied and declined_by_nobody(result.receipt)
+    if result.declined and not nobody:
         why = declined_why(result.receipt)
         return (
             STOPPED,
             f"{result.declined} call(s) declined ({why}); every rung meets the same gate",
         )
-    wrote = let_through(result.receipt)
+    outcome, why = _failed(result, gated, check, copied)
+    if nobody and outcome == CLIMBED:
+        why += f"; {result.declined} call(s) declined with no one to ask"
+    return outcome, why
+
+
+def _failed(result: Any, gated: bool, check: str | None, copied: bool) -> tuple[str, str]:
+    """Climb or stop, for a rung that did not answer and that no decline stopped."""
+    wrote = 0 if copied else let_through(result.receipt)
     if wrote:
         return STOPPED, f"it failed after {wrote} write(s) went through; see {result.run_id} first"
     if not gated:
@@ -269,10 +340,13 @@ def judge(result: Any, gated: bool) -> tuple[str, str]:
         return CLIMBED, result.error or "the run did not end well"
     if result.failed:
         return CLIMBED, f"{result.failed} call(s) did not succeed"
+    if check not in (None, "pass"):
+        return CLIMBED, f"its check failed: {check.removeprefix('fail: ')}"
     return CLIMBED, "its declared acceptance failed"
 
 
-RunRung = Callable[[Rung, str, dict[str, Any], int | None], Awaitable[Any]]
+# rung, its run id, its meta, the money left, and the folder it works in (None: the person's)
+RunRung = Callable[[Rung, str, dict[str, Any], int | None, Path | None], Awaitable[Any]]
 
 
 async def run_ladder(
@@ -287,17 +361,26 @@ async def run_ladder(
     gated: Callable[[str], bool],
     on_line: Callable[[str], None] = lambda _line: None,
     no_price: type[Exception] = ValueError,
+    checks: Mapping[str, str] | None = None,
+    copies: Copies | None = None,
+    task: str = "",
+    cwd: Path | None = None,
 ) -> LadderResult:
     """Run the rungs in order until one answers, the ladder stops, or the attempts run out.
 
-    ``run_rung(rung, run_id, meta, cap_musd)`` runs one rung as ``ask`` would
-    and returns its RunResult; it raises ``no_price`` for a rung it cannot
-    price under a cap. A cancelled rung's error goes up after the record is saved.
+    ``run_rung(rung, run_id, meta, cap_musd, cwd)`` runs one rung as ``ask``
+    would and returns its RunResult; it raises ``no_price`` for a rung it
+    cannot price under a cap. ``checks`` run on each rung that finished, in
+    its copy or else in ``cwd``, and judge it. With ``copies``,
+    each rung works in its own copy of the project, and the answering rung's
+    work is brought back. A cancelled rung's error goes up after the record
+    is saved.
     """
     _claim(ladder_id)
-    result = LadderResult(ladder_id)
+    result = LadderResult(ladder_id, base=copies.base if copies else None)
     parent: str | None = None
     ran = 0
+    answered_at: int | None = None
     try:
         for n, rung in enumerate(rungs, 1):
             row = RungRow(n, rung.engine, rung.model, rung.tier, SKIPPED)
@@ -317,8 +400,11 @@ async def run_ladder(
             meta: dict[str, Any] = {"ladder": ladder_id, "rung": n}
             if parent is not None:
                 meta["parent"] = parent
+            where = copies.make(n) if copies is not None else None
+            if copies is not None:
+                row.workspace = str(copies.trees[n])
             try:
-                ran_result = await run_rung(rung, run_id, meta, cap)
+                ran_result = await run_rung(rung, run_id, meta, cap, where)
             except no_price as exc:
                 row.why = str(exc)
                 result.rows.append(row)
@@ -335,11 +421,40 @@ async def run_ladder(
                 result.unpriced += 1
             else:
                 result.spent_musd += ran_result.cost_musd
-            row.outcome, row.why = judge(ran_result, gated(rung.engine))
+            unkept = None
+            if copies is not None:
+                try:
+                    row.commit, row.relinked = copies.keep(n, task, run_id)
+                except CopyError as exc:
+                    unkept = str(exc)
+                if row.relinked:
+                    on_line(f"rung {n}'s work changed its copy's .git file; MetaBot put it back")
+            if checks and finished(ran_result) and unkept is None:
+                gate = await run_gate(
+                    checks,
+                    where if where is not None else (cwd or Path.cwd()),
+                    desk_run_id=run_id,
+                    inside=copies.trees[n] if copies is not None else None,
+                    meta={"ladder": ladder_id, "rung": n},
+                )
+                row.check, row.checks_run = gate.summary, gate.run_id
+            if copies is not None:
+                try:
+                    copies.restore(n)
+                except CopyError as exc:
+                    on_line(f"rung {n}'s copy was not put back to its commit: {exc}")
+            row.outcome, row.why = judge(
+                ran_result, gated(rung.engine), check=row.check, copied=copies is not None
+            )
+            if unkept is not None and row.outcome != STOPPED:  # no commit: nothing to bring back
+                unsaid = f"its work could not be committed in its copy: {unkept}"
+                row.why = f"{row.why}; {unsaid}" if row.outcome == CLIMBED else unsaid
+                row.outcome = CLIMBED
             result.rows.append(row)
             _save(result)
             if row.outcome == ANSWERED:
                 result.answered = True
+                answered_at = n
                 on_line(f"rung {n} {rung.label()} answered ({ran_result.run_id})")
                 break
             if row.outcome == STOPPED:
@@ -350,7 +465,16 @@ async def run_ladder(
         else:
             if not result.answered and result.stopped is None:
                 result.stopped = "no rung left to try" if ran else "no rung could run"
+        commit = result.rows[-1].commit if answered_at is not None else None
+        if copies is not None and answered_at is not None and commit:
+            result.applied, result.apply_note = copies.bring_back(answered_at, commit)
+            result.patch = str(copies.patch_path())
+            on_line(result.apply_note)
     finally:
+        if copies is not None:  # the copy whose work did not apply stays, for the person
+            left = copies.close(keep=answered_at if result.applied is False else None)
+            if left:
+                on_line(f"{len(left)} rung copy(ies) held work and stay: {left[0].parent}")
         _save(result)
     return result
 

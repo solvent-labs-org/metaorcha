@@ -26,10 +26,32 @@ async def test_a_model_that_calls_natively_passes_native(chat):
     assert "tools" in fake.requests[0]
 
 
-async def test_a_model_that_writes_its_call_as_text_passes_repaired(chat):
+async def test_a_model_that_writes_its_call_as_text_and_fails_by_schema_passes_repaired(chat):
     said = text_reply(json.dumps({"name": "read_file", "arguments": {"path": "probe.txt"}}))
-    fake = chat([said, answer(WORD)])
-    assert (await probe_model(fake.url, "tiny", word=WORD)).mode == "repaired"
+    fake = chat([said, answer(WORD), text_reply("no idea")])  # native by text, then schema
+    probe = await probe_model(fake.url, "tiny", word=WORD)
+    assert probe.mode == "repaired"
+    assert probe.detail == "wrote its call as text, and MetaBot read it"
+    assert "response_format" in fake.requests[2]  # the schema was tried
+
+
+async def test_a_model_that_writes_its_call_as_text_but_passes_by_schema_is_held_to_it(chat):
+    said = text_reply(json.dumps({"name": "read_file", "arguments": {"path": "probe.txt"}}))
+    fake = chat([
+        said, answer(WORD),  # native, by text
+        _step("read_file", path="probe.txt"), _step("answer", text=WORD),  # constrained
+    ])  # fmt: skip
+    probe = await probe_model(fake.url, "tiny", word=WORD)
+    assert probe.mode == "json"
+    assert probe.detail == "wrote its call as text, and passed held to a schema too"
+    assert "response_format" in fake.requests[2]
+
+
+async def test_a_model_that_calls_cleanly_by_itself_is_never_held_to_a_schema(chat):
+    fake = chat([call("read_file", {"path": "probe.txt"}), answer(WORD)])
+    assert (await probe_model(fake.url, "tiny", word=WORD)).mode == "native"
+    assert len(fake.requests) == 2  # no schema attempt
+    assert not any("response_format" in r for r in fake.requests)
 
 
 async def test_a_model_that_fails_natively_but_passes_by_schema_needs_json(chat):

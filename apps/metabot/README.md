@@ -68,9 +68,11 @@ MetaBot reads it at call time and never stores it.
 `metabot doctor --models` checks whether each model on a local server can call
 MetaBot's tools. Through the engine itself, it asks each model to read a file
 and say what is in it, and it keeps what it finds. A model that calls tools by
-itself runs as it is. When a model writes its call as text, MetaBot reads the
-call, and the journal says so. A model that does neither is asked for one step
-at a time, held to a schema of the tools. A server on another machine is not
+itself runs as it is. A model that writes its call as text is asked for one
+step at a time, held to a schema of the tools, when it passes that way too:
+text calls break in more ways in real work than in the check. When it does not
+pass by schema, MetaBot reads its text calls, and the journal says so. A model
+that does neither is held to the schema. A server on another machine is not
 checked, because a check there costs money.
 
 Roles map kinds of work to an engine and a model: `fast`, `build`, `review`,
@@ -95,6 +97,26 @@ that reads as private skips every rung that sends the work off this machine.
 `--max-cost` covers the whole ladder. Each rung is a run with its own receipt,
 and its journal names the ladder and the run before it. At most three rungs
 run for one task, and `metabot config set ladder_attempts` changes that.
+
+A run can end well with wrong work, and its record cannot show that. A check
+can: `metabot ask --ladder --check "pytest -q"` runs the command on each rung
+that reaches its end within its limits, and the check judges the work. A
+failing check climbs. A passing one answers, even when a call on the way did
+not succeed, such as a test the model ran before its fix. The checks are sealed as their
+own run, beside the rung's, as an office desk's checks are. A check is one
+line, and a command the shell classifier calls destructive never runs.
+
+In a git checkout, each rung works in its own copy of the project: what git
+tracks, with your changes not yet committed and your files that git does not
+ignore. A failed rung's writes in its copy stay there, so the next rung starts
+clean, and a write no longer stops the ladder. Nor does a call declined
+because no one was there to ask, as in a run with `--json` or no terminal: no
+person said no, and the next rung meets the same gate. A person's no still
+stops it. A copy is not a sandbox: see the limits below. The rung that answers
+has its work applied to your working tree, with nothing staged or committed,
+and the patch is kept in `ladders/`. When the work no longer fits, because you
+changed those files meanwhile, nothing is applied, and the line says where the
+work is. Outside git, every rung works in place.
 
 ## Connections and approvals
 
@@ -369,8 +391,8 @@ folders.
 | `connections.json`, `secrets/` | your connections, and their tokens |
 | `plugins.json`, `marketplaces.json`, `plugins/` | plugins and where they come from |
 | `routines.json`, `firings.jsonl`, `serve.lock` | routines and what each firing did |
-| `offices/`, `desks/`, `trust/` | office runs, desk worktrees, and the checks you trusted |
-| `ladders/` | each ladder's rungs, and how each one ended |
+| `offices/`, `desks/`, `trust/` | office runs, desk worktrees and ladder copies, and the checks you trusted |
+| `ladders/` | each ladder's rungs, how each one ended, and the patch it applied |
 | `kits/` | the desks' kits, while their office run goes |
 | `mail/` | each mailbox's notes, and `read/` for the ones read |
 
@@ -396,9 +418,20 @@ folders.
 - **A plugin's hooks, once you allow them, run outside the gate.**
 - **A routine cannot run a project's own test command.** A shell command is a
   write, and a routine's allows name connection tools, so it declines.
+- **A rung's copy leaves out ignored files,** such as `.venv`, `node_modules`
+  or `.env`. A check that needs them fails in the copy.
+- **A rung's copy is not a sandbox.** The `openai` engine's file tools refuse
+  any path outside the copy. Any write the gate allows to an absolute path
+  reaches that path: a `shell` command such as `echo x >> /some/file` under
+  `--allow-write`, or an engine CLI's own tools.
 - **Some local models answer tool calls as text.** MetaBot makes such a call
   when the whole answer is the call, and fails the run when it cannot read
-  one. A small model held to a schema can still pick the wrong step. The gate
+  one. It reads Python's triple quotes left unescaped inside a JSON string as
+  text. When an answer is calls one after another and the last one breaks off
+  before its JSON ends, MetaBot makes the complete ones and never the broken
+  one. A call in a code fence inside a longer answer is never made: MetaBot
+  asks the model for the call alone, twice at most, and then fails the run.
+  A small model held to a schema can still pick the wrong step. The gate
   stops its writes, and `metabot doctor --models` says which models can call
   tools at all.
 - **On a `claude` run, a shell step carries no exit code the `exit_zero`
