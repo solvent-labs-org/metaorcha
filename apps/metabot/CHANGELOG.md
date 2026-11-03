@@ -4,6 +4,16 @@ All notable changes to MetaBot (`apps/metabot`) are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-11-04
+
+### Changed
+
+- Published as `metaorcha`: `uv tool install metaorcha`, or `uvx metaorcha`
+  to run it once. The package installs the `metaorcha` command and keeps
+  `metabot` as its alias. `--version` names the command you typed. Your home
+  folder, key, config, receipts and `METABOT_*` variables are unchanged.
+  `orcha-metabot` stays at 0.3.0 on PyPI.
+
 ## [0.3.0] — 2026-11-01
 
 ### Added
