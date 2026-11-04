@@ -2,6 +2,12 @@ import { useState } from 'react'
 import { useByokStore } from '../../store/byok'
 import type { ByokMode } from '../../store/byok'
 import { useSessionStore } from '../../store/session'
+import {
+  CATALOG_MODELS,
+  OTHER_MODEL_ID,
+  TIER_LABEL,
+  catalogEntry,
+} from '../../lib/modelCatalog'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 
@@ -28,6 +34,10 @@ function OnboardingForm() {
   const [baseUrl, setBaseUrl] = useState(saved.baseUrl)
   const [apiKey, setApiKey] = useState(saved.apiKey)
   const [model, setModel] = useState(saved.model)
+  const knownModel = Boolean(catalogEntry(saved.model))
+  const [modelChoice, setModelChoice] = useState(
+    knownModel ? saved.model : OTHER_MODEL_ID,
+  )
   const [systemPrompt, setSystemPrompt] = useState(saved.systemPrompt)
 
   const byokValid =
@@ -134,14 +144,72 @@ function OnboardingForm() {
                 autoComplete="off"
                 className="w-full h-10 px-3 rounded-md bg-surface-base border border-surface-borderLight text-label text-text-body placeholder:text-text-disabled focus:outline-none focus:border-brand-primary"
               />
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="Model id"
-                aria-label="Model id"
-                className="w-full h-10 px-3 rounded-md bg-surface-base border border-surface-borderLight text-label text-text-body placeholder:text-text-disabled focus:outline-none focus:border-brand-primary"
-              />
+              <p className="text-[12px] font-medium text-text-secondary">
+                OpenRouter model ids
+              </p>
+              <div
+                role="radiogroup"
+                aria-label="OpenRouter model ids"
+                className="flex flex-col gap-1.5"
+              >
+                {CATALOG_MODELS.map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={cn(
+                      'flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors',
+                      modelChoice === opt.id
+                        ? 'border-[var(--accent-border)] bg-brand-primary-dim'
+                        : 'border-surface-border bg-surface-overlay hover:border-surface-borderLight',
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="model-id"
+                      value={opt.id}
+                      checked={modelChoice === opt.id}
+                      onChange={() => {
+                        setModelChoice(opt.id)
+                        setModel(opt.id)
+                      }}
+                      className="accent-[var(--brand-primary)]"
+                    />
+                    <span className="flex-1 text-label text-text-heading">
+                      {opt.label}
+                    </span>
+                    <span className="text-[11px] text-text-disabled">
+                      {TIER_LABEL[opt.tier]}
+                    </span>
+                  </label>
+                ))}
+                <label
+                  className={cn(
+                    'flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors',
+                    modelChoice === OTHER_MODEL_ID
+                      ? 'border-[var(--accent-border)] bg-brand-primary-dim'
+                      : 'border-surface-border bg-surface-overlay hover:border-surface-borderLight',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="model-id"
+                    value={OTHER_MODEL_ID}
+                    checked={modelChoice === OTHER_MODEL_ID}
+                    onChange={() => setModelChoice(OTHER_MODEL_ID)}
+                    className="accent-[var(--brand-primary)]"
+                  />
+                  <span className="flex-1 text-label text-text-heading">Other</span>
+                </label>
+              </div>
+              {modelChoice === OTHER_MODEL_ID && (
+                <input
+                  type="text"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="Model id"
+                  aria-label="Model id"
+                  className="w-full h-10 px-3 rounded-md bg-surface-base border border-surface-borderLight text-label text-text-body placeholder:text-text-disabled focus:outline-none focus:border-brand-primary"
+                />
+              )}
               <p className="text-[11px] text-text-disabled">
                 Session-scoped — your key is only sent to the credentials vault, never logged.
               </p>
