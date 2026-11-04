@@ -1,0 +1,7 @@
+{
+  "name": "bizopsmap",
+  "version": "0.1.0",
+  "description": "Map how a business works, and answer questions from the map, with the bizopsmap command.",
+  "author": {"name": "Metaorcha"},
+  "license": "Apache-2.0"
+}

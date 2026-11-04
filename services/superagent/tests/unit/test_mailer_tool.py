@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -127,9 +128,16 @@ def test_render_receipt_includes_goal_steps_and_summary():
     body = mailer._render_receipt(audit)
 
     assert "Goal: Show me my portfolio" in body
-    assert "1. finance-dashboard · A2A · verified · ok · $0.01" in body
+    assert "1. finance-dashboard · A2A · structurally checked · ok · $0.01" in body
     assert "2. search-agent · MCP · failed · Error: boom · $0.02" in body
-    assert "Summary: 2 steps — 1 verified, 1 failed" in body
+    # FR-8: the summary says what the signed receipt covers, and never "verified"
+    flat = " ".join(body.split())
+    assert "What a signed receipt covers:" in body
+    assert audit.coverage.statement in flat
+    assert audit.coverage.export in flat
+    assert "verified" not in body.lower()
+    assert not re.search(r"\bOrcha\b", body)
+    assert "Summary: 2 steps — 1 structurally checked, 1 failed" in body
     assert "Total cost: $0.03" in body
     assert "Duration: 5000 ms" in body
     assert body.rstrip().endswith(
@@ -182,7 +190,7 @@ async def test_over_cap_returns_cap_error(mailer_env):
         {"to_email": "visitor@example.com", "session_id": "sess-1"},
         {"user_id": "u1"},
     )
-    assert result == "Error: receipt email limit reached (1/day)"
+    assert result == "Error: run summary email limit reached (1/day)"
     assert _FakeHttpxClient.calls == []
 
 
@@ -196,16 +204,16 @@ async def test_send_success_posts_to_resend_and_sets_cap(mailer_env):
         {"user_id": "u1"},
     )
 
-    assert result == "Receipt sent to visitor@example.com for session sess-1"
+    assert result == "Run summary sent to visitor@example.com for session sess-1"
 
     assert len(_FakeHttpxClient.calls) == 1
     call = _FakeHttpxClient.calls[0]
     assert call["url"] == "https://api.resend.com/emails"
     assert call["headers"]["Authorization"] == "Bearer test-resend-key"
     payload = call["json"]
-    assert payload["from"] == "Orcha Sandbox <receipts@orcha.ai>"
+    assert payload["from"] == "Metaorcha Sandbox <receipts@orcha.ai>"
     assert payload["to"] == ["visitor@example.com"]
-    assert payload["subject"] == "Your Orcha run receipt"
+    assert payload["subject"] == "Your Metaorcha run summary"
     assert "Goal: Show me my portfolio" in payload["text"]
 
     assert len(mailer_env.set_calls) == 1
@@ -225,7 +233,7 @@ async def test_send_failure_returns_error_string(mailer_env, monkeypatch):
         {"to_email": "visitor@example.com", "session_id": "sess-1"},
         {"user_id": "u1"},
     )
-    assert result == "Error: failed to send receipt"
+    assert result == "Error: failed to send the run summary"
     assert mailer_env.set_calls == []  # cap not consumed on failure
 
 

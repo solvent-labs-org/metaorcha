@@ -25,6 +25,7 @@ def _clean_attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RUN_ATTESTATION_ENABLED", raising=False)
     monkeypatch.delenv("RUN_ATTESTATION_CHARTER_HASH", raising=False)
     monkeypatch.delenv("SETTLEMENT_REQUIRE_ATTESTATION", raising=False)
+    monkeypatch.delenv("CONNECTIONS_ENABLED", raising=False)
 
 
 def _settings(**overrides: object) -> Settings:
@@ -84,3 +85,19 @@ def test_run_attestation_disabled_by_default() -> None:
 def test_settlement_require_attestation_defaults_false() -> None:
     # AD-2: gate flag default off keeps stock OSS settle behaviour.
     assert _settings().settlement_require_attestation is False
+
+
+def test_connections_disabled_by_default() -> None:
+    # AD-18: no connection exists until the deployer turns the flag on.
+    assert _settings().connections_enabled is False
+
+
+def test_the_three_flags_are_off_together_by_default() -> None:
+    # Story 3.4 (FR-16): the stock service produces no receipt, gates
+    # nothing and holds no connection; each flag is opt-in on its own.
+    s = _settings()
+    assert (
+        s.run_attestation_enabled,
+        s.settlement_require_attestation,
+        s.connections_enabled,
+    ) == (False, False, False)

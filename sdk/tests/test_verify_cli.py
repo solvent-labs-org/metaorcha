@@ -139,7 +139,7 @@ def test_verify_help_documents_exit_codes(capsys):
     assert "valid" in out.lower()
 
 
-# ── Story 1.3: offline verify parity on JSONB-reordered bytes (AR-17) ───────
+# ── Offline verify parity on JSONB-reordered bytes ─────────────────────────
 
 
 # Scramble twin lives in services/validator/tests/test_readback_parity.py —

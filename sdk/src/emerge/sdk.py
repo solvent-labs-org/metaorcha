@@ -81,7 +81,7 @@ def agent(
     skills: list[Skill | dict[str, Any]] | None = None,
     base_fee: str | None = None,
 ) -> Callable[[Handler], Handler] | Handler:
-    """Register ``fn`` as an Orcha agent. Returns ``fn`` unchanged.
+    """Register ``fn`` as a Metaorcha agent. Returns ``fn`` unchanged.
 
     ``did`` defaults to ``did:orcha:agent:<slug-of-name>``. If no ``skills`` are
     given, a single skill is derived from the agent name so the agent card is

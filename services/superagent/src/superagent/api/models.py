@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class CreateSessionRequest(BaseModel):
     user_id: str
+    office_id: str | None = Field(
+        default=None,
+        description="Office the session belongs to (set by Gateway); fixed at creation.",
+    )
     title: str | None = Field(
         default=None,
         description="Display title; truncated first prompt from client.",
@@ -47,8 +51,11 @@ class RunAuditStep(BaseModel):
     capability_id: str = ""
     protocol: str = ""
     internal_tool_name: str = ""
-    verified: bool = True
-    verdict_reason: str = "ok"
+    # None when the step carries no structural verdict (a blocked, unresolved
+    # or system call, or a row persisted before verdicts existed): unchecked,
+    # never counted as verified.
+    verified: bool | None = None
+    verdict_reason: str = ""
     base_fee: str | None = None
     total_cost_usd: str | None = None
 
@@ -57,9 +64,75 @@ class RunAuditSummary(BaseModel):
     total_steps: int
     steps_verified: int
     steps_failed: int
+    steps_unchecked: int = 0
     protocols: list[str]
     total_cost_usd: str
     duration_ms: int | None = None
+
+
+class RunAuditGate(BaseModel):
+    """The settle gate's deciding row for the session's latest sealed run.
+
+    Keyed by that run's ``run_id`` (``attested_settlements``), never by the
+    session: a later, unjudged run never inherits an earlier run's outcome.
+    Present only when a gate evaluated that run; ``failed_checks`` are gate
+    ids (story 1.1, FR-14).
+    """
+
+    outcome: str  # settled | refused
+    failed_checks: list[str]
+    envelope_digest: str
+    created_at: str
+    # False for a verdict-only evaluation (``call_id`` NULL, AD-12): the run
+    # was judged and nothing was charged. "settled" then moves no money.
+    charged: bool = True
+
+
+class RunAuditSettlement(BaseModel):
+    """What a routine firing's sealed run amounts to in settlement (story 2.6).
+
+    Present only for a firing's session whose run sealed. ``state`` is the
+    firing row's, read and never recomputed (AD-22). With no gate decision
+    recorded, the block says so and carries no field that implies one.
+    """
+
+    run_id: str
+    state: str
+    label: str
+    gate_evaluated: bool
+    verdict_only: bool | None = None
+    failed_checks: list[str] | None = None  # gate ids, from the ledger row
+    failed_verdicts: list[dict[str, str]] | None = (
+        None  # the signed verdicts that failed
+    )
+    checks: str | None = None  # unchecked | checked | not_evaluated
+    checks_label: str | None = None
+    statement: str
+
+
+class RunAuditFiring(BaseModel):
+    """The routine firing this session belongs to, as its row records it."""
+
+    routine_id: str
+    state: str
+    label: str
+    detail: str | None = None
+
+
+class RunAuditCoverage(BaseModel):
+    """What the export and its signed receipt cover (FR-8, story 3.2).
+
+    ``statement`` is the verifier's own coverage text
+    (``emerge.run_attestation.coverage_statement``), computed from the
+    envelope at export time and never stored; ``export`` says how this
+    export's step list relates to the signed receipt.
+    """
+
+    statement: str
+    run_id: str | None = None
+    receipt_steps: int | None = None
+    receipt_tools: list[str] = Field(default_factory=list)
+    export: str
 
 
 class RunAuditResponse(BaseModel):
@@ -69,6 +142,15 @@ class RunAuditResponse(BaseModel):
     summary: RunAuditSummary
     steps: list[RunAuditStep]
     note: str
+    coverage: RunAuditCoverage
+    # Story 3.3: the sealed run's signed ``model`` verdicts ("<route>/<model
+    # id>", first-use order); None when no receipt was read, [] when the
+    # receipt carries none (sealed before the verdict existed).
+    models: list[str] | None = None
+    run_id: str | None = None
+    gate: RunAuditGate | None = None
+    settlement: RunAuditSettlement | None = None
+    firing: RunAuditFiring | None = None
 
 
 class ConversationSessionSummaryDTO(BaseModel):
@@ -160,6 +242,7 @@ class ResumeRequest(BaseModel):
 class SessionDetailResponse(BaseModel):
     session_id: str
     user_id: str
+    office_id: str | None = None
 
 
 class SessionStatusResponse(BaseModel):

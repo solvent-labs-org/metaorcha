@@ -8,6 +8,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -32,6 +33,15 @@ from ...models.api_responses import (
 )
 from ...services import ConflictError, RegistrationService, ValidationError
 from ..dependencies import get_db, verify_token
+
+# A connection's token, sent by the Gateway so the harvest can list a server
+# that gates tools/list. Used as that harvest's Authorization and dropped.
+HARVEST_AUTHORIZATION_HEADER = "X-Harvest-Authorization"
+
+
+def _harvest_headers(value: str | None) -> dict[str, str] | None:
+    return {"Authorization": value} if value else None
+
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +103,9 @@ async def register_agent(
     ],
     user_id: Annotated[str, Depends(verify_token)],
     db: Annotated[Prisma, Depends(get_db)],
+    harvest_authorization: Annotated[
+        str | None, Header(alias=HARVEST_AUTHORIZATION_HEADER)
+    ] = None,
 ):
     """
     Register a new agent.
@@ -120,7 +133,9 @@ async def register_agent(
         kafka_producer = getattr(request.app.state, "kafka_producer", None)
         registration_service = RegistrationService(db, kafka_producer=kafka_producer)
         result = await registration_service.register_agent(
-            emerge_yaml_content=emerge_yaml_str, user_id=user_id
+            emerge_yaml_content=emerge_yaml_str,
+            user_id=user_id,
+            harvest_headers=_harvest_headers(harvest_authorization),
         )
 
         agent_id: str = result["agent_id"]
@@ -248,6 +263,10 @@ async def get_agent_manifest(
                 "indexed_at": agent.indexed_at.isoformat(),
                 "health_status": agent.health_status.lower(),
                 "health_endpoint": agent.health_endpoint,
+                # Story 1.7: a removed agent is soft-deleted, not erased, so
+                # old receipts and runs still resolve it. Callers that must
+                # stop on removal (the SuperAgent, for a connection) read this.
+                "is_active": agent.is_active,
             },
             "protocol": {
                 "type": agent.protocol_type.lower(),
@@ -379,6 +398,9 @@ async def update_agent(
     ],
     user_id: Annotated[str, Depends(verify_token)],
     db: Annotated[Prisma, Depends(get_db)],
+    harvest_authorization: Annotated[
+        str | None, Header(alias=HARVEST_AUTHORIZATION_HEADER)
+    ] = None,
 ):
     """
     Update an existing agent.
@@ -400,7 +422,10 @@ async def update_agent(
         # Update agent
         registration_service = RegistrationService(db)
         result = await registration_service.update_agent(
-            agent_id=agent_id, emerge_yaml_content=emerge_yaml_str, user_id=user_id
+            agent_id=agent_id,
+            emerge_yaml_content=emerge_yaml_str,
+            user_id=user_id,
+            harvest_headers=_harvest_headers(harvest_authorization),
         )
 
         return UpdateAgentResponse(status="success", data=UpdateAgentData(**result))

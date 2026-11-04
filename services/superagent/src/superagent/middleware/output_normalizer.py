@@ -41,7 +41,10 @@ class OutputNormalizer:
         if isinstance(raw, str):
             try:
                 candidate = json.loads(raw)
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+                # RecursionError: JSON nested past the decoder's limit. The
+                # bytes are the agent's; a parser they break must not raise
+                # after dispatch, or the call drops out of the receipt.
                 return None
         if isinstance(candidate, dict) and candidate.get("__canvas__") is True:
             manifest = candidate.get("manifest")

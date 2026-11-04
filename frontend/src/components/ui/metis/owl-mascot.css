@@ -377,24 +377,24 @@
 
 /* ── verified — green eyes, two hops + wing reveal flaps ── */
 
-.owl-mascot--verified {
+.owl-mascot--complete {
   --owl-eye-glow: #22c55e;
 }
 
-.owl-mascot--verified .owl-body-group {
+.owl-mascot--complete .owl-body-group {
   animation: owlVerifiedHops 2.4s ease-in-out infinite;
 }
 
-.owl-mascot--verified:not(.owl-mascot--wing-reveal) .owl-wing-left {
+.owl-mascot--complete:not(.owl-mascot--wing-reveal) .owl-wing-left {
   animation: owlVerifiedWingFlapL 2.4s ease-in-out infinite;
 }
 
-.owl-mascot--verified:not(.owl-mascot--wing-reveal) .owl-wing-right {
+.owl-mascot--complete:not(.owl-mascot--wing-reveal) .owl-wing-right {
   animation: owlVerifiedWingFlapR 2.4s ease-in-out infinite;
   animation-delay: 0.06s;
 }
 
-.owl-mascot--verified .owl-eye {
+.owl-mascot--complete .owl-eye {
   animation: none;
 }
 

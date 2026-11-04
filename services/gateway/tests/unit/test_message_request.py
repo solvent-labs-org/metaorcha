@@ -25,13 +25,26 @@ def test_accepts_known_criterion():
     assert body.acceptance_criteria == {"citations_required": True}
 
 
-def test_rejects_unknown_exit_zero():
-    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
-        MessageRequest(message="run the suite", acceptance_criteria={"exit_zero": True})
+def test_accepts_exit_zero():
+    body = MessageRequest(
+        message="run the suite",
+        acceptance_criteria={"exit_zero": True},
+    )
+    assert body.acceptance_criteria == {"exit_zero": True}
+
+
+def test_rejects_unknown_criterion():
+    with pytest.raises(ValidationError, match="unsupported criterion: not_a_criterion"):
+        MessageRequest(
+            message="run the suite",
+            acceptance_criteria={"not_a_criterion": True},
+        )
 
 
 def test_rejects_typo_citation_required():
-    with pytest.raises(ValidationError, match="unsupported criterion: citation_required"):
+    with pytest.raises(
+        ValidationError, match="unsupported criterion: citation_required"
+    ):
         MessageRequest(
             message="cite",
             acceptance_criteria={"citation_required": True},
@@ -39,10 +52,10 @@ def test_rejects_typo_citation_required():
 
 
 def test_rejects_mixed_known_and_unknown():
-    with pytest.raises(ValidationError, match="unsupported criterion: exit_zero"):
+    with pytest.raises(ValidationError, match="unsupported criterion: not_a_criterion"):
         MessageRequest(
             message="cite",
-            acceptance_criteria={"citations_required": True, "exit_zero": True},
+            acceptance_criteria={"citations_required": True, "not_a_criterion": True},
         )
 
 

@@ -75,6 +75,12 @@ export function MessageBubble({ message }: Readonly<MessageBubbleProps>) {
           hour: '2-digit',
           minute: '2-digit',
         })}
+        {!isUser && message.model && (
+          <span title="The model that ran this turn, as the server recorded it">
+            {' · '}
+            {message.model}
+          </span>
+        )}
       </span>
     </div>
   )

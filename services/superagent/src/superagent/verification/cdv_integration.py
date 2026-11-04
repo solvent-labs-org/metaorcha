@@ -60,6 +60,10 @@ class CDVObserver:
     async def on_step_complete(self, record: StepResult) -> None:
         if not record.success:
             return
+        if record.protocol == "SYSTEM":
+            # A platform tool's step (story 3.1) is not an agent's answer to a
+            # goal: nothing to score, and no prior to move under its DID.
+            return
         try:
             from cdv.step_scorer import score_channel_a
 

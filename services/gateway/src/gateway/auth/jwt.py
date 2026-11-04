@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
 
 from ..config import settings
 from .models import TokenPayload
@@ -69,7 +69,7 @@ def decode_access_token(token: str) -> TokenPayload:
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
         )
-    except JWTError as exc:
+    except jwt.PyJWTError as exc:
         raise ValueError(f"Invalid token: {exc}") from exc
     if payload.get("type") != "access":
         raise ValueError("Not an access token")

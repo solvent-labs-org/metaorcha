@@ -1,0 +1,12 @@
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000002"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Planning the change**"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'make test'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'make test'","aggregated_output":"1 failed\n","exit_code":2,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/src/app.py","kind":"update"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"metabot","tool":"gh__list_issues","arguments":{"repo":"acme/widgets"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"metabot","tool":"gh__list_issues","arguments":{"repo":"acme/widgets"},"result":{"content":[{"type":"text","text":"[]"}]},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"hologram","shape":"cube"}}
+{"type":"item.updated","item":{"id":"item_5","type":"todo_list","items":[{"text":"fix","completed":false}]}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"Fixed app.py; one test still fails."}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":20}}

@@ -25,6 +25,9 @@ def step_result_payload(record: StepResult) -> dict:
     # run-attestation observer needs it for the RFC 0003 args_hash) but must
     # never leave the process over Kafka.
     payload.pop("args", None)
+    # `output_preimage` is the untruncated agent output (redacted of
+    # credentials, not of PII) — same rule as `args`.
+    payload.pop("output_preimage", None)
     return payload
 
 

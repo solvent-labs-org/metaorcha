@@ -121,9 +121,9 @@ class Settings(BaseSettings):
     @classmethod
     def _charter_hash_hex64(cls, value: str | None) -> str | None:
         # Re-declared locally — never import from the optional validator
-        # package at settings load (graceful-degrade contract). A mirrored copy
-        # of this rule lives in validator/run_envelope.py (_HEX64_RE) — keep
-        # the two in sync.
+        # package at settings load (graceful-degrade contract). The same rule
+        # is emerge.record._HEX64_RE / emerge.criteria._HEX64_RE in the SDK —
+        # keep them in sync.
         if value is None:
             return None
         stripped = value.strip()
@@ -143,6 +143,12 @@ class Settings(BaseSettings):
     # Default off keeps stock OSS settle behaviour. PAYMENT_MODE enum is
     # unchanged by this flag.
     settlement_require_attestation: bool = False
+
+    # CONNECTIONS_ENABLED — user connections (a tool server registered from the
+    # chat with the user's own token; manifests tagged ``connection``). Off by
+    # default: a call to a connection is refused before any request (spine
+    # AD-18). Must match the Gateway's setting of the same name.
+    connections_enabled: bool = False
 
     # Bound a single agent step's text output before it re-enters the
     # orchestrator context. Protects rate-limited tiers (per-minute token

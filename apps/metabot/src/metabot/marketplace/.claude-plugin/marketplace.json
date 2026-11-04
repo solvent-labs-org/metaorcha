@@ -1,0 +1,17 @@
+{
+  "name": "metabot",
+  "owner": {"name": "Metaorcha"},
+  "metadata": {"description": "The plugins that ship with MetaBot."},
+  "plugins": [
+    {
+      "name": "bizopsmap",
+      "source": "./bizopsmap",
+      "description": "Map how a business works, and answer questions from the map, with the bizopsmap command."
+    },
+    {
+      "name": "code-desks",
+      "source": "./code-desks",
+      "description": "Work as one desk of a Code Desks office: the work board, sign-offs and mail, with the desk command."
+    }
+  ]
+}
