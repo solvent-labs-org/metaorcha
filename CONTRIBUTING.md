@@ -86,7 +86,9 @@ No `Co-authored-by` trailers unless you actually pair-programmed.
 
 ## Before you open a PR
 
-- `make check` passes (lint + format + tests).
+- `make check` passes: lint, format and tests for the services, `sdk/` and
+  `apps/metabot`, with types for MetaBot. `make sdk-check` and
+  `make metabot-check` run one package's part.
 - New code has tests. Bridges and agents include a minimal example + manifest.
 - No secrets, credentials, or client references in the diff.
 - Public-facing text says **Metaorcha**, not any internal brand.

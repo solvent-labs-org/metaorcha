@@ -16,12 +16,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .criteria import compose_policy_version
+from emerge.criteria import (  # noqa: F401 — NO_STEP_* re-exported for readers
+    NO_STEP_APPLICABLE,
+    NO_STEP_EXIT_CODE,
+    compose_policy_version,
+    run_declared_acceptance,
+)
+
+from .counts_match import evaluate_counts_match
 from .run_envelope import (
     build_run_envelope,
     cdv_score_to_bp,
@@ -29,9 +37,29 @@ from .run_envelope import (
     sign_run_envelope,
 )
 
+# the re-exported names are this module's public API too (readers import them here)
+__all__ = [
+    "DEFAULT_MAX_ENVELOPES",
+    "DEFAULT_PERSIST_TIMEOUT_SECONDS",
+    "DEFAULT_POLICY_VERSION",
+    "DEFAULT_SIGNER_DID",
+    "MAX_ENVELOPES_ENV",
+    "NO_STEP_APPLICABLE",
+    "NO_STEP_EXIT_CODE",
+    "PERSIST_TIMEOUT_ENV",
+    "POLICY_VERSION_ENV",
+    "RunAttestationObserver",
+    "compose_policy_version",
+    "run_declared_acceptance",
+    "step_tool",
+]
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIGNER_DID = "did:orcha:system:validator"
+# A ``model`` verdict's detail (story 3.3): printable ASCII, as every verdict
+# detail must be, and bounded like the producer's (turn_model._MAX_LEN).
+_MODEL_DETAIL_RE = re.compile(r"^[\x20-\x7e]{1,200}$")
 POLICY_VERSION_ENV = "RUN_ATTESTATION_POLICY_VERSION"
 DEFAULT_POLICY_VERSION = "run-attestation/1.0"
 # Persist ceiling on the SSE path (same idiom as anchor.py _TIMEOUT_SECONDS):
@@ -59,6 +87,30 @@ def _parse_ts(raw: Any) -> datetime:
         return datetime.now(UTC)
 
 
+# AD-17: a call through an agent names its DID inside ``tool``. The capability
+# charset is the one the Registry enforces at registration (story 1.2), so the
+# first ``#`` is the only one.
+_AGENT_DID_PREFIX = "did:orcha:agent:"
+_CAPABILITY_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def step_tool(agent_id: Any, capability_id: Any, tool_name: str) -> str:
+    """The ``steps[].tool`` value for one call.
+
+    ``"<agent DID>#<capability>"`` for a call to a ``did:orcha:agent:*``;
+    the bare tool name for platform system tools and for any capability
+    outside the charset.
+    """
+    if (
+        isinstance(agent_id, str)
+        and agent_id.startswith(_AGENT_DID_PREFIX)
+        and isinstance(capability_id, str)
+        and _CAPABILITY_RE.fullmatch(capability_id)
+    ):
+        return f"{agent_id}#{capability_id}"
+    return tool_name
+
+
 @dataclass
 class _AccumulatedStep:
     call_id: str
@@ -73,6 +125,17 @@ class _AccumulatedStep:
     declared_acceptance: dict[str, Any] | None
     criteria_digest: str | None
     completed_at: datetime
+    # Story 1.5 / AD-21: ``{"result": "pass"|"warn", "detail": ...}`` when a
+    # human approved or declined this call at the scope gate.
+    scope_approval: dict[str, Any] | None = None
+    # Story 2.4: ``{"counts_match": {operands}}`` on every step of a routine
+    # firing that declared a run-level criterion; evaluated at seal.
+    run_criteria: dict[str, Any] | None = None
+    # Story 3.3 / AD-21: "<route>/<model id>" of the LLM call that requested
+    # this step; signed once per distinct model as the ``model`` verdict.
+    model: str | None = None
+    # False when ``output`` is the display copy, not the AD-16 pre-image.
+    has_preimage: bool = True
 
 
 class RunAttestationObserver:
@@ -151,26 +214,44 @@ class RunAttestationObserver:
             meta = record.metadata if isinstance(record.metadata, dict) else {}
             declared = meta.get("declared_acceptance")
             digest = meta.get("criteria_digest")
-            self._steps.setdefault(session_id, []).append(
-                _AccumulatedStep(
-                    call_id=record.call_id,
-                    tool=record.tool_name,
-                    args=dict(getattr(record, "args", None) or {}),
-                    output=record.content,
-                    success=bool(record.success),
-                    latency_ms=int(record.latency_ms),
-                    cdv_bp=cdv_bp,
-                    agent_id=record.agent_id,
-                    verdict=record.verdict
-                    if isinstance(record.verdict, dict)
-                    else None,
-                    declared_acceptance=declared
-                    if isinstance(declared, dict)
-                    else None,
-                    criteria_digest=digest if isinstance(digest, str) else None,
-                    completed_at=_parse_ts(record.completed_at),
-                )
+            approval = meta.get("scope_approval")
+            run_criteria = meta.get("run_criteria")
+            model = meta.get("model")
+            # AD-16: hash the raw, redacted pre-image; the display content is
+            # the fallback only where the producer could not build one.
+            preimage = getattr(record, "output_preimage", None)
+            step = _AccumulatedStep(
+                call_id=record.call_id,
+                tool=step_tool(
+                    record.agent_id,
+                    getattr(record, "capability_id", None),
+                    record.tool_name,
+                ),
+                args=dict(getattr(record, "args", None) or {}),
+                output=preimage if preimage is not None else record.content,
+                success=bool(record.success),
+                latency_ms=int(record.latency_ms),
+                cdv_bp=cdv_bp,
+                agent_id=record.agent_id,
+                verdict=record.verdict if isinstance(record.verdict, dict) else None,
+                declared_acceptance=declared if isinstance(declared, dict) else None,
+                criteria_digest=digest if isinstance(digest, str) else None,
+                completed_at=_parse_ts(record.completed_at),
+                scope_approval=approval if isinstance(approval, dict) else None,
+                run_criteria=run_criteria if isinstance(run_criteria, dict) else None,
+                model=model if isinstance(model, str) else None,
+                has_preimage=preimage is not None,
             )
+            steps = self._steps.setdefault(session_id, [])
+            # RFC 0003: call_id is unique within the run. A retried call
+            # reports once per attempt under one call_id; the last attempt is
+            # the call's outcome and takes the first attempt's position.
+            for index, existing in enumerate(steps):
+                if existing.call_id == step.call_id:
+                    steps[index] = step
+                    break
+            else:
+                steps.append(step)
         except Exception:
             logger.exception(
                 "RunAttestationObserver: failed to accumulate call_id=%s",
@@ -194,24 +275,80 @@ class RunAttestationObserver:
         declared = self._declared_acceptance(steps)
         if declared is not None:
             verdicts.append(declared)
+        verdicts.extend(self._run_criteria(steps))
+        verdicts.extend(self._scope_approvals(steps))
+        verdicts.extend(self._models(steps))
         return verdicts
 
     @staticmethod
+    def _models(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """The model that ran the turn (AD-21): one ``model`` verdict per model.
+
+        ``{check: "model", result: "pass", detail: "<route>/<model id>"}``, in
+        first-use order — one entry for an ordinary turn. ``pass`` records a
+        fact and never refuses: the gate reads only ``fail``. A value that is
+        not printable ASCII is left out rather than failing the seal.
+        """
+        seen: list[str] = []
+        for step in steps:
+            model = step.model
+            if model and _MODEL_DETAIL_RE.match(model) and model not in seen:
+                seen.append(model)
+        return [{"check": "model", "result": "pass", "detail": m} for m in seen]
+
+    @staticmethod
+    def _run_criteria(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """The run-level criteria verdicts (story 2.4): ``counts_match`` only.
+
+        Every step of the firing carries the same operands, so the first one
+        that carries them is read. A run that declared the check signs it,
+        pass or fail — never left out.
+        """
+        for step in steps:
+            if step.run_criteria and "counts_match" in step.run_criteria:
+                return [evaluate_counts_match(steps, step.run_criteria["counts_match"])]
+        return []
+
+    @staticmethod
+    def _scope_approvals(steps: list[_AccumulatedStep]) -> list[dict[str, Any]]:
+        """One ``scope_approval:<call_id>`` verdict per human decision (AD-21).
+
+        ``pass`` with the approver's DID in ``detail``; ``warn`` with
+        ``declined`` for a refusal — never ``fail``, so a declined call does
+        not refuse the run at the gate. Outside the verifier check order:
+        this is policy in the signed record, not a check on its bytes.
+        """
+        entries: list[dict[str, Any]] = []
+        for step in steps:
+            approval = step.scope_approval
+            if not approval:
+                continue
+            result = approval.get("result")
+            if result not in ("pass", "warn"):
+                continue
+            entry: dict[str, Any] = {
+                "check": f"scope_approval:{step.call_id}",
+                "result": result,
+            }
+            detail = approval.get("detail")
+            if detail:
+                entry["detail"] = str(detail)
+            entries.append(entry)
+        return entries
+
+    @staticmethod
     def _declared_acceptance(steps: list[_AccumulatedStep]) -> dict[str, Any] | None:
-        """One run-level declared_acceptance verdict from step metadata."""
-        seen = [s.declared_acceptance for s in steps if s.declared_acceptance]
-        if not seen:
-            return None
-        failed = next((item for item in seen if item.get("result") == "fail"), None)
-        chosen = failed or seen[-1]
-        result = chosen.get("result")
-        if result not in ("pass", "fail"):
-            return None
-        entry: dict[str, Any] = {"check": "declared_acceptance", "result": result}
-        detail = chosen.get("detail")
-        if detail:
-            entry["detail"] = str(detail)
-        return entry
+        """One run-level declared_acceptance verdict from step metadata.
+
+        The rule is the SDK's (``emerge.criteria.run_declared_acceptance``,
+        AD-20): per criterion across the run's steps, fail if any applicable
+        step failed; pass if at least one applied and none failed; a criterion
+        no step was applicable to fails the run. Steps sealed before
+        per-criterion results existed fall back to fail-wins-else-last.
+        """
+        return run_declared_acceptance(
+            [s.declared_acceptance for s in steps if s.declared_acceptance]
+        )
 
     @staticmethod
     def _criteria_digest_from_steps(steps: list[_AccumulatedStep]) -> str | None:

@@ -1,6 +1,6 @@
 # {{AGENT_NAME}}
 
-Your first Orcha agent, scaffolded with `orcha-sdk init`.
+Your first Metaorcha agent, scaffolded with `orcha-sdk init`.
 
 ## Run it
 

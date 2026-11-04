@@ -1,0 +1,17 @@
+# OSV-Scanner ignore list — agents/google-workspace-orchestrator/uv.lock only.
+#
+# Add entries only with a reason and an ignoreUntil date.
+
+# GHSA-xcq7-p3pf-p88h: unbounded tracestate parsing in opentelemetry-api
+# <=1.45.0, fixed in 1.45.1. The root lock and the finance agent's lock carry
+# the fix. This lock cannot: every google-adk release up to 2.12.0, the latest
+# on 2026-10-23, requires opentelemetry-api<=1.42.1.
+#
+# Checked, not assumed: this agent's own code does not use OpenTelemetry, and
+# google-adk's only propagator call (google/adk/telemetry/_agent_engine.py)
+# extracts from a carrier that holds traceparent alone, so no tracestate header
+# reaches the parser.
+[[IgnoredVulns]]
+id = "GHSA-xcq7-p3pf-p88h"
+ignoreUntil = 2026-11-30
+reason = "google-adk <=2.12.0 requires opentelemetry-api<=1.42.1, so the 1.45.1 fix cannot be installed beside it. The agent does not use OpenTelemetry itself, and google-adk's only propagator call extracts from a carrier holding traceparent alone, so no tracestate header is parsed. Remove when google-adk allows opentelemetry-api>=1.45.1."

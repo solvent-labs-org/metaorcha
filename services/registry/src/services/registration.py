@@ -3,21 +3,25 @@
 import json
 import logging
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 
 from common.database.src.generated_client.fields import Json as PrismaJson
+from common.utils.src.operator import STDIO_OPERATOR_ONLY, is_operator
 
 from ..adapters import A2AAdapter, CapabilityData, HarvestResult, MCPAdapter
 from ..config import settings
+from ..health_probe import should_skip_health_probe
 from ..models.emerge_config import EmergeConfig
 from .health_check import HealthCheckService
 from .validation import ConflictError, ValidationError, ValidationService
 from .version_manager import VersionManager
 
 logger = logging.getLogger(__name__)
+
 
 _AUTH_TYPE_MAP: dict[str, str] = {
     "x_api_key": "X_API_KEY",
@@ -48,9 +52,14 @@ class RegistrationService:
         self,
         emerge_yaml_content: str,
         user_id: str,
+        harvest_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Register a new agent.
+
+        ``harvest_headers`` authenticate the capability harvest of an MCP
+        server that lists its tools only to a token holder. They are used for
+        that one harvest and never stored.
 
         Process:
         1. Parse and validate emerge.yaml
@@ -78,21 +87,25 @@ class RegistrationService:
             f"Validation passed for agent {emerge_config.identity.name} version {emerge_config.identity.version}"
         )
 
+        # AD-13: refuse a non-operator's stdio manifest before any DB or network step.
+        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
+        self._assert_stdio_operator(is_stdio, user_id)
+
         # If a soft-deleted record with the same identity exists, remove it so
         # re-registration creates a fresh record (cascade handles child rows).
         await self._purge_soft_deleted_agent(emerge_config, user_id)
 
         await self._assert_agent_not_exists(emerge_config, user_id)
 
-        # STDIO agents have no HTTP endpoint to probe — they are launched as
-        # child processes by the client. Skip the health check entirely.
-        is_stdio = emerge_config.protocol.transport.type.lower() == "stdio"
-        if not is_stdio:
+        # STDIO has no HTTP port. Remote MCP SSE/HTTP usually has no /health;
+        # harvest is the connectivity check. A2A HTTP still probes.
+        if not should_skip_health_probe(emerge_config):
             await self._verify_health_endpoint(emerge_config.health_endpoint)
 
         harvest_result = await self._harvest_capabilities(
-            emerge_config, emerge_yaml_content
+            emerge_config, emerge_yaml_content, harvest_headers
         )
+        self._assert_capability_ids(harvest_result)
         print(
             f"Harvested {len(harvest_result.capabilities)} capabilities for agent {emerge_config.identity.name} version {emerge_config.identity.version}"
         )
@@ -113,6 +126,7 @@ class RegistrationService:
         agent_id: str,
         emerge_yaml_content: str,
         user_id: str,
+        harvest_headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Update an existing agent.
@@ -126,6 +140,10 @@ class RegistrationService:
         is_valid, error = self.validation_service.validate_emerge_config(emerge_config)
         if not is_valid:
             raise error
+
+        self._assert_stdio_operator(
+            emerge_config.protocol.transport.type.lower() == "stdio", user_id
+        )
 
         existing_agent = await self.db.agent.find_unique(
             where={"id": agent_id},
@@ -144,8 +162,9 @@ class RegistrationService:
 
         version_changed = existing_agent.version != emerge_config.identity.version
         harvest_result = await self._harvest_capabilities(
-            emerge_config, emerge_yaml_content
+            emerge_config, emerge_yaml_content, harvest_headers
         )
+        self._assert_capability_ids(harvest_result)
 
         if version_changed:
             await self._save_agent_to_db(emerge_config, harvest_result, user_id)
@@ -163,6 +182,21 @@ class RegistrationService:
 
     # -------------------------------------------------------------------------
     # Parse / validate helpers
+
+    @staticmethod
+    def _assert_stdio_operator(is_stdio: bool, user_id: str) -> None:
+        """AD-13: stdio registration is operator-only on this door too."""
+        if is_stdio and not is_operator(user_id):
+            raise PermissionError(STDIO_OPERATOR_ONLY)
+
+    def _assert_capability_ids(self, harvest_result: HarvestResult) -> None:
+        """Raise ValidationError if any harvested capability id breaks AD-17."""
+        ok, error = self.validation_service.validate_capability_ids(
+            harvest_result.capabilities
+        )
+        if not ok and error is not None:
+            raise error
+
     # -------------------------------------------------------------------------
 
     def _parse_emerge_yaml(self, content: str) -> EmergeConfig:
@@ -242,7 +276,10 @@ class RegistrationService:
     # -------------------------------------------------------------------------
 
     async def _harvest_capabilities(
-        self, config: EmergeConfig, raw_yaml_content: str = ""
+        self,
+        config: EmergeConfig,
+        raw_yaml_content: str = "",
+        headers: Mapping[str, str] | None = None,
     ) -> HarvestResult:
         """Select adapter by protocol and harvest capabilities.
 
@@ -269,6 +306,7 @@ class RegistrationService:
                 transport_type=transport_type,
                 timeout=settings.adapter_timeout,
                 max_retries=settings.adapter_max_retries,
+                headers=headers,
             )
             return await adapter.harvest()
 

@@ -32,6 +32,16 @@ row commits independently of the transaction and survives its rollback. A
 settle whose credit write fails after the claim is rolled back and audited as
 ``credit_write_error``; the run stays eligible to settle again.
 
+Every sealed run is judged once (Story 2.7, AD-12): payment is conditional
+inside the one evaluation. Pipeline step 6.5 stores a charged call's deferred
+settle synchronously, so at seal time the observer knows whether the run
+charged anything. With a charge it settles or refuses through
+``settle_invocation`` and credits on settle (charter bind, AD-9). Without
+one it writes exactly one verdict-only row — ``call_id`` NULL, no credit, no
+``Transaction``, charter not required — so a run that only called
+connections is still ``settled`` or ``refused`` on the record. A NULL
+``call_id`` means "verdict only, nothing paid".
+
 Known gap, deferred: the deferred settle itself lives in process memory
 between the charged call and the run's seal (``settlement._deferred_settles``),
 so it is not durable across a restart. Reserve pairing is likewise still open.
@@ -39,7 +49,6 @@ so it is not durable across a restart. Reserve pairing is likewise still open.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any
@@ -85,14 +94,6 @@ PLATFORM_AGENT_DID_RE = re.compile(r"^did:orcha:(agent|system):[\x20-\x7e]+$")
 # ``steps_merkle_root`` names the check RFC 0003's commitment work adds; it is
 # simply absent from the result dict until then, and absent keys are skipped.
 _VERIFIER_CHECK_ORDER = ("schema", "steps_root", "steps_merkle_root", "signature")
-
-# Bounded re-check for the deferred-settle entry (review finding, 2.1): the
-# mid-run defer runs inside an asyncio.create_task, so on a fast run
-# emit_run_complete can dispatch before that task has executed its
-# synchronous defer write. The observer re-checks briefly before giving up.
-# Cost: runs with no charged call wait the full budget at completion.
-DEFER_RECHECKS = 10
-DEFER_RECHECK_DELAY_S = 0.1
 
 
 def _failed_checks_in_order(checks: dict[str, Any]) -> list[str]:
@@ -175,8 +176,9 @@ def validate_gate_config(settings: Any) -> None:
         logger.warning(
             "SETTLEMENT_REQUIRE_ATTESTATION=true with no "
             "RUN_ATTESTATION_CHARTER_HASH — the settling path requires a "
-            "charter bind, so every gated settle will refuse (charter_hash). "
-            "This deployment settles nothing."
+            "charter bind, so every charged settle will refuse (charter_hash). "
+            "This deployment settles nothing that is charged; runs that "
+            "charge nothing are still judged (verdict only)."
         )
     # The revenue split is computed on every settle, gated or not, from two
     # environment variables. A value that cannot be parsed, or shares that
@@ -309,6 +311,7 @@ async def gate_attested_settle(
     db: Any = None,
     audit_db: Any = None,
     call_id: str | None = None,
+    require_charter: bool = True,
 ) -> dict[str, Any]:
     """Verify a run's attestation and record the settle/refuse outcome.
 
@@ -323,6 +326,10 @@ async def gate_attested_settle(
     rows; it defaults to ``db`` and MUST be a separate, non-transactional
     client whenever ``db`` is transactional, so that a refusal commits
     independently of the transaction and survives its rollback.
+
+    ``require_charter`` is False only for a verdict-only evaluation
+    (AD-12): the charter bind (AD-9) guards the credit, and that path moves
+    none. Every other check applies unchanged.
     """
     if audit_db is None:
         audit_db = db
@@ -417,8 +424,11 @@ async def gate_attested_settle(
         return await _refuse([CHECK_AGENT_DID], digest=digest, charter=charter)
 
     # Charter bind is gate policy (AD-9), not an SDK check: the settling path
-    # requires a configured expected hash matching the envelope's.
-    if expected_charter_hash is None or charter != expected_charter_hash:
+    # requires a configured expected hash matching the envelope's. It binds
+    # the credit, so a verdict-only evaluation skips it (AD-12).
+    if require_charter and (
+        expected_charter_hash is None or charter != expected_charter_hash
+    ):
         return await _refuse([CHECK_CHARTER], digest=digest, charter=charter)
 
     # Acceptance (gate policy): a signed fail verdict refuses settlement.
@@ -503,15 +513,45 @@ async def gate_attested_settle(
     return {"outcome": "settled", "failed_checks": [], "envelope_digest": digest}
 
 
+async def gate_verdict_only(
+    *, run_id: str, session_id: str | None = None, db: Any = None
+) -> dict[str, Any]:
+    """Judge a sealed run that charged nothing (Story 2.7, AD-12).
+
+    The same gate as a charged settle, on one client: exactly one
+    ``attested_settlements`` row — ``settled`` (claiming ``settled_run_id``)
+    or ``refused`` with the failed checks — with ``call_id`` NULL. No credit
+    and no ``Transaction`` are written, and the charter bind is not required.
+    """
+    owns_db = db is None
+    if owns_db:
+        from src.generated_client import Prisma  # noqa: PLC0415
+
+        db = Prisma()
+        await db.connect()
+    try:
+        return await gate_attested_settle(
+            run_id=run_id,
+            session_id=session_id,
+            db=db,
+            call_id=None,
+            require_charter=False,
+        )
+    finally:
+        if owns_db:
+            await db.disconnect()
+
+
 class SettlementGateObserver:
-    """Post-seal settle trigger (Story 2.1 AC4, AR-18 Option A).
+    """Post-seal gate trigger (Story 2.1 AC4, AR-18 Option A; AD-12).
 
     Registered AFTER ``RunAttestationObserver`` in the boot composite. At run
     completion the attestation observer has already sealed the run (its
     in-memory ``envelopes`` map is populated before the DB persist attempt),
     so this observer resolves the just-sealed ``run_id`` from that reference
-    — never from a blind newest-row query — and replays the deferred
-    per-call settle through the gated path exactly once.
+    — never from a blind newest-row query — and judges the run exactly once:
+    the deferred charge through the gated settle, or, when nothing was
+    charged, a verdict-only evaluation.
     """
 
     def __init__(self, attestation_observer: Any) -> None:
@@ -536,24 +576,19 @@ class SettlementGateObserver:
                         session_id,
                     )
                 return
-            if kwargs is None:
-                # The defer write runs inside asyncio.create_task; a fast run
-                # can complete before that task executes. Bounded re-check
-                # before concluding nothing was charged (review finding, 2.1).
-                for _ in range(DEFER_RECHECKS):
-                    await asyncio.sleep(DEFER_RECHECK_DELAY_S)
-                    kwargs = pop_deferred_settle(session_id)
-                    if kwargs is not None:
-                        break
-                if kwargs is None:
-                    return
+            # Step 6.5 stores a charge before the call returns (AD-12), so the
+            # map already says whether this run charged anything: no re-check.
             run_id = self._sealed_run_id(session_id)
             if run_id is None:
-                logger.warning(
-                    "SettlementGateObserver: no sealed envelope for session %s — "
-                    "deferred settle dropped (fail-closed)",
-                    session_id,
-                )
+                if kwargs is not None:
+                    logger.warning(
+                        "SettlementGateObserver: no sealed envelope for session "
+                        "%s — deferred settle dropped (fail-closed)",
+                        session_id,
+                    )
+                return  # nothing sealed, so no run to judge
+            if kwargs is None:
+                await gate_verdict_only(run_id=run_id, session_id=session_id)
                 return
             await settle_invocation(run_id=run_id, **kwargs)
         except Exception:

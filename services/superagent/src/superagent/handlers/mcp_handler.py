@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 _LEGACY_EMERGE_PREFIX = "/app/common/emerge-tools"
 
 
+# AD-13: the only host variables a stdio subprocess inherits. PATH and HOME so
+# the interpreter and its caches are found; locale so output decodes.
+STDIO_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE")
+
+
+def build_stdio_env(
+    resolved_env: dict[str, str] | None,
+    host_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """The subprocess environment: allow-listed host keys + the connection's vars."""
+    source = os.environ if host_env is None else host_env
+    env = {k: source[k] for k in STDIO_ENV_ALLOWLIST if k in source}
+    env.update(resolved_env or {})
+    return env
+
+
 def _resolve_stdio_cmd_args(cmd_args: list[Any]) -> list[str]:
     """Resolve Chomper and other emerge-tools script paths for local vs Docker layouts."""
     from ..config import settings
@@ -139,11 +155,12 @@ class MCPHandler(AgentHandler):
         cmd_args = _resolve_stdio_cmd_args(list(transport.get("args", [])))
         # resolved_env is set by PreFlightManager._resolve_stdio_env —
         # ${VAR} placeholders from emerge.yaml are already expanded at this point.
-        # Merge with os.environ so the subprocess inherits PATH, HOME, etc.
-        # StdioServerParameters.env replaces the entire environment when non-None,
-        # so we must include the host env or the process won't find node/python/etc.
+        # StdioServerParameters.env replaces the entire environment when non-None;
+        # build_stdio_env passes only the allow-listed host keys (so node/python
+        # are found) plus the connection's own variables — never VAULT_KEY or
+        # any other service secret (AD-13).
         resolved_env: dict[str, str] | None = transport.get("resolved_env")
-        subprocess_env = {**os.environ, **(resolved_env or {})}
+        subprocess_env = build_stdio_env(resolved_env)
 
         logger.debug(
             "MCP STDIO call — capability=%s command=%r args=%r explicit_env_keys=%s",

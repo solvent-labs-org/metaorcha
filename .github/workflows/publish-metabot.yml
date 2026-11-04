@@ -1,0 +1,149 @@
+name: Publish metabot
+
+# Release MetaBot (apps/metabot) to PyPI as `orcha-metabot`. Two ways to run:
+#   • Tag push (real publish):   git tag metabot-vX.Y.Z && git push <remote> metabot-vX.Y.Z
+#   • Manual dry-run (no upload): Actions → this workflow → "Run workflow"
+#
+# Uses PyPI Trusted Publishing (OIDC), as publish-sdk.yml does: no API token is
+# stored in this repo. One-time setup on pypi.org, by the repo owner: a pending
+# publisher for the project "orcha-metabot", with owner=solvent-labs-org,
+# repo=metaorcha, workflow=publish-metabot.yml and environment=pypi.
+#
+# MetaBot requires the orcha-sdk version its pyproject names, so that SDK is
+# released before MetaBot. The smoke test below installs it from PyPI, and
+# fails until it is there.
+on:
+  push:
+    tags:
+      - "metabot-v*"
+  workflow_dispatch: {} # dry-run: build + verify + smoke, never publishes
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      # On a tag push, the tag version (metabot-vX.Y.Z) must match the version
+      # in apps/metabot/pyproject.toml, so the wheel PyPI receives matches the
+      # tag. tests/test_version.py holds metabot.__version__ to the same value.
+      - name: Verify tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/metabot-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#metabot-v}"
+          PY_VERSION="$(grep -m1 '^version' apps/metabot/pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG_VERSION pyproject=$PY_VERSION"
+          if [ "$TAG_VERSION" != "$PY_VERSION" ]; then
+            echo "::error::tag metabot-v$TAG_VERSION != apps/metabot/pyproject.toml version $PY_VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build --package orcha-metabot --out-dir dist
+
+      - name: Check metadata
+        run: uvx twine@7.0.0 check dist/*
+
+      # The wheel is installed as a person would install it, with its
+      # dependencies from PyPI.
+      - name: Smoke test wheel in isolation
+        run: |
+          WHEEL="$(ls dist/*.whl)"
+          mkdir -p /tmp/metabot-smoke && cd /tmp/metabot-smoke
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" metabot --version
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" metabot --help > /dev/null
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: metabot-dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    # A tag push publishes; workflow_dispatch stops after the build, as a dry run.
+    # The repository guard keeps a tag pushed to any other copy of this repo
+    # from publishing or making a release.
+    if: >-
+      startsWith(github.ref, 'refs/tags/metabot-v') &&
+      github.repository == 'solvent-labs-org/metaorcha'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing and provenance
+      contents: write # the GitHub release and its assets
+      attestations: write # build provenance
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: metabot-dist
+          path: dist/
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: "dist/*"
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist/
+          attestations: true
+
+      # After the upload, since the publish step refuses a file in dist/ that
+      # is not a package. The bundle travels with the release, so the tag
+      # carries the proof of how its artifacts were built.
+      - name: Stage the attestation bundle as a release asset
+        run: |
+          cp "${{ steps.attest.outputs.bundle-path }}" \
+             "dist/orcha-metabot-${GITHUB_REF_NAME#metabot-v}.sigstore.json"
+
+      - name: Attach artifacts to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#metabot-v}"
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "MetaBot $VERSION" \
+              --notes "\`orcha-metabot\` $VERSION on PyPI: https://pypi.org/project/orcha-metabot/$VERSION/"
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Installs what PyPI serves, not the local wheel, and checks it reports the
+  # version the tag names.
+  verify-published:
+    name: Install the published version from PyPI
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/metabot-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Wait for the index to serve the new version
+        run: |
+          VERSION="${GITHUB_REF_NAME#metabot-v}"
+          for _ in $(seq 1 30); do
+            if curl -sf "https://pypi.org/pypi/orcha-metabot/$VERSION/json" >/dev/null; then
+              echo "orcha-metabot $VERSION is live"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::orcha-metabot $VERSION never appeared on PyPI"; exit 1
+
+      - name: Run the published version
+        run: |
+          VERSION="${GITHUB_REF_NAME#metabot-v}"
+          mkdir -p /tmp/pypi-smoke && cd /tmp/pypi-smoke
+          test "$(uvx --from "orcha-metabot==$VERSION" metabot --version)" = "metabot $VERSION"

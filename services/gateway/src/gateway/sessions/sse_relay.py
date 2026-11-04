@@ -56,6 +56,8 @@ async def proxy_superagent_sse(
     except httpx.HTTPStatusError as exc:
         logger.error("SSE relay upstream HTTP error: %s", exc)
         yield f"data: {json.dumps({'type': 'error', 'error': f'Upstream error {exc.response.status_code}'})}\n\n"
-    except Exception as exc:
+    except Exception:
+        # The detail stays in this log. The browser gets a fixed message: an
+        # exception's text can carry internal host names and addresses.
         logger.exception("SSE relay connection error")
-        yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'error': 'Upstream connection error'})}\n\n"

@@ -106,6 +106,7 @@ def test_server_serves_health_card_and_executes_task():
         assert fetched["id"] == result["id"]
     finally:
         httpd.shutdown()
+        httpd.server_close()
 
 
 def test_async_handler_supported():
@@ -123,3 +124,4 @@ def test_async_handler_supported():
         assert result["artifacts"][0]["parts"][0]["text"] == "async: x"
     finally:
         httpd.shutdown()
+        httpd.server_close()

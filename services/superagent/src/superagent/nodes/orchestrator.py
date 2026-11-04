@@ -17,6 +17,7 @@ import logging
 import re
 import re as _re
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -24,6 +25,7 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 
 from ..config import settings
+from ..graph.state import session_credentials_from_config
 from ..pnd.gate import pnd_gate
 from ..runtime.session_cancel import (
     get_cancel_event,
@@ -32,6 +34,15 @@ from ..runtime.session_cancel import (
 )
 from ..startup.platform_mcp_baseline import get_baseline_openai_tools
 from ..tool_call_parsing import normalize_stream_tool_calls
+from ..turn_model import TURN_MODEL_KEY, turn_model
+
+_NATIVE_CLIENT_HOST = "generativelanguage.googleapis.com"
+
+
+def _host_is(url: str, host: str) -> bool:
+    """True when ``url``'s host is exactly ``host``, not when it merely contains it."""
+    return (urlparse(url).hostname or "") == host
+
 
 # ── Module-level LLM client singletons ────────────────────────────────────────
 # Created once at import time; avoids TCP reconnect overhead on every turn.
@@ -73,9 +84,8 @@ def _make_chat_llm(
         logger.info(
             "orchestrator: BYOK active model=%s base=%s", byok_model, byok_base_url
         )
-        if (
-            byok_model.startswith("gemini-")
-            and "generativelanguage.googleapis.com" in byok_base_url
+        if byok_model.startswith("gemini-") and _host_is(
+            byok_base_url, _NATIVE_CLIENT_HOST
         ):
             from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -102,8 +112,8 @@ def _make_chat_llm(
     if model_override:
         use_native_gemini = model.startswith("gemini-")
     else:
-        use_native_gemini = "generativelanguage.googleapis.com" in (
-            settings.openrouter_base_url or ""
+        use_native_gemini = _host_is(
+            settings.openrouter_base_url or "", _NATIVE_CLIENT_HOST
         )
     if use_native_gemini:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -126,6 +136,38 @@ def _make_chat_llm(
         max_tokens=settings.orchestrator_max_tokens,
         **kwargs,
     )
+
+
+async def resolve_byok(config: RunnableConfig, user_id: str) -> dict[str, str] | None:
+    """The ``__llm__`` credentials for this turn, as a local — never state.
+
+    Session-scoped credentials on the run config win (the Gateway forwards
+    them per request); otherwise the permanent BYOK key written via
+    ``POST /api/v1/credentials scope=permanent`` is read from the vault at
+    call time. Returns None when there is no complete key. Never raises.
+    """
+    session = session_credentials_from_config(config).get("__llm__")
+    if isinstance(session, dict) and session.get("api_key"):
+        return {k: str(v) for k, v in session.items() if isinstance(v, str)}
+    if not user_id:
+        return None
+    try:
+        from ..vault.client import VaultClient
+
+        vault = VaultClient()
+        byok: dict[str, str] = {}
+        for var in ("api_key", "base_url", "model"):
+            value = await vault.get_agent_env(user_id, "__llm__", var)
+            if value:
+                byok[var] = value
+        if byok.get("api_key"):
+            logger.info(
+                "orchestrator: using permanent BYOK __llm__ key for user %s", user_id
+            )
+            return byok
+    except Exception:
+        logger.debug("orchestrator: BYOK vault read failed", exc_info=True)
+    return None
 
 
 def _get_small_llm() -> AsyncOpenAI:
@@ -673,11 +715,15 @@ async def orchestrator_llm_node(
         ", ".join(t["function"]["name"] for t in all_tools),
     )
 
+    # AD-14: the BYOK key is resolved into this local for the one call and is
+    # never assigned into state (state is checkpointed).
+    byok = await resolve_byok(config, str(state.get("user_id") or ""))
     chat = _make_chat_llm(
         stream_usage=True,
         model_override=state.get("orchestrator_model_override"),
-        byok=(state.get("_session_credentials") or {}).get("__llm__"),
+        byok=byok,
     )
+    del byok
     _assert_openai_compatible_tool_names(all_tools)
     bound = chat.bind_tools(all_tools) if all_tools else chat
 
@@ -735,8 +781,19 @@ async def orchestrator_llm_node(
 
     estimated_tokens = _estimate_tokens_lc(lc_messages)
 
+    # FR-13 / AD-21: the model that ran this call — the id the provider says
+    # it served, and where the request went — for the steps it requests (the
+    # receipt signs it) and for the turn's transcript row.
+    model_ran = turn_model(chat, accumulated)
+    if model_ran:
+        ai_message.response_metadata = {
+            **(ai_message.response_metadata or {}),
+            TURN_MODEL_KEY: model_ran,
+        }
+
     updates: dict[str, Any] = {
         "messages": [ai_message],
+        "_turn_model": model_ran,
         "estimated_token_count": estimated_tokens,
         # Actual output tokens for this turn — used by pipeline.py PaymentSettlement
         # to compute PLATFORM_TOKEN_RATE × completion_tokens cost.

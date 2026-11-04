@@ -1,5 +1,6 @@
 """Test manifest server for serving agent manifests during testing."""
 
+import os
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -10,9 +11,28 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+def _fixture_path(filename: str) -> Path:
+    """The fixture a request names: a bare ``*.yaml`` name inside FIXTURES_DIR.
+
+    Every endpoint takes ``filename`` from the request and the server listens
+    on all interfaces, so a name such as ``../../.env`` must never resolve to a
+    file outside the fixtures directory, for reading or for writing.
+    """
+    # realpath + startswith is the containment check the code scanner models.
+    base = os.path.realpath(FIXTURES_DIR)
+    path = os.path.realpath(os.path.join(base, filename))  # noqa: PTH118
+    if (
+        not path.startswith(base + os.sep)
+        or Path(path).name != filename
+        or not filename.endswith(".yaml")
+    ):
+        raise ValueError(f"Not a manifest fixture name: {filename}")
+    return Path(path)
+
+
 async def load_manifest_from_file(filename: str) -> dict[str, Any]:
     """Load manifest from a YAML file in the fixtures directory."""
-    file_path = FIXTURES_DIR / filename
+    file_path = _fixture_path(filename)
 
     if not file_path.exists():
         raise FileNotFoundError(f"Manifest file not found: {filename}")
@@ -255,6 +275,10 @@ async def upload_manifest(
         raise HTTPException(
             status_code=400, detail={"error": "Filename must end with .yaml extension"}
         )
+    try:
+        fixture_file = _fixture_path(filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
 
     if filename in list_available_manifests():
         raise HTTPException(
@@ -284,7 +308,6 @@ async def upload_manifest(
             ) from e
 
         # Save to fixtures directory
-        fixture_file = FIXTURES_DIR / filename
         with fixture_file.open("w") as f:
             f.write(yaml_content)
 
@@ -329,7 +352,7 @@ async def delete_manifest(filename: str):
 
     try:
         # Delete file
-        fixture_file = FIXTURES_DIR / filename
+        fixture_file = _fixture_path(filename)
         if fixture_file.exists():
             fixture_file.unlink()
 

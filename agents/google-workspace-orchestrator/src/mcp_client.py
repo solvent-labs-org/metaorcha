@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from .token_store import log_ref
+
 logger = logging.getLogger(__name__)
 
 _JSONRPC = "2.0"
@@ -114,13 +116,12 @@ class WorkspaceMCPClient:
     ) -> tuple[dict[str, Any], httpx.Headers]:
         headers = self._merge_request_headers(bearer, include_session=include_session)
         method_name = (payload.get("params") or {}).get("name") or payload.get("method", "?")
-        bearer_prefix = (bearer or "")[:12] + "…" if bearer else "<none>"
         logger.info(
-            "mcp_post url=%s method=%s has_bearer=%s bearer_prefix=%s session_id=%s",
+            "mcp_post url=%s method=%s has_bearer=%s bearer_ref=%s session_id=%s",
             self._url,
             method_name,
             bool(bearer),
-            bearer_prefix,
+            log_ref(bearer) if bearer else "<none>",
             self._session_id,
         )
         async with httpx.AsyncClient(timeout=self._timeout) as client:

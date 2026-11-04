@@ -16,8 +16,16 @@ from internal_commons.interrupts import (
     InterruptType,
 )
 
-from .auth_manager import AuthManager, AuthResolutionError
-from .manifest_cache import MANIFEST_CACHE
+from .auth_manager import AuthManager, AuthResolutionError, read_credential, token_ref
+from .connections import (
+    CONNECTION_REVOKED,
+    CONNECTIONS_DISABLED,
+    connection_unavailable,
+    connections_enabled,
+    credential_missing,
+    is_connection,
+)
+from .manifest_cache import MANIFEST_CACHE, ManifestUnavailable
 from .oauth_grants import (
     capability_grant_key as _redis_cap_key,
 )
@@ -32,6 +40,16 @@ _health_cache: dict[str, tuple[bool, float]] = {}
 _HEALTH_TTL = 30.0  # seconds
 
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
+
+# AD-13: ``platform_env`` (a secret read from the SuperAgent process env) is a
+# platform-tool mechanism. Only ``did:orcha:system:*`` manifests may use it; a
+# user-registered agent naming ``VAULT_KEY`` as its env_key gets nothing.
+PLATFORM_DID_PREFIX = "did:orcha:system:"
+ENV_UNRESOLVED = "env_unresolved"
+
+
+def platform_env_allowed(agent_id: str) -> bool:
+    return isinstance(agent_id, str) and agent_id.startswith(PLATFORM_DID_PREFIX)
 
 
 def _oauth_grant_key(agent_id: str, capability_id: str) -> str:
@@ -115,6 +133,17 @@ class PreFlightManager:
         manifest = await MANIFEST_CACHE.get_manifest(agent_id)
         transport_type = manifest.get("transport", {}).get("type", "").upper()
 
+        # 1.5 Connections (story 1.3): refused while the feature is off, and a
+        #     missing token fails here, before the health probe below sends
+        #     anything to the platform. Story 1.7: the check reads the
+        #     Registry fresh and returns that manifest, so a removed
+        #     connection stops on its next call.
+        connection = is_connection(manifest)
+        if connection:
+            manifest = await self._assert_connection_callable(
+                agent_id, user_id, manifest, capability_id
+            )
+
         # 2. Health check — skipped for STDIO agents (they are spawned as subprocesses,
         #    not long-running HTTP services; there is no endpoint to probe).
         if transport_type != "STDIO":
@@ -160,8 +189,21 @@ class PreFlightManager:
             )
         else:
             try:
-                headers = await self._auth.resolve(agent_id, user_id, auth_strategies)
+                headers = await self._auth.resolve(
+                    agent_id, user_id, auth_strategies, scoped_only=connection
+                )
             except AuthResolutionError:
+                if connection:
+                    # The token went between the check above and this read
+                    # (revoked mid-call): the same named failure, no request.
+                    raise PreFlightError(
+                        credential_missing(
+                            next(
+                                (r for r in map(token_ref, auth_strategies) if r),
+                                "its token",
+                            )
+                        )
+                    ) from None
                 logger.info(
                     "Auth resolution failed for %s — raising AuthInterruptRequired",
                     agent_id,
@@ -194,6 +236,15 @@ class PreFlightManager:
                 env_key = (strategy.get("config") or {}).get("env_key") or ""
                 if not env_key:
                     continue
+                if not platform_env_allowed(agent_id):
+                    logger.warning(
+                        "platform_env strategy %r ignored for agent=%s: platform "
+                        "secrets are for %s* manifests only (AD-13)",
+                        strategy.get("id", ""),
+                        agent_id,
+                        PLATFORM_DID_PREFIX,
+                    )
+                    continue
                 val = os.environ.get(env_key)
                 if val is not None and val != "":
                     raw_env[env_key] = val
@@ -219,6 +270,80 @@ class PreFlightManager:
             "headers": headers,
             "resolved_env": resolved_env,
         }
+
+    async def _assert_connection_callable(
+        self,
+        agent_id: str,
+        user_id: str,
+        manifest: dict[str, Any],
+        capability_id: str,
+    ) -> dict[str, Any]:
+        """Refuse a connection call that cannot succeed, before any request.
+
+        Returns the connection's manifest as the Registry holds it now.
+
+        Raises PreFlightError (a named hard failure, not an auth interrupt):
+
+        - ``connections_disabled`` while CONNECTIONS_ENABLED is off;
+        - ``connection_unavailable`` when the Registry record cannot be read
+          now, does not say it is active, or no longer names a connection —
+          the cached copy is never trusted for a connection (AD-6);
+        - ``connection_revoked`` when the connection was removed (story 1.7);
+        - ``credential_missing`` when the connection has token strategies and
+          the caller's vault holds none of their tokens under this
+          connection's own key (a bare row is never read for a connection).
+        """
+        if not connections_enabled():
+            raise PreFlightError(CONNECTIONS_DISABLED)
+        try:
+            manifest = await MANIFEST_CACHE.get_manifest(agent_id, fresh=True)
+        except ManifestUnavailable:
+            raise PreFlightError(
+                connection_unavailable("the Registry record could not be read")
+            ) from None
+        active = manifest.get("is_active")
+        if active is False:
+            raise PreFlightError(CONNECTION_REVOKED)
+        if active is not True or not is_connection(manifest):
+            raise PreFlightError(
+                connection_unavailable(
+                    "the Registry record is not an active connection"
+                )
+            )
+        refs = [
+            ref
+            for ref in (
+                token_ref(s)
+                for s in self._extract_auth_strategies(manifest, capability_id)
+            )
+            if ref
+        ]
+        present: set[str] = set()
+        if refs:
+            for ref in refs:
+                if await read_credential(
+                    self._vault, user_id, agent_id, ref, scoped_only=True
+                ):
+                    present.add(ref)
+                    break
+            else:
+                raise PreFlightError(credential_missing(refs[0]))
+        # A stdio connection can carry its token as a ``${VAR}`` in
+        # ``transport.env`` alone. Every such variable must be in this
+        # connection's own vault key too: a session-scoped copy (which the env
+        # resolver reads first) must not revive a revoked token (story 1.7).
+        transport = manifest.get("transport") or {}
+        if str(transport.get("type") or "").upper() == "STDIO":
+            for template in (transport.get("env") or {}).values():
+                for var in _PLACEHOLDER_RE.findall(str(template)):
+                    if var in present:
+                        continue
+                    if not await read_credential(
+                        self._vault, user_id, agent_id, var, scoped_only=True
+                    ):
+                        raise PreFlightError(credential_missing(var))
+                    present.add(var)
+        return manifest
 
     # ── Auth interrupt construction ───────────────────────────────────────────
 
@@ -311,9 +436,10 @@ class PreFlightManager:
         import urllib.parse
 
         def _resolve(value: str) -> str:
-            return _PLACEHOLDER_RE.sub(
-                lambda m: os.environ.get(m.group(1), m.group(0)), value
-            )
+            # AD-13: a ``${VAR}`` is never expanded from the host environment.
+            # Left in place, the placeholder routes to the agent's own connect
+            # endpoint below, which holds its own credentials.
+            return value
 
         base = cfg.get("authorization_url", "")
         if not base:
@@ -437,24 +563,18 @@ class PreFlightManager:
                         user_id,
                     )
                 else:
-                    # 2. Host environment
-                    secret = os.environ.get(var_name)
-                    if secret is not None:
-                        logger.debug(
-                            "Resolved ${%s} for agent=%s from host env",
-                            var_name,
-                            agent_id,
-                        )
-                    else:
-                        logger.error(
-                            "Missing env var ${%s} for agent=%s user=%s — "
-                            "not found in vault or host env.",
-                            var_name,
-                            agent_id,
-                            user_id,
-                        )
-                        missing.append(var_name)
-                        continue
+                    # AD-13: no host-environment fallback. A ``${VAR}`` the
+                    # vault cannot resolve fails the call as env_unresolved.
+                    logger.error(
+                        "%s: ${%s} for agent=%s user=%s is not in the vault "
+                        "(the host environment is never consulted)",
+                        ENV_UNRESOLVED,
+                        var_name,
+                        agent_id,
+                        user_id,
+                    )
+                    missing.append(var_name)
+                    continue
 
                 value = value.replace(f"${{{var_name}}}", secret)
 
@@ -462,9 +582,9 @@ class PreFlightManager:
 
         if missing:
             raise PreFlightError(
-                f"Agent {agent_id!r} requires credentials that are not configured "
-                f"for user {user_id!r}. Missing env vars: {missing}. "
-                f"Store them via POST /secrets/agent-env."
+                f"{ENV_UNRESOLVED}: agent {agent_id!r} requires credentials that "
+                f"are not in the vault for user {user_id!r}. Missing env vars: "
+                f"{missing}. Store them via POST /secrets/agent-env."
             )
 
         return resolved

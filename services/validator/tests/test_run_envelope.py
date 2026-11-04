@@ -301,14 +301,15 @@ def _roundtrip_envelope() -> dict[str, Any]:
 def test_roundtrip_build_sign_verify() -> None:
     signed = _roundtrip_envelope()
     assert verify_run_envelope(signed) is True
-    # Explicit public key override verifies the same envelope.
-    assert verify_run_envelope(signed, EXAMPLE_PUBLIC_KEY_B64) is True
-    # A different key must fail.
+    assert signed["signer"]["public_key_b64"] == EXAMPLE_PUBLIC_KEY_B64
+    # The verifier checks the signature against the envelope's own signer key
+    # (AD-5): naming a different key breaks the digest and the signature.
     other = Ed25519PrivateKey.from_private_bytes(b"\x09" * 32)
     other_pub = base64.b64encode(
         other.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     ).decode("ascii")
-    assert verify_run_envelope(signed, other_pub) is False
+    renamed = {**signed, "signer": {**signed["signer"], "public_key_b64": other_pub}}
+    assert verify_run_envelope(renamed) is False
 
 
 def test_tampered_step_hashes_fail_verification() -> None:
@@ -910,3 +911,20 @@ async def test_get_latest_run_attestation_rejects_bad_input() -> None:
     assert await get_latest_run_attestation_for_session(None, db=db) is None
     assert await get_latest_run_attestation_for_session("", db=db) is None
     assert await get_run_attestation_record(None, db=db) is None
+
+
+def test_verify_run_envelope_is_false_on_anything_that_is_not_an_envelope(
+    monkeypatch,
+):
+    # the SDK verifier is total (a non-dict is simply invalid) ...
+    assert verify_run_envelope(None) is False  # type: ignore[arg-type]
+    assert verify_run_envelope("x") is False  # type: ignore[arg-type]
+    assert verify_run_envelope({}) is False
+    assert verify_run_envelope({"signer": None, "steps": 3}) is False
+
+    # ... and should it ever raise, the wrapper's defensive answer is False
+    def _boom(_envelope):
+        raise RuntimeError("verifier fault")
+
+    monkeypatch.setattr("validator.run_envelope.verify_run_attestation", _boom)
+    assert verify_run_envelope({"format": "orcha.run-attestation/v1"}) is False

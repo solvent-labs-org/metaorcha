@@ -8,11 +8,14 @@ dependencies = [
   "httpx>=0.27",
   "common-database",
   "emerge-node",
+  # the one producer and verifier of the record (AD-5, AD-20)
+  "orcha-sdk",
 ]
 
 [tool.uv.sources]
 common-database = {workspace = true}
 emerge-node = {workspace = true}
+orcha-sdk = {workspace = true}
 
 [build-system]
 requires = ["hatchling"]

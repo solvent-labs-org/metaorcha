@@ -12,6 +12,8 @@ import type {
   WalletTransactionsResponse,
   WithdrawRequest,
   WorkflowResponse,
+  CreateRoutineRequest,
+  FiringResponse,
   WorkflowStatus,
 } from '../types'
 import type { PaginatedSessionsDTO, TranscriptEntryDTO } from '../types/transcript'
@@ -272,6 +274,12 @@ export const workflows = {
       body: JSON.stringify({ session_id, name, description }),
     }),
 
+  createRoutine: (body: CreateRoutineRequest) =>
+    apiFetch<WorkflowResponse>('/api/v1/workflows/routines', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   update: (id: string, patch: { name?: string; description?: string; status?: WorkflowStatus }) =>
     apiFetch<WorkflowResponse>(`/api/v1/workflows/${id}`, {
       method: 'PATCH',
@@ -280,6 +288,9 @@ export const workflows = {
 
   delete: (id: string) =>
     apiFetch<void>(`/api/v1/workflows/${id}`, { method: 'DELETE' }),
+
+  firings: (id: string, limit = 20) =>
+    apiFetch<FiringResponse[]>(`/api/v1/workflows/${id}/firings?limit=${limit}`),
 }
 
 // ── Dev Agents ────────────────────────────────────────────────────────────────
@@ -315,6 +326,28 @@ export const devAgents = {
 
   delete: (id: string) =>
     apiFetch<void>(`/api/v1/dev/agents/${id}`, { method: 'DELETE' }),
+}
+
+// ── Plugins (user-owned MCP) ──────────────────────────────────────────────────
+export interface ConnectMcpRequest {
+  name: string
+  description?: string
+  transport: 'sse' | 'stdio'
+  endpoint?: string
+  command?: string
+  args?: string[]
+  /** Environment-variable name for the token; sent only together with auth_value. */
+  auth_var?: string
+  auth_value?: string
+}
+
+export const plugins = {
+  /** The Gateway builds the manifest and stores the token in the vault (PR #81). */
+  connectMcp: (body: ConnectMcpRequest) =>
+    apiFetch<RegisterAgentResponse>('/api/v1/plugins/mcp', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

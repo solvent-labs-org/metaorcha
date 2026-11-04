@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -22,6 +23,12 @@ class MCPAdapter(BaseAdapter):
     Routing is determined by the ``transport_type`` constructor argument, which
     must match the ``type`` field in the agent's Transport record — not inferred
     from the endpoint URL.
+
+    ``headers`` authenticate the listing calls (``initialize`` and the three
+    ``*/list``) of a server that gates them behind a token, as a connection's
+    does. They are held for this harvest only: never stored, never logged, and
+    never sent on a ``tools/call``, because a call made with the user's token
+    can act on their account.
     """
 
     def __init__(
@@ -30,9 +37,11 @@ class MCPAdapter(BaseAdapter):
         transport_type: str = "http",
         timeout: float = 10.0,
         max_retries: int = 3,
+        headers: Mapping[str, str] | None = None,
     ):
         super().__init__(endpoint=endpoint, timeout=timeout, max_retries=max_retries)
         self._is_sse = transport_type.lower() == "sse"
+        self._headers = dict(headers or {})
 
     async def harvest(self) -> HarvestResult:
         """Harvest MCP capabilities.
@@ -63,7 +72,10 @@ class MCPAdapter(BaseAdapter):
 
         try:
             async with (
-                sse_client(self.endpoint) as (read, write),
+                sse_client(self.endpoint, headers=self._headers or None) as (
+                    read,
+                    write,
+                ),
                 ClientSession(read, write) as session,
             ):
                 await session.initialize()
@@ -215,7 +227,7 @@ class MCPAdapter(BaseAdapter):
 
     async def _harvest_tools(self) -> list[CapabilityData]:
         payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers=self._headers) as client:
             response = await self._retry_request(client, payload)
             tools = []
             if "result" in response and "tools" in response["result"]:
@@ -238,7 +250,7 @@ class MCPAdapter(BaseAdapter):
 
     async def _harvest_resources(self) -> list[CapabilityData]:
         payload = {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers=self._headers) as client:
             response = await self._retry_request(client, payload)
             resources = []
             if "result" in response and "resources" in response["result"]:
@@ -257,7 +269,7 @@ class MCPAdapter(BaseAdapter):
 
     async def _harvest_prompts(self) -> list[CapabilityData]:
         payload = {"jsonrpc": "2.0", "id": 3, "method": "prompts/list", "params": {}}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers=self._headers) as client:
             response = await self._retry_request(client, payload)
             prompts = []
             if "result" in response and "prompts" in response["result"]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import AsyncMock
 
 # Add the project root to sys.path so `common.*` namespace packages are importable
@@ -24,6 +25,27 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/tes
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 os.environ.setdefault("SUPERAGENT_URL", "http://127.0.0.1:8001")
 os.environ.setdefault("REGISTRY_URL", "http://127.0.0.1:8003")
+
+
+class FakeJson:
+    """Stands in for prisma's ``Json`` column wrapper (``.data`` holds the value)."""
+
+    def __init__(self, data) -> None:
+        self.data = data
+
+
+@pytest.fixture(autouse=True)
+def prisma_json_stub(monkeypatch):
+    """CI has no generated Prisma client; routes import ``Json`` at call time.
+
+    Every Gateway test sees this stub instead, so a run reads the same with or
+    without the generated client on disk.
+    """
+    fields = ModuleType("common.database.src.generated_client.fields")
+    fields.Json = FakeJson
+    monkeypatch.setitem(
+        sys.modules, "common.database.src.generated_client.fields", fields
+    )
 
 
 def _make_db_mock() -> AsyncMock:

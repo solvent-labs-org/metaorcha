@@ -1,6 +1,6 @@
 """A dependency-light A2A-compatible HTTP server for SDK agents.
 
-Implements the same wire contract the Orcha SuperAgent speaks to A2A agents,
+Implements the same wire contract the Metaorcha SuperAgent speaks to A2A agents,
 using only the standard library so ``emerge run`` has no heavy dependencies:
 
 - ``GET  /health``                  → liveness probe
@@ -99,7 +99,7 @@ def _make_handler(spec: AgentSpec, host: str):
             self.end_headers()
             self.wfile.write(body)
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             if self.path == "/health":
                 self._send_json(
                     {"status": "healthy", "agent": spec.name, "version": spec.version}
@@ -109,7 +109,7 @@ def _make_handler(spec: AgentSpec, host: str):
             else:
                 self._send_json({"error": "not found"}, status=404)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", 0) or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
@@ -137,15 +137,15 @@ def _make_handler(spec: AgentSpec, host: str):
                 try:
                     answer = asyncio.run(spec.invoke(query))
                     task = _completed_task(task_id, answer)
-                except Exception as exc:  # noqa: BLE001 - surface as failed task
+                except Exception as exc:  # a handler that raises is a failed task
                     logger.exception("Handler raised for task %s", task_id)
                     task = _failed_task(task_id, str(exc))
                 task_store[task_id] = task
                 self._send_json({"jsonrpc": "2.0", "id": rpc_id, "result": task})
             elif method == "tasks/get":
                 task_id = params.get("id", "")
-                task = task_store.get(task_id)
-                if task is None:
+                found = task_store.get(task_id)
+                if found is None:
                     self._send_json(
                         {
                             "jsonrpc": "2.0",
@@ -157,7 +157,7 @@ def _make_handler(spec: AgentSpec, host: str):
                         }
                     )
                 else:
-                    self._send_json({"jsonrpc": "2.0", "id": rpc_id, "result": task})
+                    self._send_json({"jsonrpc": "2.0", "id": rpc_id, "result": found})
             else:
                 self._send_json(
                     {

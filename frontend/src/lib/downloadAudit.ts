@@ -1,7 +1,7 @@
 import { sessions } from '../api/client'
 
 /**
- * Fetch the Verified Runs audit package for a session and trigger a JSON
+ * Fetch the run evidence package for a session and trigger a JSON
  * download. Shared by the chat header button and the developer Run tab.
  * Throws on failure — callers decide how to surface the error.
  */

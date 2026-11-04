@@ -1,4 +1,4 @@
-.PHONY: help install clean test test-all lint format docker-up docker-down docker-dev-up docker-dev-down migrate migrate-dev migrate-reset db-indices prisma-generate grpc-generate dev dev-watch seed check setup ci test-manifest-server test-manifest-server-stop pnd-dev pnd-dev-watch pnd-test pnd-test-unit pnd-test-cov pnd-db-init kafka-up kafka-down kafka-topics sa-dev sa-dev-watch sa-test sa-test-unit sa-test-cov redis-up redis-down chat gw-dev gw-dev-watch gw-test run-all run-all-quick stop-all
+.PHONY: help install clean test test-all lint format docker-up docker-down docker-dev-up docker-dev-down migrate migrate-dev migrate-reset db-indices prisma-generate grpc-generate dev dev-watch seed check sdk-check metabot-check setup ci test-manifest-server test-manifest-server-stop pnd-dev pnd-dev-watch pnd-test pnd-test-unit pnd-test-cov pnd-db-init kafka-up kafka-down kafka-topics sa-dev sa-dev-watch sa-test sa-test-unit sa-test-cov redis-up redis-down chat gw-dev gw-dev-watch gw-test run-all run-all-quick stop-all
 
 # Colors for output
 BLUE := \033[0;34m
@@ -280,8 +280,19 @@ seed-live: ## Register fleet agents from agents/*/emerge.yaml (registry + agents
 	@printf '$(YELLOW)Requires: registry running + HTTP agents up (make run-all)$(RESET)\n'
 	@./scripts/seed-live-agents.sh --embeddings
 
-check: lint format-check test-all ## Run all checks (lint, format, test)
+check: lint format-check test-all sdk-check metabot-check ## Run all checks (lint, format, test)
 	@printf '$(GREEN)✓ All checks passed$(RESET)\n'
+
+sdk-check: ## Lint, format-check and test the SDK (sdk/), as CI does
+	uv run ruff check sdk/src/
+	uv run ruff format --check sdk/src/
+	uv run pytest sdk/tests/ -q
+
+metabot-check: ## Lint, format-check, type-check and test MetaBot (apps/metabot), as CI does
+	cd apps/metabot && uv run --package orcha-metabot ruff check src tests
+	cd apps/metabot && uv run --package orcha-metabot ruff format --check src tests
+	cd apps/metabot && uv run --package orcha-metabot mypy
+	cd apps/metabot && uv run --package orcha-metabot pytest -q -W error::ResourceWarning
 
 setup: install prisma-generate grpc-generate migrate ## Initial project setup
 	@printf '$(GREEN)✓ Setup complete$(RESET)\n\n'
@@ -290,7 +301,7 @@ setup: install prisma-generate grpc-generate migrate ## Initial project setup
 	@printf '  2. Run: make dev\n'
 	@printf '  3. Visit: http://localhost:8000/docs\n'
 
-ci: lint format-check test-all ## Run CI checks locally
+ci: lint format-check test-all sdk-check metabot-check ## Run CI checks locally
 	@printf '$(GREEN)✓ CI checks passed$(RESET)\n'
 
 test-manifest-server: ## Start test manifest server for API testing
