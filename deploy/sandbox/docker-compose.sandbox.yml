@@ -103,6 +103,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DISABLE_AUTH: "true"
       PAYMENT_MODE: mock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres: {condition: service_healthy}
       kafka: {condition: service_healthy}
@@ -152,6 +154,17 @@ services:
       COMPUTER_USE_BACKEND: playwright
       COMPUTER_USE_MODEL: qwen/qwen3.6-27b
       COMPUTER_USE_ALLOWED_DOMAINS: en.wikipedia.org,example.com
+      # Run attestation (RFC 0003). Unset in .env.sandbox → stock behaviour.
+      # See the "Run attestation" block in .env.sandbox.example.
+      RUN_ATTESTATION_ENABLED: ${RUN_ATTESTATION_ENABLED:-false}
+      SETTLEMENT_REQUIRE_ATTESTATION: ${SETTLEMENT_REQUIRE_ATTESTATION:-false}
+      RUN_ATTESTATION_CHARTER_HASH: ${RUN_ATTESTATION_CHARTER_HASH:-}
+      ATTESTATION_PRIVATE_KEY_B64: ${ATTESTATION_PRIVATE_KEY_B64:-}
+      ATTESTATION_ALLOW_EPHEMERAL_KEY: ${ATTESTATION_ALLOW_EPHEMERAL_KEY:-}
+    extra_hosts:
+      # Lets a container reach an MCP or A2A server you run on the host
+      # (register it as http://host.docker.internal:<port>).
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis: {condition: service_healthy}
       registry: {condition: service_started}
@@ -178,6 +191,8 @@ services:
       PAYMENT_MODE: mock
       SANDBOX_MODE: "true"
       SANDBOX_MAX_DAILY_MESSAGES: ${SANDBOX_MAX_DAILY_MESSAGES:-500}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
