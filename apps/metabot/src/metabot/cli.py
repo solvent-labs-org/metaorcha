@@ -192,9 +192,15 @@ def _run_options(p: argparse.ArgumentParser) -> None:
     )
 
 
+def command_name() -> str:
+    """The name this was started by: ``metabot`` stays an alias of ``metaorcha``."""
+    typed = os.path.basename(sys.argv[0]) if sys.argv else ""
+    return typed if typed in ("metaorcha", "metabot") else "metaorcha"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="metabot",
+        prog=command_name(),
         description="A local bot that runs on the plan you already have and proves its work.",
         allow_abbrev=False,
     )
@@ -684,7 +690,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(words)
     if args.version:
-        print(f"metabot {__version__}")
+        print(f"{command_name()} {__version__}")
         return 0
     func = getattr(args, "func", None)
     if func is None:
