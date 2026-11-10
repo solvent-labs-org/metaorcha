@@ -29,6 +29,9 @@ the pairing payload, the capability block, the module manifest) is called out as
   the same scrubbed environment as a desk, one process group); the run links to its receipt, reports
   how it ended, counts toward `max_runs`, and `POST /api/kill` ends the whole tree. New route
   `GET /api/mb/runlog/<name>` (contract: app API) returns the log tail, pid, liveness and exit.
+- `make selftest-linux` runs the journeys twice: with tmux on PATH (desks) and as the phone
+  runs them (`METABOT_ON_DEVICE=1`, no desks); `ask_receipt`, `tools_offline` and
+  `recovery_engine` no longer need desks.
 - The wheelhouse (`packaging/wheelhouse.py`): the sdk, the core and the app built as wheels,
   their pinned dependencies downloaded as wheels only (never an sdist) for one platform, and a
   `requirements.lock` with a sha256 per file, so a desktop bundle installs offline.

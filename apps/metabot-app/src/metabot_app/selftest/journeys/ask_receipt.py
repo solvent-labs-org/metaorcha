@@ -3,7 +3,7 @@ app's verify route and by the core's own verifier, within budget."""
 from .. import fake_engine as fe
 
 AXIS = "clarity"
-NEEDS = ("desks",)          # the app's run path is a terminal desk until the no-tmux path lands
+NEEDS = ()                  # the app runs the core itself where no desk exists (no tmux, the phone)
 BUDGET = {"run done": 10_000}
 SCENARIOS = {"ask": [fe.answer("Forty-two.")]}
 

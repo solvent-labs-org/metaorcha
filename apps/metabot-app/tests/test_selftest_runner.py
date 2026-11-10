@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -102,9 +103,10 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(callable(mod.run))
         # a journey whose needs are not met is skipped with the reason in the report, never silent
         mod2 = journeys.load("tools_offline")
-        self.assertIn("desks", mod2.NEEDS)
-        self.s.caps = {"desks": False, "engines": {"openai": "http"}}
-        self.s.run_journey("tools_offline")
+        self.assertEqual(mod2.NEEDS, ())   # since the app runs the core itself where no desk exists
+        with mock.patch.object(mod2, "NEEDS", ("desks",)):
+            self.s.caps = {"desks": False, "engines": {"openai": "http"}}
+            self.s.run_journey("tools_offline")
         rows = report.read(self.s.report.path)
         self.assertEqual(rows[-1]["status"], "skip")
         self.assertIn("desks", rows[-1]["detail"])

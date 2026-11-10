@@ -68,3 +68,10 @@ MB_STATE=/path/to/state MB_CONFIG=/path/to/config.json tools/tablet-e2e.sh remot
 Steps, each a line in the same `report.jsonl` shape as the Linux runner: install (a build signed with another key is uninstalled first; only this test package), the reverse tunnel, a pairing code from `metabot-app pair`, the words the tablet logged compared with the computer's, the page open over TLS, the device listed, revoke from the CLI, the pairing screen back, and a second pairing. Screenshots and `report.md` sit beside the report under `TABLET_OUT` (default `/var/tmp/metabot-app/tablet/<timestamp>/`).
 
 The hook the script uses exists only in a debuggable build: the launcher activity forwards the intent extras `address`, `code` and `confirm` to the pairing screen, which types them once the page has loaded and logs the four words. A release build ignores the extras, and the pairing screen itself is never exported.
+
+## Two passes on Linux
+
+`make selftest-linux` runs every journey twice: once with tmux on PATH (`caps.desks` true,
+a run is a desk) and once under `METABOT_ON_DEVICE=1` (no desks, no sandbox, the app runs the
+core as its own child, as the phone does). Each pass writes its own session folder under
+`SELFTEST_OUT/desks` and `SELFTEST_OUT/on-device`; CI archives both reports.
