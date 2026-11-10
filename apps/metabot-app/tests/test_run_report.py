@@ -133,6 +133,21 @@ class RunReportTests(unittest.TestCase):
         self.assertIn("time limit", ev[0]["message"])
         self.assertEqual(ev[0]["run"]["status"], "error")
 
+    def test_a_refused_key_says_to_check_the_key(self):
+        name = self.start_run(engine="openai")
+        child = self.live("mbkey")
+        self.tick()
+        self.end(child, "mbkey")
+        self.row("mbkey", status="error", steps=0, final="",
+                 error='openai: http://127.0.0.1:1/v1 answered 401: {"error": {"message": "bad key"}}')
+        self.tick()
+        ev = self.posted()
+        self.assertEqual(len(ev), 1, ev)
+        self.assertTrue(ev[0]["message"].startswith("The run failed: "), ev[0]["message"])
+        self.assertIn("answered 401", ev[0]["message"])
+        self.assertTrue(ev[0]["message"].endswith(" Check this engine's key in Settings → Accounts."),
+                        ev[0]["message"])
+
     def test_a_run_that_ended_with_no_receipt_says_so(self):
         name = self.start_run()
         self.env.set_pane(f"fc-{name}", "$ metabot ask -e nope - <prompt>\nmetabot: no engine nope\n\n[metachat] exit 2\n$ ")

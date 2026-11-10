@@ -22,7 +22,7 @@ the pairing payload, the capability block, the module manifest) is called out as
 - One server per state folder (`STATE/server.json`); a second `serve` reports the first.
 - The self-test: a scripted fake engine, a runner, the journeys `cold_start`,
   `setup_first_run`, `ask_receipt`, `tools_offline`, `workflow_chain`, `concurrency`, `recovery_kill`,
-  `recovery_engine`,
+  `recovery_engine`, `wrong_key`, `receipt_view_clarity`,
   the report, `tools/selftest-linux.sh` and the tablet walk `tools/tablet-e2e.sh`.
 - The claims page (`docs/CLAIMS.md`) and the test that keeps every claim tied to a proof.
 - Runs without tmux (T2/E3): on a host with no tmux, and on the phone, `POST /api/run` starts the
@@ -30,6 +30,8 @@ the pairing payload, the capability block, the module manifest) is called out as
   the same scrubbed environment as a desk, one process group); the run links to its receipt, reports
   how it ended, counts toward `max_runs`, and `POST /api/kill` ends the whole tree. New route
   `GET /api/mb/runlog/<name>` (contract: app API) returns the log tail, pid, liveness and exit.
+- A run a hosted engine refused (it answered 401 or 403) tells its lane to check the engine's key in
+  Settings → Accounts, beside the engine's own error.
 - A run whose process is gone and that sealed no receipt (the app, and the run with it, killed
   mid-run) is listed by `GET /api/mb/runs` as `state: "interrupted"` with a plain `problem`, never
   shown live or done and never dropped (contract: a third run state beside `live` and `done`).

@@ -2553,11 +2553,16 @@ def _run_summary(row, run_id):
     return run
 
 
+KEY_REFUSED_RE = re.compile(r"\banswered (401|403)\b")
+
+
 def _run_message(row):
     final = row.get("final") if isinstance(row.get("final"), str) else ""
     if row.get("status") not in (None, "ok"):
         why = row.get("error") if isinstance(row.get("error"), str) and row.get("error") else final or str(row.get("status"))
         text = "The run failed: " + why
+        if KEY_REFUSED_RE.search(why):   # a hosted engine refused the key: say where to fix it
+            text += " Check this engine's key in Settings → Accounts."
     else:
         text = final.strip() or "The run ended with no answer."
     return text if len(text) <= MIRROR_TEXT_MAX else text[:MIRROR_TEXT_MAX] + "…"

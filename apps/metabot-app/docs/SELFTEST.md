@@ -55,6 +55,8 @@ exits 0 clean, 1 a failed step, 2 a budget miss, 3 incomplete.
 | `concurrency` | real work | three runs at once through the app (`max_runs` 3), a fourth refused with 409 at the cap, overlap proven from the receipts' start and finish times, every receipt verifies, the slot comes back |
 | `recovery_kill` | recovery | the app is killed mid-run and the run with it (no shutdown, as a phone's OS does); it comes back, lists the run as interrupted with no receipt, the run's own log says why (where the app ran the core itself), and the next run works and verifies |
 | `recovery_engine` | recovery | a failing, refusing, truncating or slow model server: every run ends, says why, and its receipt verifies and records the failure |
+| `wrong_key` | setup | the model server refuses the key (401): the first run fails inside 5 s, its receipt verifies and records the failure, and the lane message names the 401 and says to check the engine's key in Settings → Accounts |
+| `receipt_view_clarity` | clarity | a two-tool read-only run through the app: every step row of the run view names its tool, its time and a pass verdict, the signed start and finish show, the verify route says valid and the index digest matches, the served receipt is the file on disk, and a copy with one step's output edited is reported invalid |
 
 A run whose model server fails still gets a signed receipt that verifies, with
 `ok` false and the error in it; that is the clarity the journey checks for.
