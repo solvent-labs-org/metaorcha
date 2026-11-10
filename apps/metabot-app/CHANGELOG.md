@@ -24,6 +24,9 @@ the pairing payload, the capability block, the module manifest) is called out as
   `setup_first_run`, `ask_receipt`, `tools_offline`, `workflow_chain`, `recovery_engine`,
   the report, `tools/selftest-linux.sh` and the tablet walk `tools/tablet-e2e.sh`.
 - The claims page (`docs/CLAIMS.md`) and the test that keeps every claim tied to a proof.
+- The wheelhouse (`packaging/wheelhouse.py`): the sdk, the core and the app built as wheels,
+  their pinned dependencies downloaded as wheels only (never an sdist) for one platform, and a
+  `requirements.lock` with a sha256 per file, so a desktop bundle installs offline.
 
 ### Security
 - A wrong token or pairing code locks the address out briefly, per listener and per kind;
