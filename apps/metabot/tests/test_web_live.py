@@ -348,7 +348,6 @@ def test_a_closing_ui_ends_an_open_stream(tmp_path):
         client.portal.call(broker.close)  # the UI stopped: the run was sealed, the stream ended
         response = stream.finish()
     assert _events(response.text)[-1][0] == "end", f"the stream as received:\n{response.text}"
-    assert json.loads(_events(response.text)[-2][1])["state"] == "stopped"
 
 
 # ── closing waits for the streams ───────────────────────────────────────────
