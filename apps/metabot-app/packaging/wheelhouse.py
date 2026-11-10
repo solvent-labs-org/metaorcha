@@ -8,7 +8,9 @@ pinned dependencies as wheels only (never an sdist) for one platform, and writes
                                     [--root REPO] [--dry-run]
 
 Standard library only. The network is used by ``pip download`` alone; CI runs it, a
-developer machine runs ``--dry-run``. Exit 0 when the lock is written, 1 when a step fails,
+developer machine runs ``--dry-run``. pip evaluates the lock's environment markers
+(``sys_platform``, ...) against the interpreter running it, not the target, so each
+platform's wheelhouse is built on a runner of that OS. Exit 0 when the lock is written, 1 when a step fails,
 2 for a usage error.
 """
 from __future__ import annotations
@@ -21,9 +23,14 @@ import sys
 from pathlib import Path
 
 PACKAGES = ("sdk", "apps/metabot", "apps/metabot-app")   # relative to the repo root, build order
+# Every wheel tag a bundle accepts, preferred first. pip takes a ``manylinux_2_N`` tag
+# literally (only ``manylinux2014``/``2010`` expand to the older names), and most native
+# wheels on PyPI are tagged ``manylinux_2_17.manylinux2014``, so the list names them all.
+# The Linux floor is glibc 2.28 (RHEL 8, Debian 10, Ubuntu 18.10 and newer); no 2_34 wheel.
+# A macOS tag expands downwards by itself (and to universal2).
 PLATFORMS = {
-    "linux-x86_64": "manylinux_2_28_x86_64",
-    "macos-arm64": "macosx_11_0_arm64",
+    "linux-x86_64": ["manylinux_2_28_x86_64", "manylinux_2_17_x86_64", "manylinux2014_x86_64"],
+    "macos-arm64": ["macosx_11_0_arm64"],
 }
 LOCK = "requirements.lock"
 WHEEL = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._]*)-(?P<version>[0-9][^-]*)-[^-]+-[^-]+-[^-]+\.whl$")
@@ -82,13 +89,16 @@ def export_argv(root: Path, requirements: Path) -> list[str]:
 
 
 def download_argv(platform: str, python: str, out: Path, requirements: Path) -> list[str]:
-    tag = PLATFORMS.get(platform)
-    if tag is None:
+    tags = PLATFORMS.get(platform)
+    if tags is None:
         raise WheelhouseError(f"unknown platform {platform!r}; one of {', '.join(PLATFORMS)}")
     abi = "cp" + python.replace(".", "")
-    return [sys.executable, "-m", "pip", "download", "--only-binary=:all:", "--platform", tag,
-            "--python-version", python, "--implementation", "cp", "--abi", abi, "--abi", "abi3",
-            "--abi", "none", "--dest", str(out), "-r", str(requirements)]
+    argv = [sys.executable, "-m", "pip", "download", "--only-binary=:all:"]
+    for tag in tags:
+        argv += ["--platform", tag]
+    argv += ["--python-version", python, "--implementation", "cp", "--abi", abi, "--abi", "abi3",
+             "--abi", "none", "--dest", str(out), "-r", str(requirements)]
+    return argv
 
 
 def _run(argv: list[str], dry: bool) -> None:

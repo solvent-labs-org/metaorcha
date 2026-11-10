@@ -97,3 +97,24 @@ class CommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlatformTags(unittest.TestCase):
+    """pip takes a ``manylinux_2_N`` tag literally (only ``manylinux2014``/``2010`` expand to
+    older names), and most native wheels on PyPI are tagged ``manylinux_2_17.manylinux2014``,
+    so one tag is not enough: the download must name every tag the bundle accepts."""
+
+    def flags(self, platform: str, flag: str) -> list[str]:
+        argv = wheelhouse.download_argv(platform, "3.12", Path("/out"), Path("/req"))
+        return [argv[i + 1] for i, a in enumerate(argv) if a == flag]
+
+    def test_linux_names_every_tag_pip_will_not_expand(self):
+        plats = self.flags("linux-x86_64", "--platform")
+        self.assertEqual(plats[0], "manylinux_2_28_x86_64")          # preferred first
+        self.assertIn("manylinux_2_17_x86_64", plats)
+        self.assertIn("manylinux2014_x86_64", plats)
+        self.assertNotIn("manylinux_2_34_x86_64", plats)             # the floor is glibc 2.28
+
+    def test_abis_cover_the_interpreter_abi3_and_pure_wheels(self):
+        self.assertEqual(self.flags("linux-x86_64", "--abi"), ["cp312", "abi3", "none"])
+        self.assertEqual(self.flags("macos-arm64", "--python-version"), ["3.12"])
