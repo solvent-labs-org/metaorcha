@@ -275,6 +275,12 @@ class Ctx:
         d.mkdir(mode=0o700, parents=True, exist_ok=True)
         return d
 
+    def runs_dir(self):
+        """Logs of the runs the app spawned itself (no tmux / on the phone): 0700."""
+        d = self.state / "runs"
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return d
+
     def accounts_dir(self, engine):
         d = self.state / "accounts" / engine
         d.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -421,6 +427,209 @@ def create_session(ctx, name, cwd, argv, extra_env=None, extra_unset=(), script=
     return True, ""
 
 
+# ---------------------------------------------------------------- runs without tmux (T2/E3)
+# On a host with no tmux, and on the phone, a run is the app's own child process: the
+# prompt file on stdin, stdout and stderr into <state>/runs/<name>.log, the environment
+# scrubbed with the same names a desk drops, its own session so one killpg ends the tree.
+# The registry entry carries ``pid`` and ``log``; ``exit`` once it has ended. Journeys stay
+# index-based, so nothing else changes for them.
+
+_PROCS = {}            # (state dir, desk) -> Popen, for this server's lifetime
+_PROCS_LOCK = threading.Lock()
+RUNLOG_TAIL = 4000
+RUNLOG_READ = 65536
+INTERRUPTED_EXIT = 255
+DESK_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def on_device():
+    """The server runs inside the phone app (stream E): the runtime says so, or Python does."""
+    return os.environ.get("METABOT_ON_DEVICE") == "1" or hasattr(sys, "getandroidapilevel")
+
+
+def run_in_process(ctx):
+    """A run is the app's own child when nothing can hold a desk for it."""
+    return on_device() or not tmuxcmd.found()
+
+
+def pid_alive(pid):
+    """A process with this pid that has not exited (a zombie counts as gone)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            state = f.read().rpartition(b")")[2].split()
+    except OSError:
+        return True
+    return not state or state[0] not in (b"Z", b"X")
+
+
+def _proc_key(ctx, name):
+    return (str(ctx.state), name)
+
+
+def spawn_run_process(ctx, name, cwd, argv, prompt):
+    """Start ``argv`` as the app's own child. The prompt file is its stdin and is
+    unlinked once the child holds the descriptor (as the desk script's ``exec 3<``
+    then ``rm`` does); stdout and stderr go to the run's log (0600). Returns the
+    Popen; raises OSError when it cannot start."""
+    drop = set(unset_list(ctx))
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env["METABOT_HOME"] = ctx.metabot_home
+    log = ctx.runs_dir() / f"{name}.log"
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as out, open(prompt, "rb") as stdin:
+        p = subprocess.Popen(argv, cwd=cwd, stdin=stdin, stdout=out, stderr=subprocess.STDOUT,
+                             env=env, start_new_session=True, close_fds=True)
+    with _PROCS_LOCK:
+        _PROCS[_proc_key(ctx, name)] = p
+    return p
+
+
+def _log_path(ctx, entry):
+    return ctx.runs_dir() / str(entry.get("log") or "")
+
+
+def _log_tail(ctx, entry, limit=RUNLOG_READ):
+    try:
+        with open(_log_path(ctx, entry), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - limit))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _log_append(ctx, entry, text):
+    try:
+        with open(_log_path(ctx, entry), "ab") as f:
+            f.write(text.encode("utf-8"))
+    except OSError:
+        pass
+
+
+def run_proc_end(ctx, name, entry):
+    """run_pane_end for a run the app spawned itself: (exit code, run id or None)
+    once it has ended, (None, None) while it runs. The exit line is written into
+    the log as the desk script writes it into the pane; a run whose handle this
+    server never held (the app restarted mid-run) and whose pid is gone ended
+    interrupted."""
+    code = entry.get("exit")
+    if code is None:
+        with _PROCS_LOCK:
+            p = _PROCS.get(_proc_key(ctx, name))
+        if p is not None:
+            code = p.poll()
+            if code is None:
+                return None, None
+            with _PROCS_LOCK:
+                _PROCS.pop(_proc_key(ctx, name), None)
+            code = code if code >= 0 else 128 - code
+            _log_append(ctx, entry, f"\n[metachat] exit {code}\n")
+        elif pid_alive(entry.get("pid")):
+            return None, None
+        elif RUN_RECEIPT_LINE_RE.search(_log_tail(ctx, entry)):
+            code = 0   # it ended while the app was away, and left its receipt
+            _log_append(ctx, entry, f"\n[metachat] exit {code}\n")
+        else:
+            code = INTERRUPTED_EXIT
+            _log_append(ctx, entry, f"\n[metachat] exit {code} (interrupted: the app stopped mid-run)\n")
+        reg_update(ctx, name, exit=code)
+    ids = RUN_RECEIPT_LINE_RE.findall(_log_tail(ctx, entry))
+    return code, (ids[-1] if ids else None)
+
+
+def reap_run_processes():
+    """Poll every run handle this server holds; drop the finished ones (their exit
+    is recorded by run_proc_end when the run is next looked at). Returns the names
+    still running."""
+    running = []
+    with _PROCS_LOCK:
+        for key, p in list(_PROCS.items()):
+            if p.poll() is None:
+                running.append(key[1])
+    return running
+
+
+def is_process_run(entry):
+    return isinstance(entry, dict) and isinstance(entry.get("pid"), int)
+
+
+def live_process_runs(reg):
+    """Names of the registry's runs that are the app's own live children."""
+    reap_run_processes()
+    return {n for n, d in reg.items() if d.get("kind") == "run" and is_process_run(d)
+            and d.get("exit") is None and pid_alive(d["pid"])}
+
+
+def desk_alive(ctx, name, entry=None):
+    """A desk is alive while its tmux session exists or its own child process runs."""
+    if entry is None:
+        entry = reg_read(ctx, name)
+    if is_process_run(entry):
+        return pid_alive(entry["pid"])
+    return has_session(ctx, name)
+
+
+def kill_run_process(ctx, name, entry, grace=1.5):
+    """End a run the app spawned: SIGTERM to its process group, SIGKILL after
+    ``grace`` seconds; the registry entry is removed. (ok, err)."""
+    pid = entry.get("pid")
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            break
+        except OSError:
+            pass
+        end = time.time() + grace
+        while time.time() < end and pid_alive(pid):
+            time.sleep(0.05)
+        if not pid_alive(pid):
+            break
+    with _PROCS_LOCK:
+        p = _PROCS.pop(_proc_key(ctx, name), None)
+    if p is not None:
+        try:
+            p.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    reg_delete(ctx, name)
+    return not pid_alive(pid), "" if not pid_alive(pid) else "the run did not stop"
+
+
+def kill_desk_any(ctx, name, entry=None):
+    """kill_session for a desk, or kill_run_process for the app's own child."""
+    if entry is None:
+        entry = reg_read(ctx, name)
+    if is_process_run(entry):
+        return kill_run_process(ctx, name, entry)
+    return kill_session(ctx, name)
+
+
+def runlog(ctx, name):
+    """GET /api/mb/runlog/<name> -> (status, reply): the tail of the log of a run
+    the app spawned itself, with its pid, whether it still runs and its exit."""
+    if not isinstance(name, str) or not DESK_NAME_RE.fullmatch(name):
+        return 400, {"ok": False, "error": "bad name"}
+    entry = reg_read(ctx, name)
+    if not is_process_run(entry) or not entry.get("log"):
+        return 404, {"ok": False, "error": "no such run"}
+    code, _ = run_proc_end(ctx, name, entry)
+    tail = _log_tail(ctx, entry)[-RUNLOG_TAIL:]
+    return 200, {"ok": True, "name": name, "pid": entry["pid"], "alive": pid_alive(entry["pid"]),
+                 "exit": code, "log": tail}
+
+
 # ---------------------------------------------------------------- registry
 
 def reg_read(ctx, name):
@@ -495,7 +704,9 @@ def cap_check(ctx, kind):
     reg = registry(ctx)
     if kind == "run":
         live = sessions(ctx)
-        running = sum(1 for n, d in reg.items() if d.get("kind") == "run" and f"fc-{n}" in live)
+        procs_live = live_process_runs(reg)
+        running = sum(1 for n, d in reg.items() if d.get("kind") == "run"
+                      and (f"fc-{n}" in live or n in procs_live))
         if running >= int(ctx.cfg["max_runs"]):
             return "cap"
     if len(reg) >= int(ctx.cfg["max_desks"]):
@@ -931,17 +1142,31 @@ def start_run(ctx, body):
         if name in taken:
             return 409, {"ok": False, "error": "name taken"}
         prompt = write_prompt(ctx, task)
-        ok, err = create_session(ctx, name, cwd, [str(prompt), *argv], script=FIXED_RUN_SCRIPT)
-        if not ok:
+        own = {}
+        if run_in_process(ctx):
             try:
-                prompt.unlink()
+                p = spawn_run_process(ctx, name, cwd, argv, prompt)
+                ok, err = True, ""
+                own = {"pid": p.pid, "log": f"{name}.log"}
+            except OSError as exc:
+                ok, err = False, f"spawn failed: {type(exc).__name__}"
+            try:
+                prompt.unlink()   # the child holds the descriptor; nothing else reads it
             except OSError:
                 pass
+        else:
+            ok, err = create_session(ctx, name, cwd, [str(prompt), *argv], script=FIXED_RUN_SCRIPT)
+            if not ok:
+                try:
+                    prompt.unlink()
+                except OSError:
+                    pass
+        if not ok:
             return 502, {"ok": False, "error": err}
         note_spawn(ctx)
         reg_write(ctx, {"name": name, "kind": "run", "account": account if account_used else None,
                         "engine": engine, "cwd": cwd, "label": label, "created": int(time.time()),
-                        "catalog": None, "argv": argv, "prompt_file": prompt.name})
+                        "catalog": None, "argv": argv, "prompt_file": prompt.name, **own})
     ctx.log("run", desk=name, engine=engine, mode=mode, cwd=cwd, account_used=account_used,
             max_cost=max_cost)
     return 200, {"ok": True, "name": name, "argv": argv, "prompt_file": prompt.name,
@@ -1067,6 +1292,13 @@ def forget_desk(ctx, name, names_dir=None, entry=None):
     if entry is None:
         entry = reg_read(ctx, name)
     reg_delete(ctx, name)
+    if is_process_run(entry) and entry.get("log"):
+        with _PROCS_LOCK:
+            _PROCS.pop(_proc_key(ctx, name), None)
+        try:
+            _log_path(ctx, entry).unlink()
+        except OSError:
+            pass
     if (names_dir is not None and isinstance(entry, dict) and entry.get("kind") in NAMED_KINDS
             and not is_signin(entry)):   # a sign-in desk never wrote one (25.3 B1)
         try:
@@ -1124,16 +1356,6 @@ def serve_lock_state(metabot_home):
                 and parts[5].rsplit(":", 1)[-1] == str(st.st_ino):
             return "held"
     return "free"
-
-
-def pid_alive(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
 
 
 def serve_state(ctx):
@@ -1668,6 +1890,7 @@ def desk_of_pid(ctx, pid, reg=None):
         return None
     reg = registry(ctx) if reg is None else reg
     panes = {v: k for k, v in pane_pids(ctx).items() if k in reg}
+    panes.update({d["pid"]: n for n, d in reg.items() if is_process_run(d)})
     tbl = None if procs.PROC.is_dir() else procs.table()
     cur = pid
     for _ in range(13):
@@ -1735,7 +1958,11 @@ def live_run_desks(ctx, names, reg):
 
 def run_pane_end(ctx, name):
     """(exit code, run id or None) once the run desk's script has printed its
-    exit line; (None, None) while it has not."""
+    exit line; (None, None) while it has not. A run the app spawned itself is
+    read from its log (run_proc_end)."""
+    entry = reg_read(ctx, name)
+    if is_process_run(entry):
+        return run_proc_end(ctx, name, entry)
     rc, out, _ = tmux(ctx, "capture-pane", "-p", "-J", "-S", "-300", "-t", f"=fc-{name}:", timeout=2)
     if rc != 0:
         return None, None

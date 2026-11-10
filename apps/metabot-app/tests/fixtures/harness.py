@@ -6,6 +6,7 @@ import http.client
 import json
 import re
 import os
+import signal
 import shutil
 import socket
 import ssl
@@ -20,7 +21,7 @@ FIX = Path(__file__).resolve().parent
 ECHO_INBOX = FIX / "adapters" / "echo_inbox.py"   # the fixture inbox adapter (tests/test_inbox.py)
 sys.path.insert(0, str(ROOT.parent))
 
-from metabot_app import server  # noqa: E402  (after sys.path)
+from metabot_app import mb, server  # noqa: E402  (after sys.path)
 
 _ENV_KEYS = ("HOME", "METACHAT_CONFIG", "METACHAT_STATE", "METABOT_HOME", "PATH", "FAKE_LOG",
              "FAKE_TMUX_STATE", "FAKE_PANE_PID", "FAKE_SLEEP", "FAKE_EXIT", "FAKE_MBQ_FAIL",
@@ -108,6 +109,17 @@ class Env:
         return self
 
     def stop(self):
+        for key, p in list(mb._PROCS.items()):   # runs the app spawned itself: end and reap them
+            if key[0] == str(self.state):
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                try:
+                    p.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+                mb._PROCS.pop(key, None)
         if self.tls is not None:
             self.tls.shutdown()
             self.tls.server_close()

@@ -24,6 +24,11 @@ the pairing payload, the capability block, the module manifest) is called out as
   `setup_first_run`, `ask_receipt`, `tools_offline`, `workflow_chain`, `recovery_engine`,
   the report, `tools/selftest-linux.sh` and the tablet walk `tools/tablet-e2e.sh`.
 - The claims page (`docs/CLAIMS.md`) and the test that keeps every claim tied to a proof.
+- Runs without tmux (T2/E3): on a host with no tmux, and on the phone, `POST /api/run` starts the
+  core as the app's own child (the prompt on stdin, stdout and stderr into `STATE/runs/<name>.log`,
+  the same scrubbed environment as a desk, one process group); the run links to its receipt, reports
+  how it ended, counts toward `max_runs`, and `POST /api/kill` ends the whole tree. New route
+  `GET /api/mb/runlog/<name>` (contract: app API) returns the log tail, pid, liveness and exit.
 - The wheelhouse (`packaging/wheelhouse.py`): the sdk, the core and the app built as wheels,
   their pinned dependencies downloaded as wheels only (never an sdist) for one platform, and a
   `requirements.lock` with a sha256 per file, so a desktop bundle installs offline.

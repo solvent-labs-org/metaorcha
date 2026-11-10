@@ -118,7 +118,7 @@ def phone_cert():
 
 def on_device():
     """The server runs inside the phone app (stream E): the runtime says so, or Python does."""
-    return os.environ.get("METABOT_ON_DEVICE") == "1" or hasattr(sys, "getandroidapilevel")
+    return mb.on_device()
 
 
 def invalidate_caps():
@@ -1622,12 +1622,12 @@ def kill_desk(body):
     for d in desks(fresh=True)["desks"]:   # the armed desks as they are now, not a second-old view
         if d["armed"] and desk_slug(d["name"]) == name:
             return 403, {"ok": False, "error": "armed"}
-    alive = mb.has_session(MB, name)
     entry = mb.reg_read(MB, name)     # read before kill_session drops it
+    alive = mb.desk_alive(MB, name, entry)
     if not alive and entry is None:
         return 404, {"ok": False, "error": "no such desk"}
     if alive:
-        ok, err = mb.kill_session(MB, name)
+        ok, err = mb.kill_desk_any(MB, name, entry)
         if not ok:
             return 502, {"ok": False, "error": err or "kill failed"}
     mb.forget_desk(MB, name, NAMES_DIR, entry=entry)
@@ -1932,6 +1932,9 @@ class Handler(BaseHTTPRequestHandler):
             limit = _int(qs.get("limit", ["50"])[0], 50, 1, 200)
             project = qs.get("project", [""])[0] or None
             self._json(mb.runs(MB, limit, project))
+        elif path.startswith("/api/mb/runlog/"):
+            status, reply = mb.runlog(MB, path[len("/api/mb/runlog/"):])
+            self._json(reply, status)
         elif path.startswith("/api/mb/run/"):
             rid = path[len("/api/mb/run/"):]
             if not catalog.is_safe_id(rid):
@@ -2605,7 +2608,8 @@ def run_report_once():
             if now - first < RUN_ROW_GRACE:
                 continue
         if mb.reg_update(MB, n, reported=True):
-            local_event(f"The run ended (exit {ends[n]}) with no receipt; its terminal says why.", n, "",
+            where = "log" if mb.is_process_run(e) else "terminal"
+            local_event(f"The run ended (exit {ends[n]}) with no receipt; its {where} says why.", n, "",
                         via="alert", typed=False)
 
 
