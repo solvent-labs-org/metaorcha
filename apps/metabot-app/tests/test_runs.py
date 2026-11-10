@@ -19,6 +19,32 @@ class RunsTests(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
 
+    def test_a_run_whose_process_died_is_listed_as_interrupted(self):
+        # the app (and the run with it) was killed mid-run: the core left a live file for a
+        # pid that is gone and never sealed a receipt. Runs & Receipts says so; it is not
+        # shown as live, not as done, and never silently dropped.
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        live = self.env.mbhome / "live"
+        live.mkdir()
+        (live / "mb-dead-1.json").write_text(json.dumps({"format": "metabot.live/1", "kind": "run",
+                                                         "id": "mb-dead-1", "pid": gone.pid,
+                                                         "proc_start": 1, "engine": "openai",
+                                                         "started": "2026-01-01T00:00:00Z"}))
+        s, j = self.env.get("/api/mb/runs")
+        self.assertEqual(s, 200)
+        rows = [r for r in j["runs"] if r["run_id"] == "mb-dead-1"]
+        self.assertEqual(len(rows), 1, j["runs"])
+        r = rows[0]
+        self.assertEqual(r["state"], "interrupted")
+        self.assertEqual(r["engine"], "openai")
+        self.assertEqual(r["started"], "2026-01-01T00:00:00Z")
+        self.assertIn("no receipt", r["problem"])
+        self.assertNotIn("receipt_state", r)
+        s, j = self.env.get("/api/tree")
+        self.assertEqual(s, 200)
+        self.assertIn('"state": "interrupted"', json.dumps(j))
+
     def test_live_run_resolves_desk_and_needs_you(self):
         cwd = str(self.env.projects / "alpha")
         os.environ["FAKE_PANE_PID"] = str(os.getpid())   # the test process is the "pane"
@@ -64,7 +90,11 @@ class RunsTests(unittest.TestCase):
             child.kill()
             child.wait()
         s, j = self.env.get("/api/mb/runs")
-        self.assertEqual(j["runs"], [])   # the process is gone: the entry is stale
+        # the process is gone and sealed nothing: the entry is stale, so the run is not live;
+        # it is listed as interrupted (never dropped). Its desk cannot be walked from a dead
+        # pid, so a tmux run's desk is unknown here; a run the app spawned itself keeps it.
+        self.assertEqual([(r["state"], r["run_id"], r["desk"]) for r in j["runs"]],
+                         [("interrupted", "live-1", None)])
 
     def test_runs_limit_and_error(self):
         for i in range(5):

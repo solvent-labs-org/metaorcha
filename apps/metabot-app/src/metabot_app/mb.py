@@ -1927,6 +1927,19 @@ def runs(ctx, limit=50, project=None):
     err = q.get("error") if isinstance(q, dict) else "mbq failed"
     total = q.get("total", 0) if isinstance(q, dict) else 0
     desk_of_run = {e["run_id"]: n for n, e in reg.items() if isinstance(e.get("run_id"), str)}
+    # a run whose process is gone and that never sealed a receipt (the app, and the run
+    # with it, was killed mid-run): said so, never shown as live or done, never dropped
+    sealed = {r.get("run_id") for r in rows or [] if isinstance(r, dict)}
+    own_pid = {d["pid"]: n for n, d in reg.items() if is_process_run(d)}
+    for e in (lv.get("stale") if isinstance(lv, dict) else None) or []:
+        if not isinstance(e, dict) or e.get("id") in sealed or e.get("kind") not in (None, "run"):
+            continue
+        desk = desk_of_run.get(e.get("id")) or own_pid.get(e.get("pid"))
+        cwd = reg.get(desk, {}).get("cwd", "") if desk else ""
+        out.append({"run_id": e.get("id"), "state": "interrupted", "desk": desk,
+                    "project": project_of(ctx, cwd), "started": e.get("started"),
+                    "engine": e.get("engine"), "cwd": cwd, "kind": e.get("kind"),
+                    "problem": "its process is gone and it left no receipt (the app stopped mid-run)"})
     for row in rows or []:
         if not isinstance(row, dict):
             continue

@@ -7,7 +7,7 @@ from __future__ import annotations
 import importlib
 
 ORDER = ("cold_start", "setup_first_run", "ask_receipt", "tools_offline", "workflow_chain",
-         "concurrency", "recovery_engine")
+         "concurrency", "recovery_kill", "recovery_engine")
 
 
 def names() -> list[str]:

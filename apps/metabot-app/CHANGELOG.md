@@ -21,7 +21,8 @@ the pairing payload, the capability block, the module manifest) is called out as
   a launchd agent on macOS; no root).
 - One server per state folder (`STATE/server.json`); a second `serve` reports the first.
 - The self-test: a scripted fake engine, a runner, the journeys `cold_start`,
-  `setup_first_run`, `ask_receipt`, `tools_offline`, `workflow_chain`, `concurrency`, `recovery_engine`,
+  `setup_first_run`, `ask_receipt`, `tools_offline`, `workflow_chain`, `concurrency`, `recovery_kill`,
+  `recovery_engine`,
   the report, `tools/selftest-linux.sh` and the tablet walk `tools/tablet-e2e.sh`.
 - The claims page (`docs/CLAIMS.md`) and the test that keeps every claim tied to a proof.
 - Runs without tmux (T2/E3): on a host with no tmux, and on the phone, `POST /api/run` starts the
@@ -29,6 +30,9 @@ the pairing payload, the capability block, the module manifest) is called out as
   the same scrubbed environment as a desk, one process group); the run links to its receipt, reports
   how it ended, counts toward `max_runs`, and `POST /api/kill` ends the whole tree. New route
   `GET /api/mb/runlog/<name>` (contract: app API) returns the log tail, pid, liveness and exit.
+- A run whose process is gone and that sealed no receipt (the app, and the run with it, killed
+  mid-run) is listed by `GET /api/mb/runs` as `state: "interrupted"` with a plain `problem`, never
+  shown live or done and never dropped (contract: a third run state beside `live` and `done`).
 - `make selftest-linux` runs the journeys twice: with tmux on PATH (desks) and as the phone
   runs them (`METABOT_ON_DEVICE=1`, no desks); `ask_receipt`, `tools_offline` and
   `recovery_engine` no longer need desks.
