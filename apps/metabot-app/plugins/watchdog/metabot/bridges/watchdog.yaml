@@ -1,0 +1,7 @@
+# watchdog: a program MetaBot runs as an engine, by metabot.bridge/1. No model: it
+# reads the app server's own routes and local facts, and reports. A routine on it
+# is a watchdog loop; every firing is a signed receipt with one step per probe.
+command: [bin/watchdog]
+models: []
+tools: own
+read_only: honored

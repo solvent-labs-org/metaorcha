@@ -1,0 +1,1 @@
+{"name": "browser", "version": "0.1.0", "description": "how to drive the browser connection (Playwright MCP, isolated Chromium) and a script that adds it"}

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Add the browser connection: Playwright MCP driving its own isolated Chromium.
+# usage: browser-connect [--mcp PATH_TO_cli.js] [--origin ORIGIN]... [--headed]
+# Without --mcp, it runs `npx @playwright/mcp` (an npm download on first use).
+set -eu
+MCP=""; HEAD="--headless"; ORIGINS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mcp) MCP="$2"; shift 2;;
+    --origin) ORIGINS="$ORIGINS --origin $2"; shift 2;;
+    --headed) HEAD=""; shift;;
+    *) echo "browser-connect: unknown word $1" >&2; exit 2;;
+  esac
+done
+METABOT="${METABOT:-metabot}"
+if [ -n "$MCP" ]; then
+  # shellcheck disable=SC2086
+  exec "$METABOT" connect add browser --browser --no-token $ORIGINS --command node "$MCP" --browser chromium --isolated $HEAD
+fi
+# shellcheck disable=SC2086
+exec "$METABOT" connect add browser --browser --no-token $ORIGINS --command npx --yes @playwright/mcp@latest --browser chromium --isolated $HEAD

@@ -732,7 +732,7 @@ const scenario = `
   // the empty canvas shows the mark, the line and the five starts of 25.4 U7
   setWS('zz-empty'); await tick(5);
   const empty = kids($('log')).find(c => c.classList.contains('empty'));
-  ok(empty && empty.textContent.includes('It does the work. You keep the record.') && empty.querySelectorAll('.markwrap')[0].innerHTML.includes('mark-eye'), 'empty lane: mark + line');
+  ok(empty && empty.textContent.includes('What should we get started with?') && empty.querySelectorAll('.markwrap')[0].innerHTML.includes('mark-eye'), 'empty lane: mark + line');
   const starts = () => kids($('log')).find(c => c.classList.contains('empty')).querySelectorAll('.start');
   ok(starts().map(x => (x.querySelectorAll('b')[0] || {}).textContent).join(',') === 'Sign in an account,Desks side by side,Run with a receipt,Make a workflow,Extend' && empty.querySelectorAll('.pill').length === 0, 'U7: the empty canvas offers the five starts and nothing else: ' + starts().map(x => x.textContent).join(' | '));
   ok(starts().length === 5 && starts().every(x => x.tagName === 'BUTTON' && x.querySelectorAll('svg').length === 1), 'U7: each start is one button with one icon');

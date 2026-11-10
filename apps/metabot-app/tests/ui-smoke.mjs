@@ -306,7 +306,7 @@ ok(/<header>[\s\S]*?<svg class="mark" id="hmark"[\s\S]*?mark-eye[\s\S]*?<\/svg>[
 ok(/\.mark-rim \{ fill:var\(--mark-rim\)/.test(css) && /\.mark-plate \{ fill:var\(--mark-plate\)/.test(css) && /\.mark-eye \{ fill:var\(--eye\)/.test(css), 'mark classes are coloured by tokens');
 ok(/--mark-plate:#050404/.test(css) && /--mark-rim:#302f2f/.test(css) && /--mark-plate:#141210/.test(css) && /--mark-rim:#3c3b39/.test(css), 'mark tokens from vendor/brand/tokens.json (light and dark)');
 ok(/\.working \.mark-eye \{ animation:eyeblink 1s/.test(css) && /@keyframes eyeblink/.test(css), 'eyes blink once per second on a working desk');
-ok(js.includes("'It does the work. You keep the record.'"), 'the empty lane line is the one the vision allows');
+ok(js.includes("'What should we get started with?'") && !js.includes("'It does the work. You keep the record.'"), 'the empty lane opens with a question, not the website slogan');
 ok(/const STARTS = \[/.test(js) && ['Sign in an account', 'Desks side by side', 'Run with a receipt', 'Make a workflow', 'Extend'].every(t => js.includes("['" + t + "', ")), 'the empty canvas offers the five starts of 25.4 U7 (they replace the three pills)');
 ok(!/class: 'pill', text: 'Check a receipt'/.test(js), 'the three empty-canvas pills are gone');
 // 23: the app is MetaBot where shown; machine keys unchanged

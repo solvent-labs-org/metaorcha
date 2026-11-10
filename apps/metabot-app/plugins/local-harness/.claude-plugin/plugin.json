@@ -1,0 +1,1 @@
+{"name": "local-harness", "version": "0.1.0", "description": "a custom sub-harness: a local OpenAI-compatible model with its own tool loop, run as a MetaBot engine"}

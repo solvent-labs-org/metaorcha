@@ -326,6 +326,22 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual(self.new_session_calls(), [])
         self.assertEqual(list((self.env.state / "prompts").glob("*")), [])
 
+    def test_run_model_is_passed_to_the_core(self):
+        cwd = str(self.env.projects / "alpha")
+        s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "model": "grok-4.7"})
+        self.assertEqual(s, 200, j)
+        self.assertEqual(j["argv"], [str(FIX / "fake-metabot"), "ask", "-e", "cursor", "--cwd", cwd,
+                                     "--read-only", "-m", "grok-4.7", "-"])
+        reg = json.loads((self.env.state / "desks" / "run-1.json").read_text())
+        self.assertEqual(reg["model"], "grok-4.7")
+        s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "model": ""})
+        self.assertEqual(s, 200, j)   # empty = the engine's default, as when the field is absent
+        self.assertNotIn("-m", j["argv"])
+        for bad in ("a b", "x" * 81, "../etc", "-m"):
+            s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "model": bad})
+            self.assertEqual((s, j), (400, {"ok": False, "error": "bad model"}), bad)
+        self.assertEqual(len(self.new_session_calls()), 2)
+
     def test_run_cap(self):
         with Env({"max_runs": 1}) as env:
             cwd = str(env.projects / "alpha")

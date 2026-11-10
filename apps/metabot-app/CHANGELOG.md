@@ -25,6 +25,12 @@ the pairing payload, the capability block, the module manifest) is called out as
   `recovery_engine`, `wrong_key`, `receipt_view_clarity`,
   the report, `tools/selftest-linux.sh` and the tablet walk `tools/tablet-e2e.sh`.
 - The claims page (`docs/CLAIMS.md`) and the test that keeps every claim tied to a proof.
+- `POST /api/run` takes `model` (the engine's model name, passed to the core as `-m`); the run
+  sheet has a model field, so a Cursor run picks its tier per run.
+- The demo marketplace `plugins/` (`watchdog`, `monitor`, `local-harness`, `browser`) and the
+  scripts `tools/demo/` that install them, save the watchdog loop, add the workflows and run
+  Cursor at a tier (`docs/DEMOS.md`).
+- The empty lane opens with "What should we get started with?".
 - Runs without tmux (T2/E3): on a host with no tmux, and on the phone, `POST /api/run` starts the
   core as the app's own child (the prompt on stdin, stdout and stderr into `STATE/runs/<name>.log`,
   the same scrubbed environment as a desk, one process group); the run links to its receipt, reports

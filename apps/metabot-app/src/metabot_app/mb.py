@@ -164,6 +164,8 @@ LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 ACCOUNT_RE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
 ENGINE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 MAX_COST_RE = re.compile(r"^[0-9]{1,5}(\.[0-9]{1,2})?$")
+# a model name as engines spell them: letters, digits, . _ : / + - and bracket overrides; never a flag
+MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+\[\]=,-]{0,79}")
 TASK_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 OUT_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 VERSION_RE = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)")
@@ -1105,6 +1107,11 @@ def start_run(ctx, body):
             return 400, {"ok": False, "error": "bad max_cost"}
     else:
         max_cost = None
+    model = body.get("model")
+    if model in (None, ""):
+        model = None
+    elif not isinstance(model, str) or not MODEL_RE.fullmatch(model):
+        return 400, {"ok": False, "error": "bad model"}
     raw_cwd = body.get("cwd")
     cwd = cwd_ok(ctx, raw_cwd) if isinstance(raw_cwd, str) else None
     if cwd is None:
@@ -1135,6 +1142,8 @@ def start_run(ctx, body):
         argv.append("--read-only")
     if max_cost is not None:
         argv += ["--max-cost", max_cost]
+    if model is not None:
+        argv += ["-m", model]   # the engine's model name as the core passes it on (cursor: --model)
     argv.append("-")
     with ctx.spawn_lock:   # SEC-12
         cap = cap_check(ctx, "run")
@@ -1168,9 +1177,10 @@ def start_run(ctx, body):
             return 502, {"ok": False, "error": err}
         note_spawn(ctx)
         reg_write(ctx, {"name": name, "kind": "run", "account": account if account_used else None,
-                        "engine": engine, "cwd": cwd, "label": label, "created": int(time.time()),
-                        "catalog": None, "argv": argv, "prompt_file": prompt.name, **own})
-    ctx.log("run", desk=name, engine=engine, mode=mode, cwd=cwd, account_used=account_used,
+                        "engine": engine, "model": model, "cwd": cwd, "label": label,
+                        "created": int(time.time()), "catalog": None, "argv": argv,
+                        "prompt_file": prompt.name, **own})
+    ctx.log("run", desk=name, engine=engine, model=model, mode=mode, cwd=cwd, account_used=account_used,
             max_cost=max_cost)
     return 200, {"ok": True, "name": name, "argv": argv, "prompt_file": prompt.name,
                  "account_used": account_used}

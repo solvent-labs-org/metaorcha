@@ -254,6 +254,7 @@
   #chipMode { min-height:44px; padding:0 14px; border:1px solid var(--line); border-radius:8px; font:500 14px/1 var(--sans); color:var(--txt); background:var(--surface); }
   #chipMode.ask { color:var(--accent); border-color:var(--accent); }
   #chipCost { max-width:140px; }
+  #chipModel { max-width:200px; }
   /* the '/' palette floats above the pill (out of flow) */
   #palette { position:absolute; left:0; right:0; bottom:calc(100% + 8px); z-index:5; background:var(--surface); border:1px solid var(--line); border-radius:12px;
     overflow:hidden; max-height:46vh; overflow-y:auto; box-shadow:var(--shadow3); }
@@ -661,6 +662,7 @@
       <label><span>folder</span><select id="chipProject" title="project folder"></select></label>
       <label><span>writes</span><button id="chipMode" type="button" title="read-only, or ask — a write waits for approval unless you allowed it in advance">read-only</button></label>
       <label><span>max cost</span><input id="chipCost" type="text" inputmode="decimal" placeholder="$ (optional)" title="max cost (optional)"></label>
+      <label><span>model</span><input id="chipModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="engine default" title="the engine's model name (optional); cursor: what `cursor-agent models` lists"></label>
       <p class="small" id="runEquals"></p>
     </div>
   </div>
@@ -1219,7 +1221,7 @@ function renderLog() {
   let n = 0;
   MSGS.forEach(ev => { if (passes(ev)) { appendBubble(ev); n++; } });
   if (!n) {   // the empty canvas (22.2, 25.4 U7): the mark, the line, the five starts
-    EMPTY_EL = h('div', {class: 'empty'}, markEl(), h('p', {text: 'It does the work. You keep the record.'}),
+    EMPTY_EL = h('div', {class: 'empty'}, markEl(), h('p', {text: 'What should we get started with?'}),
       h('div', {class: 'starts'}, STARTS.map(([t, sub, ic, fn]) => h('button', {type: 'button', class: 'start', onclick: fn},
         icon(ic), h('span', {class: 'stx'}, h('b', {text: t}), h('span', {text: sub}))))));
     log.appendChild(EMPTY_EL);
@@ -1960,7 +1962,7 @@ function renderRunPill() {   // the summary pill (21.6): engine · login · fold
   $('runPill').textContent = parts.join(' · ');
   const eq = $('runEquals'); if (eq) eq.textContent = 'equals ' + runArgvPreview();
 }
-['chipEngine', 'chipAccount', 'chipProject', 'chipCost'].forEach(id => { $(id).onchange = () => { accountChipVisibility(); renderRunPill(); }; $(id).oninput = renderRunPill; });
+['chipEngine', 'chipAccount', 'chipProject', 'chipCost', 'chipModel'].forEach(id => { $(id).onchange = () => { accountChipVisibility(); renderRunPill(); }; $(id).oninput = renderRunPill; });
 $('runPill').onclick = () => { openSheet('runSheet'); loadRunChips(); };
 function parseSuggest(out) {   // metabot suggest prints rows: role · engine · model · rule · note
   const f = {};
@@ -2042,6 +2044,9 @@ async function sendRun(v) {   // true = the run started (the box may be cleared)
   const account = $('chipAccount').value;
   if (account && takesLogin(engine)) body.account = account;
   if (cost) body.max_cost = cost;
+  const model = $('chipModel').value.trim();
+  if (model && !/^[A-Za-z0-9][A-Za-z0-9._:\/+\[\]=,-]{0,79}$/.test(model)) { toast('model: letters, digits, . _ : / + - and [ ]'); return false; }
+  if (model) body.model = model;
   const r = await api('/api/run', body);
   if (r.ok) {
     DESK_ARGV[r.name] = r.argv || [];
@@ -4853,7 +4858,7 @@ function renderSetup(body) {
     ['A message', 'type below; it lands in the desk', have.message, () => { backToChat(); text.focus(); }],
   ];
   const done = steps.filter(s => s[2]).length;
-  body.appendChild(h('p', {class: 'muted', text: 'MetaBot · on Metaorcha. Four steps, then it runs. It does the work. You keep the record.'}));
+  body.appendChild(h('p', {class: 'muted', text: 'MetaBot · on Metaorcha. Four steps, then it runs.'}));
   body.appendChild(h('div', {class: 'pdots', 'aria-label': done + ' of 4 done'}, steps.map(s => h('i', {class: s[2] ? 'on' : ''})), h('span', {class: 'small', text: done + ' of 4'})));
   body.appendChild(h('div', {class: 'steps4'}, steps.map(([lbl, how, ok, go], i) => h('div', {class: 'step' + (ok ? ' done' : '')},
     ok ? h('span', {class: 'sn'}, icon('check')) : h('span', {class: 'sn', text: String(i + 1)}),
