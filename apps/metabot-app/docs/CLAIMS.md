@@ -29,4 +29,5 @@ by `;`.
 | A model server on this machine is enough: no vendor login is needed for a first run and its receipt | `selftest:ask_receipt/run done` |
 | The app keeps running across logins when asked, without root, and can be removed as easily | `tests/test_service.py::test_install_writes_the_unit_and_enables_it`; `tests/test_service.py::test_remove_disables_then_deletes_and_is_quiet_when_absent` |
 | A run needs no tmux: on a host without it, and on the phone, the app runs the core as its own child, with the prompt on stdin, a log it can show, and one kill for the whole tree | `tests/test_run_process.py::test_no_tmux_means_a_process_run`; `tests/test_run_process.py::test_a_finished_run_reports_its_exit_and_its_receipt`; `tests/test_run_process.py::test_kill_ends_the_whole_process_tree` |
+| Several runs go at once, the cap holds, and each run's receipt verifies | `selftest:concurrency/the runs overlapped`; `selftest:concurrency/a fourth is refused at the cap`; `selftest:concurrency/every receipt verifies` |
 | Nothing private ships in the tree: no names, no home paths, no keys | `tests/test_private_strings.py::test_no_private_string_in_the_shipped_tree` |

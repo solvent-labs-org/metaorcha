@@ -52,6 +52,7 @@ exits 0 clean, 1 a failed step, 2 a budget miss, 3 incomplete.
 | `ask_receipt` | clarity | a run through the app, verified by the app's route and by the core |
 | `tools_offline` | real work | write, read and shell through the core's gate; the receipt names every tool; a read-only run through the app |
 | `workflow_chain` | real work | a four-step `metabot.workflow/1` (two asks, a ladder, an ask) across two providers (the OpenAI-compatible fake and a `metabot.bridge/1` bridge) and two accounts (the ladder's first rung, account alpha, answers 500; the second, account beta, answers); approved at a terminal, refused when piped; every receipt names its engine, endpoint and rung; the exported bundle verifies offline as one chain; a rewritten rung is caught; a missing account stops the chain and still leaves receipts that verify |
+| `concurrency` | real work | three runs at once through the app (`max_runs` 3), a fourth refused with 409 at the cap, overlap proven from the receipts' start and finish times, every receipt verifies, the slot comes back |
 | `recovery_engine` | recovery | a failing, refusing, truncating or slow model server: every run ends, says why, and its receipt verifies and records the failure |
 
 A run whose model server fails still gets a signed receipt that verifies, with

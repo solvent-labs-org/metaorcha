@@ -703,10 +703,13 @@ def cap_check(ctx, kind):
     """Caps of 4.6 / 4.7: registry size, spawns per minute, live run desks."""
     reg = registry(ctx)
     if kind == "run":
+        # a run desk whose run has ended (its pane shows the exit line) is a shell, not a
+        # run: it holds no slot, or six finished runs would stop the seventh from starting
         live = sessions(ctx)
         procs_live = live_process_runs(reg)
         running = sum(1 for n, d in reg.items() if d.get("kind") == "run"
-                      and (f"fc-{n}" in live or n in procs_live))
+                      and (n in procs_live or (f"fc-{n}" in live and not is_process_run(d)
+                                                and run_pane_end(ctx, n)[0] is None)))
         if running >= int(ctx.cfg["max_runs"]):
             return "cap"
     if len(reg) >= int(ctx.cfg["max_desks"]):

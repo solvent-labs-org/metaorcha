@@ -336,6 +336,18 @@ class SpawnTests(unittest.TestCase):
             s, _ = env.post("/api/spawn", {"kind": "shell"})
             self.assertEqual(s, 200)   # the run cap does not stop a plain desk
 
+    def test_run_cap_frees_when_the_desk_run_ended(self):
+        # a run desk keeps its shell open after the run; the slot it held comes back
+        with Env({"max_runs": 1}) as env:
+            cwd = str(env.projects / "alpha")
+            s, _ = env.post("/api/run", {"task": "x", "engine": "claude", "cwd": cwd})
+            self.assertEqual(s, 200)
+            s, j = env.post("/api/run", {"task": "x", "engine": "claude", "cwd": cwd})
+            self.assertEqual((s, j), (409, {"ok": False, "error": "cap"}))
+            env.set_pane("fc-run-1", "[metabot] receipt /h/receipts/mb-1.json (valid)\n[metachat] exit 0\n")
+            s, j = env.post("/api/run", {"task": "x", "engine": "claude", "cwd": cwd})
+            self.assertEqual(s, 200, j)
+
     def test_prompt_sweep(self):
         p = mb.write_prompt(server.MB, "old")
         os.utime(p, (1, 1))
