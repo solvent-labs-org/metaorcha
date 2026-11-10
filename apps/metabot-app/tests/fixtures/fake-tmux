@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Fake tmux for tests. Sessions live in the JSON file $FAKE_TMUX_STATE:
+{"sessions": {"fc-x": {"pid": 123, "cwd": "/tmp", "pane": "text"}}}.
+Every call appends its argv as one JSON line to $FAKE_LOG. Buffers: what
+``load-buffer -b NAME -`` read on stdin is kept byte for byte (hex) in
+"buffers" and appended to "loaded"; ``paste-buffer`` needs a buffer that is
+there and appends what it pasted, and where, to "pasted"."""
+import json, os, sys, time
+
+LOG = os.environ.get("FAKE_LOG")
+STATE = os.environ.get("FAKE_TMUX_STATE")
+argv = sys.argv[1:]
+SOCKET = ""
+while len(argv) >= 2 and argv[0] == "-L":   # the app's own server (A5); logged beside the call
+    SOCKET = argv[1]
+    argv = argv[2:]
+if LOG:
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"bin": "tmux", "argv": argv, "socket": SOCKET}) + "\n")
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {"sessions": {}}
+
+
+def save(st):
+    if STATE:   # whole or not at all: a reader never sees a half-written file
+        tmp = f"{STATE}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, STATE)
+
+
+def target(t):
+    t = t.strip()
+    if t.startswith("="):
+        t = t[1:]
+    if t.endswith(":"):
+        t = t[:-1]
+    return t
+
+
+def opt(name, default=None):
+    if name in argv:
+        i = argv.index(name)
+        return argv[i + 1] if i + 1 < len(argv) else default
+    return default
+
+
+st = load()
+sessions = st.setdefault("sessions", {})
+cmd = argv[0] if argv else ""
+if cmd == "-V":
+    print("tmux 3.4")
+    sys.exit(0)
+if cmd == "new-session":
+    name = opt("-s")
+    if name in sessions:
+        print(f"duplicate session: {name}", file=sys.stderr)
+        sys.exit(1)
+    sessions[name] = {"pid": int(os.environ.get("FAKE_PANE_PID", "4000000")),
+                      "cwd": opt("-c", "/"), "pane": ""}
+    save(st)
+elif cmd == "list-sessions":
+    print("\n".join(sessions))
+elif cmd == "has-session":
+    sys.exit(0 if target(opt("-t", "")) in sessions else 1)
+elif cmd == "kill-session":
+    t = target(opt("-t", ""))
+    if t not in sessions:
+        print(f"can't find session: {t}", file=sys.stderr)
+        sys.exit(1)
+    del sessions[t]
+    save(st)
+elif cmd == "list-panes":
+    fmt = opt("-F", "")
+    for n, s in sessions.items():
+        line = f"{n} {s['pid']}"
+        if "pane_current_path" in fmt:
+            line += f" {s['cwd']}"
+        print(line)
+elif cmd == "display":
+    t = target(opt("-t", ""))
+    s = sessions.get(t)
+    if s is None:
+        print(f"can't find session: {t}", file=sys.stderr)
+        sys.exit(1)
+    fmt = argv[-1]
+    print(s["cwd"] if "pane_current_path" in fmt else s["pid"])
+elif cmd == "capture-pane":
+    t = target(opt("-t", ""))
+    s = sessions.get(t)
+    if s is None:
+        print(f"can't find pane: {t}", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(s.get("pane", ""))
+elif cmd == "attach-session":
+    t = target(opt("-t", ""))
+    if t not in sessions:
+        print(f"no sessions", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(f"attached {t}\r\n")
+    sys.stdout.flush()
+    end = time.time() + 120
+    while time.time() < end:
+        data = os.read(0, 1024) if not os.isatty(0) or True else b""
+        if not data:
+            break
+elif cmd == "show-environment":
+    # the server's global environment: NAME=value lines (a removed name is "-NAME")
+    for k, v in st.get("global_env", {}).items():
+        print(f"{k}={v}")
+elif cmd == "load-buffer":
+    name = opt("-b")
+    if not name or argv[-1] != "-":
+        print("fake tmux: load-buffer takes -b NAME -", file=sys.stderr)
+        sys.exit(1)
+    data = sys.stdin.buffer.read().hex()
+    st.setdefault("buffers", {})[name] = data
+    st.setdefault("loaded", []).append({"buffer": name, "hex": data})
+    save(st)
+elif cmd == "set-buffer":
+    name = opt("-b")
+    if name:
+        st.setdefault("buffers", {})[name] = argv[-1].encode("utf-8", "surrogateescape").hex()
+        save(st)
+elif cmd == "paste-buffer":
+    name = opt("-b")
+    buffers = st.setdefault("buffers", {})
+    if name not in buffers:
+        print(f"no buffer {name}", file=sys.stderr)
+        sys.exit(1)
+    st.setdefault("pasted", []).append({"buffer": name, "target": opt("-t"), "bracketed": "-p" in argv,
+                                        "hex": buffers[name]})
+    if "-d" in argv:
+        del buffers[name]
+    save(st)
+elif cmd == "delete-buffer":
+    if st.setdefault("buffers", {}).pop(opt("-b"), None) is not None:
+        save(st)
+elif cmd in ("set-option", "send-keys"):
+    pass
+else:
+    print(f"fake tmux: unknown command {cmd}", file=sys.stderr)
+    sys.exit(1)

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MetaChat verifier self-test</title>
+<style>
+  html, body { margin: 0; background: #000; color: #fff; font: 14px/1.45 "IBM Plex Mono", ui-monospace, monospace; }
+  main { padding: 16px; max-width: 960px; }
+  h1 { font-size: 16px; font-weight: 500; margin: 0 0 12px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0a0a0a; border: 1px solid #1f1f1f; padding: 12px; margin: 0; }
+  .ok { color: #3ecf8e; }
+  .bad { color: #ff7a1a; }
+  small { color: #a3a3a3; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MetaChat tablet verifier — parity self-test</h1>
+  <small>Runs vendor/mbverify.js over every case the sdk generated. No WebCrypto is needed; this page is meant to be opened over plain http.</small>
+  <pre id="out">loading…</pre>
+</main>
+<script type="module">
+// Paths are relative to this page. The orchestrator may serve the page under /tests/ or
+// /vendor/: the verifier is tried from each candidate in order.
+const CASES_URL = './fixtures/parity/cases.json';
+const VERIFIER_URLS = ['../vendor/mbverify.js', './mbverify.js'];
+
+// The app server wants the token on every request. It arrives as ?t= on this page and
+// as the fc_t cookie after that; forward the query form too, without ever printing it.
+const token = new URLSearchParams(location.search).get('t');
+const withToken = (u) => token ? u + (u.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(token) : u;
+
+const out = document.getElementById('out');
+const EXPECT_KEYS = ['valid', 'verdict', 'problem', 'checks', 'digest', 'run_id', 'signer_did', 'step_count'];
+const lines = [];
+const say = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+
+function b64ToBytes(s) {
+  const bin = atob(s);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+async function loadVerifier() {
+  let lastErr;
+  for (const u of VERIFIER_URLS) {
+    try { return { mod: await import(withToken(u)), url: u }; }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('verifier not found');
+}
+
+(async () => {
+  say('secure context: ' + (window.isSecureContext ? 'yes' : 'no') +
+      ' · crypto.subtle: ' + (typeof crypto !== 'undefined' && crypto.subtle ? 'present' : 'absent') +
+      ' · ' + navigator.userAgent);
+  let MB, verifierUrl;
+  try {
+    const v = await loadVerifier();
+    MB = v.mod.default || v.mod;
+    verifierUrl = v.url;
+  } catch (e) {
+    say('FAIL: could not load the verifier: ' + (e && e.message || e));
+    out.className = 'bad';
+    return;
+  }
+  say('verifier ' + verifierUrl + ' v' + MB.VERSION + ' (sdk ' + MB.SDK_VERSION + ')' +
+      ' · window.MBVerify: ' + (window.MBVerify && typeof window.MBVerify.verify === 'function' ? 'set' : 'MISSING'));
+  let corpus;
+  try {
+    const r = await fetch(withToken(CASES_URL), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    corpus = await r.json();
+  } catch (e) {
+    say('FAIL: could not fetch ' + CASES_URL + ': ' + (e && e.message || e));
+    out.className = 'bad';
+    return;
+  }
+  say('corpus: ' + corpus.cases.length + ' cases, sdk ' + corpus.meta.sdk_version + ', generated ' + corpus.meta.generated_at);
+  const ndSame = JSON.stringify(MB.ND_RANGES) === JSON.stringify(corpus.meta.nd_ranges);
+  say('Python \\d table matches: ' + (ndSame ? 'yes' : 'NO'));
+  const t0 = performance.now();
+  let pass = 0;
+  const failing = [];
+  for (const c of corpus.cases) {
+    let got;
+    try {
+      const r = await MB.verify(b64ToBytes(c.bytes_b64));
+      got = {};
+      for (const k of EXPECT_KEYS) got[k] = r[k];
+    } catch (e) {
+      got = { threw: String(e && e.message || e) };
+    }
+    if (JSON.stringify(got) === JSON.stringify(c.expect)) pass++;
+    else failing.push(c.name + '  got ' + JSON.stringify(got) + '  expected ' + JSON.stringify(c.expect));
+  }
+  const total = corpus.cases.length;
+  const ms = Math.round(performance.now() - t0);
+  say('');
+  say('pass/total: ' + pass + '/' + total + '  (' + ms + ' ms)');
+  if (!ndSame) failing.unshift('nd_ranges table differs from parity.py');
+  if (failing.length) {
+    say('failing:');
+    for (const f of failing) say('  ' + f);
+    out.className = 'bad';
+  } else {
+    say('all cases agree with the sdk');
+    out.className = 'ok';
+  }
+})();
+</script>
+</body>
+</html>

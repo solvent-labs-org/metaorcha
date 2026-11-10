@@ -192,6 +192,126 @@ def _run_options(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _workflow_parser(add) -> None:
+    """``metabot workflow``: files of steps, kept by the sha256 of their bytes."""
+    workflow = add("workflow", help="steps that run one after another, kept by their sha256")
+    wsub = workflow.add_subparsers(dest="workflow_command", metavar="ACTION", required=True)
+    w_new = wsub.add_parser(
+        "new", allow_abbrev=False, help="make a workflow of one step from these flags, and keep it"
+    )
+    w_new.add_argument("name", help="the workflow's name")
+    w_new.add_argument(
+        "-e", "--engine", help="an ask step's engine: built-in or a bridge (default: here's)"
+    )
+    w_new.add_argument("-m", "--model", type=_model_name, help="an ask step's model")
+    w_new.add_argument(
+        "--role", metavar="ROLE", help="an ask step runs on a role from metabot roster"
+    )
+    w_new.add_argument("--login", metavar="NAME", help="an ask step runs on one of your logins")
+    w_new.add_argument("--ladder", action="store_true", help="the step is a ladder")
+    w_new.add_argument(
+        "--check",
+        action="append",
+        metavar="CMD",
+        help="with --ladder: a command judged on each rung's work (repeatable)",
+    )
+    w_new.add_argument("--office", metavar="DIR", help="the step is a run of the office in DIR")
+    w_new.add_argument("--desks", metavar="A,B,C", help="with --office: the desks, in order")
+    w_new.add_argument(
+        "--checks", action="store_true", help="with --office: run the office's gate checks"
+    )
+    w_new.add_argument(
+        "--until-checks",
+        action="store_true",
+        help="with --office: run a desk again while its checks fail",
+    )
+    w_new.add_argument(
+        "--rounds", type=int, metavar="N", help="with --until-checks: the most rounds (1-10)"
+    )
+    w_new.add_argument("--fan", action="store_true", help="with --office: the desks run at once")
+    w_new.add_argument(
+        "--no-advisors", action="store_true", help="with --office: leave out the advisors"
+    )
+    w_new.add_argument(
+        "--read-only", action="store_true", help="the step reads and changes nothing"
+    )
+    w_new.add_argument(
+        "--allow-write", action="store_true", help="writes run without asking (never destructive)"
+    )
+    w_new.add_argument(
+        "--allow", action="append", default=[], metavar="TOOL", help="a write tool that runs "
+        "without asking (repeatable)",
+    )  # fmt: skip
+    w_new.add_argument(
+        "--max-cost", metavar="DOLLARS", help="end the step's run once it has cost this much"
+    )
+    w_new.add_argument(
+        "--no-connections", action="store_true", help="leave the connections out of the step"
+    )
+    w_new.add_argument(
+        "--no-plugins", action="store_true", help="leave the enabled plugins out of the step"
+    )
+    w_new.add_argument("--cwd", help="the folder it works in (default: here)")
+    w_new.add_argument(
+        "--cron",
+        metavar="'M H DOM MON DOW'",
+        help="when it is due; checked and kept, and nothing fires it yet",
+    )
+    w_new.add_argument("--tz", metavar="ZONE", help="the cron's zone (default: this machine's)")
+    w_new.add_argument("--firings", type=int, metavar="N", help="ceiling: the most times it fires")
+    w_new.add_argument("--expires", metavar="YYYY-MM-DD", help="ceiling: the last day it fires")
+    w_new.add_argument(
+        "--month-cap", metavar="DOLLARS", help="ceiling: the most it spends in a month"
+    )
+    w_new.add_argument("prompt", nargs="+", help="the step's prompt; '-' reads it from stdin")
+    w_add = wsub.add_parser(
+        "add", allow_abbrev=False, help="keep a workflow file as written, by its sha256"
+    )
+    w_add.add_argument("file", metavar="FILE")
+    w_check = wsub.add_parser(
+        "check", allow_abbrev=False, help="whether a file or a kept workflow reads and runs here"
+    )
+    w_check.add_argument("ref", metavar="FILE_OR_NAME", help="a file, a name or a sha256")
+    w_show = wsub.add_parser(
+        "show", allow_abbrev=False, help="what a workflow runs: each step, its checks and limits"
+    )
+    w_show.add_argument("ref", metavar="NAME_OR_SHA", help="a name or a sha256 (12 digits or more)")
+    w_show.add_argument("--raw", action="store_true", help="print its exact bytes")
+    w_list = wsub.add_parser("list", allow_abbrev=False, help="every workflow kept, each version")
+    w_approve = wsub.add_parser(
+        "approve",
+        allow_abbrev=False,
+        help="sign your approval of a workflow's bytes; asks at a terminal",
+    )
+    w_approve.add_argument("--yes", action="store_true", help="at a terminal: do not ask")
+    w_revoke = wsub.add_parser(
+        "revoke", allow_abbrev=False, help="sign the end of a workflow's approval"
+    )
+    w_revoke.add_argument("--yes", action="store_true", help="do not ask to confirm")
+    w_run = wsub.add_parser(
+        "run", allow_abbrev=False, help="run an approved workflow's steps, then seal them"
+    )
+    w_run.add_argument("-q", "--quiet", action="store_true", help="no trace on stderr")
+    w_schedule = wsub.add_parser(
+        "schedule",
+        allow_abbrev=False,
+        help="a routine that fires an approved workflow on its schedule, under its ceiling",
+    )
+    w_schedule.add_argument(
+        "--name", help="the routine's name (default: the workflow's); save it again to change it"
+    )
+    w_schedule.add_argument("--off", action="store_true", help="save it switched off")
+    for parser_ in (w_approve, w_revoke, w_run, w_schedule):
+        parser_.add_argument(
+            "ref", metavar="NAME_OR_SHA", help="a name (every version, for revoke) or a sha256"
+        )
+    for action, parser_ in (
+        ("new", w_new), ("add", w_add), ("check", w_check), ("show", w_show), ("list", w_list),
+        ("approve", w_approve), ("revoke", w_revoke), ("run", w_run), ("schedule", w_schedule),
+    ):  # fmt: skip
+        parser_.set_defaults(func=_lazy("metabot.workflow_commands", f"cmd_workflow_{action}"))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="metabot",
@@ -222,10 +342,18 @@ def build_parser() -> argparse.ArgumentParser:
     _run_options(ask)
     ask.add_argument("--resume", metavar="SESSION", help="continue an engine session")
     ask.add_argument(
+        "--login",
+        metavar="NAME",
+        help="run on one of your own logins (metabot login list); default: this sign-in",
+    )
+    ask.add_argument(
         "--max-cost",
         type=_dollars,
         metavar="DOLLARS",
-        help="end the run once it has cost this much; a run MetaBot cannot price never starts",
+        help=(
+            "end the run once it has cost this much; a run on a model MetaBot cannot price "
+            "is refused, or ends at its next tool call when its engine names the model as it starts"
+        ),
     )
     ask.add_argument(
         "--ladder",
@@ -275,8 +403,26 @@ def build_parser() -> argparse.ArgumentParser:
     sug.add_argument("task", nargs="+", help="the task; '-' reads it from stdin")
     sug.set_defaults(func=_lazy("metabot.suggest", "cmd_suggest"))
 
+    prop = add(
+        "propose",
+        help="draft a workflow for a task by rules: one ask, a ladder or an office run; "
+        "it runs, approves and keeps nothing",
+    )
+    prop.add_argument("--folder", metavar="DIR", help="the folder it works in (default: here)")
+    prop.add_argument(
+        "--out", metavar="FILE", help="write the draft to FILE, never over a file that is there"
+    )
+    prop.add_argument("--json", action="store_true", help="print the proposal as one JSON object")
+    prop.add_argument("task", nargs="+", help="the task; '-' reads it from stdin")
+    prop.set_defaults(func=_lazy("metabot.propose", "cmd_propose"))
+
     chat = add("chat", help="talk to the bot in this terminal (also: metabot with no command)")
     _run_options(chat)
+    chat.add_argument(
+        "--login",
+        metavar="NAME",
+        help="every turn runs on one of your own logins (metabot login list)",
+    )
     chat.set_defaults(func=_lazy("metabot.repl", "cmd_chat"))
 
     connect = add("connect", help="connections to MCP servers, scoped and revocable")
@@ -537,6 +683,9 @@ def build_parser() -> argparse.ArgumentParser:
     rt_save.add_argument("--off", action="store_true", help="save it switched off")
     rt_save.add_argument("goal", nargs="+", help="the goal; '-' reads it from stdin")
     rt_list = rtsub.add_parser("list", allow_abbrev=False, help="the routines and when each is due")
+    rt_show = rtsub.add_parser(
+        "show", allow_abbrev=False, help="one routine: what it fires, its approval and ceiling"
+    )
     rt_run = rtsub.add_parser("run", allow_abbrev=False, help="fire a routine now, as serve would")
     rt_run.add_argument("name")
     rt_run.add_argument("-q", "--quiet", action="store_true", help="no trace on stderr")
@@ -546,7 +695,7 @@ def build_parser() -> argparse.ArgumentParser:
         "remove", allow_abbrev=False, help="forget a routine; its firings and receipts stay"
     )
     rt_remove.add_argument("--yes", action="store_true", help="do not ask to confirm")
-    for parser_ in (rt_enable, rt_disable, rt_remove):
+    for parser_ in (rt_show, rt_enable, rt_disable, rt_remove):
         parser_.add_argument("name")
     rt_firings = rtsub.add_parser("firings", allow_abbrev=False, help="what each firing did")
     rt_firings.add_argument("name", nargs="?", help="one routine (default: all)")
@@ -554,6 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
     for action, parser_ in (
         ("save", rt_save),
         ("list", rt_list),
+        ("show", rt_show),
         ("run", rt_run),
         ("enable", rt_enable),
         ("disable", rt_disable),
@@ -562,6 +712,8 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         parser_.set_defaults(func=_lazy("metabot.routine_commands", f"cmd_routine_{action}"))
 
+    _workflow_parser(add)
+
     roster = add("roster", help="each role's engine and model; yours win over the defaults")
     roster.set_defaults(func=_lazy("metabot.roster", "cmd_roster"))
     ro_sub = roster.add_subparsers(dest="roster_command", metavar="ACTION")
@@ -569,10 +721,63 @@ def build_parser() -> argparse.ArgumentParser:
     ro_set.add_argument("role", help="fast, build, review, second or private")
     ro_set.add_argument("--engine", required=True, help=f"one of {', '.join(ENGINES)}, or a bridge")
     ro_set.add_argument("--model", help="the engine's model (default: the engine's own)")
+    ro_set.add_argument(
+        "--login",
+        metavar="NAME",
+        help="run the role on one of your own logins (metabot login list)",
+    )
     ro_set.set_defaults(func=_lazy("metabot.roster", "cmd_roster_set"))
     ro_unset = ro_sub.add_parser("unset", allow_abbrev=False, help="give a role back its default")
     ro_unset.add_argument("role")
     ro_unset.set_defaults(func=_lazy("metabot.roster", "cmd_roster_unset"))
+
+    login = add("login", help="your own claude and codex sign-in folders, by name")
+    lsub = login.add_subparsers(dest="login_command", metavar="ACTION", required=True)
+    l_add = lsub.add_parser("add", allow_abbrev=False, help="name a sign-in folder")
+    l_add.add_argument("name", help="a short lower-case word, such as work")
+    l_add.add_argument("--engine", required=True, help="claude or codex")
+    l_add.add_argument(
+        "--home", required=True, metavar="FOLDER", help="the sign-in folder's absolute path"
+    )
+    l_add.add_argument(
+        "--max-at-once",
+        type=int,
+        default=1,
+        metavar="N",
+        help="runs on this login at once, 1 to 5 (default 1)",
+    )
+    l_add.add_argument(
+        "--on-sign-in",
+        choices=("refuse", "clear"),
+        default="refuse",
+        help="when an API key or another sign-in is set here: refuse the run (default), "
+        "or clear it for the run",
+    )
+    l_set = lsub.add_parser("set", allow_abbrev=False, help="change a login's settings")
+    l_set.add_argument("name")
+    l_set.add_argument(
+        "--on-sign-in",
+        choices=("refuse", "clear"),
+        help="when an API key or another sign-in is set here: refuse the run, or clear it",
+    )
+    l_set.add_argument("--max-at-once", type=int, metavar="N", help="runs on it at once, 1 to 5")
+    l_list = lsub.add_parser("list", allow_abbrev=False, help="each login and its folder")
+    l_check = lsub.add_parser(
+        "check", allow_abbrev=False, help="whether each folder is ready; nothing in it is opened"
+    )
+    l_check.add_argument("name", nargs="?")
+    l_remove = lsub.add_parser(
+        "remove", allow_abbrev=False, help="forget a login; its folder is left as it is"
+    )
+    l_remove.add_argument("name")
+    for action, parser_ in (
+        ("add", l_add),
+        ("set", l_set),
+        ("list", l_list),
+        ("check", l_check),
+        ("remove", l_remove),
+    ):
+        parser_.set_defaults(func=_lazy("metabot.logins", f"cmd_login_{action}"))
 
     add("serve", help="fire routines as they come due, one at a time").set_defaults(
         func=_lazy("metabot.serve", "cmd_serve")
@@ -584,9 +789,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ui.set_defaults(func=_lazy("metabot.web_commands", "cmd_ui"))
 
+    app = add("app", help="the web UI in a window of its own")
+    app.add_argument(
+        "--port", type=int, default=0, help="the port on 127.0.0.1 (default: a free one)"
+    )
+    app.add_argument(
+        "--install",
+        action="store_true",
+        help="add MetaBot to your applications menu, to open this window",
+    )
+    app.set_defaults(func=_lazy("metabot.web_window", "cmd_app"))
+
     cost = add("cost", help="what past runs spent, by engine and model")
     cost.add_argument("--json", action="store_true", help="print the totals as one JSON object")
     cost.set_defaults(func=_lazy("metabot.commands", "cmd_cost"))
+
+    status = add("status", help="what runs now: runs, office runs, ladders, routines and serve")
+    status.add_argument("--json", action="store_true", help="print it as one JSON object")
+    status.set_defaults(func=_lazy("metabot.live", "cmd_status"))
 
     receipts = add("receipts", help="the receipts of past runs")
     rsub = receipts.add_subparsers(dest="receipts_command", metavar="ACTION", required=True)
@@ -598,7 +818,38 @@ def build_parser() -> argparse.ArgumentParser:
     r_show.set_defaults(func=_lazy("metabot.commands", "cmd_receipts_show"))
     r_verify = rsub.add_parser("verify", allow_abbrev=False, help="check a receipt offline")
     r_verify.add_argument("ref", metavar="RUN_OR_FILE")
+    r_verify.add_argument(
+        "--chain",
+        action="store_true",
+        help="RUN_OR_FILE is a bundle that receipts export wrote, a folder or a tarball: check "
+        "each receipt in it, its seal's links to its members, its journals, and a workflow's "
+        "file and approval",
+    )
     r_verify.set_defaults(func=_lazy("metabot.commands", "cmd_receipts_verify"))
+    r_export = rsub.add_parser(
+        "export",
+        allow_abbrev=False,
+        help="write a run, an office run, a ladder, a workflow run or a firing to one bundle "
+        "anyone can check offline",
+    )
+    r_export.add_argument(
+        "run",
+        metavar="RUN",
+        help="the id of a run, an office run, a ladder, a workflow run or a firing",
+    )
+    r_export.add_argument(
+        "--out",
+        metavar="DIR|FILE.tar.gz",
+        help="a folder or a tarball to write, never over one that is there "
+        "(default: ./RUN.bundle.tar.gz)",
+    )
+    r_export.add_argument(
+        "--journals",
+        action="store_true",
+        help="put in the journals too: the prompts, answers and tool calls as kept "
+        "(default: the receipts alone, which hold hashes and no text)",
+    )
+    r_export.set_defaults(func=_lazy("metabot.bundles", "cmd_receipts_export"))
 
     mail = add("mail", help="notes between sessions, in any harness")
     msub = mail.add_subparsers(dest="mail_command", metavar="ACTION", required=True)

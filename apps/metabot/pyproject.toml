@@ -5,9 +5,13 @@ description = "A local bot for the coding agents you already use. Every connecti
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = [
+  "LICENSE",
+  "src/metabot/static/fonts/OFL-IBM-Plex-Mono.txt",  # the fonts the web UI serves
+  "src/metabot/static/fonts/OFL-Geist-Pixel.txt",
+]
 dependencies = [
-  "orcha-sdk>=0.2.1",
+  "orcha-sdk>=0.2.1,<0.3",
   "mcp>=2.0,<3",
   "httpx2>=2.5.0",  # imported directly; also what mcp requires
   "pyyaml>=6",  # Code Desks' office.yaml

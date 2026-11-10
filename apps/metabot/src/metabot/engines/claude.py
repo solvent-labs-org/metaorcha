@@ -23,6 +23,16 @@ model in ``modelSettings``, the telemetry and error-reporting opt-outs in
 Nothing else in that file is kept or passed on, so a key or a helper in it
 is never copied.
 
+On a login (S3), ``CLAUDE_CONFIG_DIR`` names the login's folder and nothing in it
+is opened: no setting is carried from it, so a run on a login takes its model
+from the run alone. Every ``ANTHROPIC_*`` variable is dropped, and every
+``CLAUDE_CODE_*`` one that picks a provider (``CLAUDE_CODE_USE_*``, except
+three that pick a tool or a plugin source), skips a provider's sign-in, or
+names a key, token, sign-in, credential, address, socket or helper: the
+names were read from the CLI's own text, and a pattern keeps up with a
+version that adds one. The engine's first line says what it signed in with
+(``apiKeySource``); ``none`` is the folder's own sign-in.
+
 Tested against ``claude`` 2.1.302.
 """
 
@@ -47,6 +57,33 @@ CARRIED_ENV = (
     "DISABLE_TELEMETRY",
     "DISABLE_ERROR_REPORTING",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+)
+# On a login, a CLAUDE_CODE_* variable with one of these words in its name signs in,
+# or sends the calls elsewhere, some other way than the login's folder.
+SIGN_IN_WORDS = frozenset(
+    {
+        "KEY",
+        "TOKEN",
+        "AUTH",
+        "OAUTH",
+        "AUTHENTICATE",
+        "CRED",
+        "CREDS",
+        "CREDMAN",
+        "IDENTITY",
+        "SECRET",
+        "URL",
+        "SOCKET",
+        "PROVIDER",
+        "HELPER",
+    }
+)
+NOT_A_PROVIDER = frozenset(
+    {
+        "CLAUDE_CODE_USE_COWORK_PLUGINS",
+        "CLAUDE_CODE_USE_POWERSHELL_TOOL",
+        "CLAUDE_CODE_USE_NATIVE_FILE_SEARCH",
+    }
 )
 
 
@@ -230,6 +267,18 @@ class ClaudeEngine(CliEngine):
     also_sees = "its built-in skills"
     skip_tools = ("mcp__metabot__",)
     supports_hooks = True
+    home_variable = "CLAUDE_CONFIG_DIR"
+
+    def sign_in_variable(self, name: str) -> bool:
+        if name.startswith("ANTHROPIC_"):
+            return True
+        if not name.startswith("CLAUDE_CODE_"):
+            return False
+        if name.startswith("CLAUDE_CODE_USE_"):
+            return name not in NOT_A_PROVIDER
+        if name.startswith("CLAUDE_CODE_SKIP_"):
+            return True
+        return not SIGN_IN_WORDS.isdisjoint(name.split("_")[2:])
 
     def user_instructions(
         self, cwd: Path | None = None, *, copy_of: Path | None = None
@@ -251,7 +300,8 @@ class ClaudeEngine(CliEngine):
         # committed could run hooks outside the gate or send the calls elsewhere.
         argv += ["--setting-sources", ""]
         argv += ["--permission-prompts", "none"]
-        settings = carried_settings(self.env(), model_set=bool(job.model))
+        # Nothing in a login's folder is opened, its settings file included.
+        settings = {} if self.login else carried_settings(self.env(), model_set=bool(job.model))
         if job.gate_hook:
             settings.update(hook_settings(job.gate_hook))
         if settings:
@@ -277,7 +327,9 @@ class ClaudeEngine(CliEngine):
         kind = obj.get("type")
         if kind == "system":
             if obj.get("subtype") == "init":
-                return [Started(obj.get("session_id"), obj.get("model"))]
+                source = obj.get("apiKeySource")
+                said = source if isinstance(source, str) else None
+                return [Started(obj.get("session_id"), obj.get("model"), said)]
             return []  # hook chatter, token estimates: never the user's text
         if kind == "assistant":
             events: list[Event] = _message_usage(obj, state)

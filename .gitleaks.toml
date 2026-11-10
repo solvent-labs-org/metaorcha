@@ -47,3 +47,14 @@ description = "BMAD tooling file manifest — the flagged column is a SHA-256 co
 paths = [
   '''_bmad/_config/files-manifest\.csv''',
 ]
+
+[[allowlists]]
+description = "Vendored xterm.js (MIT, unmodified). The generic-api-key rule fires on the minified identifier `t.FourKeyMap=`, a JavaScript class name, not a credential. Scoped to the value so a real secret elsewhere in these files is still caught."
+paths = [
+  '''apps/metabot-app/src/metabot_app/vendor/xterm(\.min)?\.js''',
+]
+regexTarget = "match"
+regexes = [
+  '''FourKeyMap=''',
+]
+condition = "AND"

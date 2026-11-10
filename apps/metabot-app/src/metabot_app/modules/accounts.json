@@ -1,0 +1,13 @@
+{
+  "id": "accounts",
+  "label": "Accounts",
+  "icon": "◉",
+  "order": 20,
+  "kind": "page",
+  "page": "accounts",
+  "phase": 1,
+  "modes": [
+    "user",
+    "dev"
+  ]
+}

@@ -142,7 +142,9 @@ def _csp_nonce(response) -> str:
     csp = response.headers["content-security-policy"]
     assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
     assert "form-action 'self'" in csp and "base-uri 'none'" in csp
-    assert "script-src" not in csp  # no script runs: default-src 'none' covers it
+    # a script may come from this server alone, as a file, never inline (PD-8); fonts too (U0)
+    assert "script-src 'self';" in csp and "font-src 'self';" in csp
+    assert "unsafe" not in csp and "script-src 'nonce" not in csp
     return re.search(r"style-src 'nonce-([^']+)'", csp).group(1)
 
 

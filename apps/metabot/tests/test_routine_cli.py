@@ -186,7 +186,7 @@ async def test_a_firing_runs_cursor_in_ask_mode(tmp_path, monkeypatch):
 
 async def test_a_firing_leaves_claude_to_its_gate_hook(tmp_path, monkeypatch):
     argv = await _fired_argv(tmp_path, monkeypatch, ClaudeEngine, "claude-echo.jsonl")
-    assert "pre-tool-use" in argv[argv.index("--settings") + 1]
+    assert "metabot.gate_client" in argv[argv.index("--settings") + 1]
     assert "--permission-mode" not in argv
 
 

@@ -37,7 +37,7 @@ from typing import Any
 
 import yaml
 
-from metabot.config import MODEL_RE
+from metabot.config import LOGIN_ENGINES, MODEL_RE, load_config, login_name_ok
 from metabot.engines import bridge_keeps_read_only, engine_names, known_engine, missing_command
 from metabot.gitcmd import main_worktree, toplevel
 from metabot.paths import is_file
@@ -85,6 +85,7 @@ class DeskSpec:
     cwd: str
     problem: str | None = None  # why this desk cannot run here, when it cannot
     read_only: bool = False  # it takes its turn read-only and files nothing
+    login: str | None = None  # one of your logins (S5): the desk's runs start on its folder
 
     @property
     def is_advisor(self) -> bool:
@@ -141,7 +142,9 @@ def office_root(folder: Path) -> Path:
         return mapped
 
 
-def load_office(root: Path, fan_cap: int = FAN_CAP_DEFAULT) -> OfficeSpec:
+def load_office(root: Path, fan_cap: int = FAN_CAP_DEFAULT, top: Path | None = None) -> OfficeSpec:
+    """The office in ``root``. ``top`` is the project it sits in, when the caller knows it;
+    without it, git is asked for the top of the working tree."""
     path = root / OFFICE_FILE
     try:
         with path.open("rb") as fh:
@@ -165,7 +168,7 @@ def load_office(root: Path, fan_cap: int = FAN_CAP_DEFAULT) -> OfficeSpec:
         raise OfficeError(
             OFFICE_FILE, f"cannot read {path}: the current folder cannot be read ({why})"
         ) from None
-    spec = parse_office(data, root, toplevel(root) or root, fan_cap)
+    spec = parse_office(data, root, top or toplevel(root) or root, fan_cap)
     return replace(spec, sha256=hashlib.sha256(raw).hexdigest())
 
 
@@ -213,6 +216,34 @@ def desk_engine(
             f"set it with metabot roster set {ROSTER_ROLE}, or add engine:",
         )
     raise OfficeError(f"desks.{desk.name}", desk.problem or "no engine")
+
+
+def _login_problem(login: str, engine: str | None) -> str | None:
+    """Why a desk cannot run on the login it names, or None when it can. An any desk's
+    engine comes from the roster as the office runs, and is checked then."""
+    if engine is not None and engine not in LOGIN_ENGINES:
+        return f"a login is for claude or codex alone; this desk runs on {engine}"
+    spec = load_config().logins.get(login)
+    if not isinstance(spec, dict):
+        return f"there is no login {login!r}; see metabot login list"
+    if engine is not None and spec.get("engine") != engine:
+        return f"{login} is a {spec.get('engine')} login, not one for {engine}"
+    return None
+
+
+def desk_login(desk: DeskSpec, roster: Mapping[str, Mapping[str, str]] | None = None) -> str | None:
+    """The login a desk runs on: its own, or for an any desk the login of the roster role
+    it runs on, when that role runs on the same engine; None for the engine's own sign-in."""
+    if desk.login:
+        return desk.login
+    if desk.harness != "any":
+        return None
+    for name in (ADVISOR_ROLE, ROSTER_ROLE) if desk.is_advisor else (ROSTER_ROLE,):
+        role = (roster or {}).get(name) or {}
+        if known_engine(role.get("engine")):
+            login = role.get("login")
+            return str(login) if login else None
+    return None
 
 
 def desk_problem(
@@ -353,6 +384,9 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
     read_only = raw.get("read_only", False)
     if not isinstance(read_only, bool):
         raise OfficeError(f"{where}.read_only", "true or false")
+    login = raw.get("login")
+    if login is not None and not login_name_ok(login):
+        raise OfficeError(f"{where}.login", "the name of one of your logins (metabot login list)")
     role_file, role_problem = _role(role, root, top)
     problems = [
         None if DESK_NAME.match(name) else _NAME_PROBLEM,
@@ -371,6 +405,7 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
         if advises and fan > 1
         else None,
         "a read-only desk files nothing, so it has no fan" if read_only and fan > 1 else None,
+        _login_problem(login, engine) if login is not None else None,
     ]
     return DeskSpec(
         name=name,
@@ -386,6 +421,7 @@ def _desk(name: str, raw: Any, root: Path, top: Path, cap: int) -> DeskSpec:
         cwd=cwd,
         problem="; ".join(p for p in problems if p) or None,
         read_only=read_only,
+        login=login,
     )
 
 

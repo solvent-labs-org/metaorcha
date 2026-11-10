@@ -1,0 +1,110 @@
+{
+  "id": "plugins",
+  "label": "Extend",
+  "icon": "⬢",
+  "order": 30,
+  "kind": "catalog",
+  "phase": 1,
+  "modes": [
+    "user",
+    "dev"
+  ],
+  "sections": [
+    {
+      "title": "Make",
+      "items": [
+        {
+          "catalog": "plugin.new",
+          "label": "Skill"
+        },
+        {
+          "catalog": "plugin.new-bridge",
+          "label": "Bridge"
+        },
+        {
+          "catalog": "plugin.import-skills",
+          "label": "Import skills"
+        }
+      ]
+    },
+    {
+      "title": "Installed",
+      "items": [
+        {
+          "catalog": "plugin.list",
+          "label": "List"
+        },
+        {
+          "catalog": "plugin.show",
+          "label": "Show"
+        },
+        {
+          "catalog": "plugin.enable",
+          "label": "Enable"
+        },
+        {
+          "catalog": "plugin.enable-bridges",
+          "label": "Enable as an engine"
+        },
+        {
+          "catalog": "plugin.enable-servers",
+          "label": "Enable with its servers"
+        },
+        {
+          "catalog": "plugin.enable-hooks",
+          "label": "Enable with hooks (developer)"
+        },
+        {
+          "catalog": "plugin.disable",
+          "label": "Disable"
+        },
+        {
+          "catalog": "plugin.remove",
+          "label": "Remove"
+        }
+      ]
+    },
+    {
+      "title": "Marketplaces",
+      "items": [
+        {
+          "catalog": "plugin.marketplace.list",
+          "label": "List"
+        },
+        {
+          "catalog": "plugin.marketplace.add",
+          "label": "Add a marketplace"
+        },
+        {
+          "catalog": "plugin.marketplace.remove",
+          "label": "Remove a marketplace"
+        },
+        {
+          "catalog": "plugin.install",
+          "label": "Install"
+        }
+      ]
+    },
+    {
+      "title": "Engines",
+      "items": [
+        {
+          "catalog": "engines.list",
+          "label": "List"
+        },
+        {
+          "catalog": "engines.manifest",
+          "label": "Engines in detail"
+        },
+        {
+          "catalog": "doctor.models",
+          "label": "Check local models"
+        },
+        {
+          "catalog": "ladder",
+          "label": "Show the ladder"
+        }
+      ]
+    }
+  ]
+}

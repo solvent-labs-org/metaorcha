@@ -1,0 +1,83 @@
+[
+ {
+  "ifindex": 1,
+  "ifname": "lo",
+  "flags": [
+   "LOOPBACK",
+   "UP",
+   "LOWER_UP"
+  ],
+  "mtu": 65536,
+  "qdisc": "noqueue",
+  "operstate": "UNKNOWN",
+  "group": "default",
+  "txqlen": 1000,
+  "addr_info": [
+   {
+    "family": "inet",
+    "local": "127.0.0.1",
+    "prefixlen": 8,
+    "scope": "host",
+    "label": "lo",
+    "valid_life_time": 4294967295,
+    "preferred_life_time": 4294967295
+   }
+  ]
+ },
+ {
+  "ifindex": 3,
+  "ifname": "wlp0s20f3",
+  "flags": [
+   "BROADCAST",
+   "MULTICAST",
+   "UP",
+   "LOWER_UP"
+  ],
+  "mtu": 1500,
+  "qdisc": "noqueue",
+  "operstate": "UP",
+  "group": "default",
+  "txqlen": 1000,
+  "addr_info": [
+   {
+    "family": "inet",
+    "local": "192.0.2.10",
+    "prefixlen": 24,
+    "broadcast": "192.0.2.255",
+    "scope": "global",
+    "dynamic": true,
+    "noprefixroute": true,
+    "label": "wlp0s20f3",
+    "valid_life_time": 2420,
+    "preferred_life_time": 2420
+   }
+  ]
+ },
+ {
+  "ifindex": 4,
+  "ifname": "mesh0",
+  "flags": [
+   "POINTOPOINT",
+   "MULTICAST",
+   "NOARP",
+   "UP",
+   "LOWER_UP"
+  ],
+  "mtu": 1280,
+  "qdisc": "fq_codel",
+  "operstate": "UNKNOWN",
+  "group": "default",
+  "txqlen": 500,
+  "addr_info": [
+   {
+    "family": "inet",
+    "local": "{CG7}",
+    "prefixlen": 32,
+    "scope": "global",
+    "label": "mesh0",
+    "valid_life_time": 4294967295,
+    "preferred_life_time": 4294967295
+   }
+  ]
+ }
+]

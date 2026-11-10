@@ -8,7 +8,7 @@ import getpass
 import json
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,7 @@ from metabot.engines.base import CliEngine
 from metabot.engines.bridge import BridgeEngine
 from metabot.gate import Policy
 from metabot.gitcmd import toplevel
+from metabot.logins import run_login
 from metabot.paths import kept_home, metabot_home, receipt_path, run_path
 from metabot.plugins import PluginError, enabled_plugins
 from metabot.prices import PRICES_AS_OF
@@ -52,7 +53,15 @@ from metabot.receipts import (
     unread_caveat,
     verify_file,
 )
-from metabot.roster import RosterError, fast_model, fill, local_status, pick, roster_entries
+from metabot.roster import (
+    RosterError,
+    fast_model,
+    fill,
+    local_status,
+    pick,
+    role_login,
+    roster_entries,
+)
 from metabot.sandbox import foresee
 from metabot.spend import dollars
 from metabot.suggest import Suggestion, reason, suggest_here
@@ -303,11 +312,13 @@ async def ask_once(
     limits: Any = None,
     extra_meta: Mapping[str, Any] | None = None,
     receipt_project: Path | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> Any:
     """One run as ``ask`` makes it. ``approver`` answers the gate, by default this terminal;
     ``engine`` is the engine itself, for a caller that makes its own; ``extra_meta`` joins
     the run's meta; ``receipt_project`` is the project a receipt copy goes to, when the run
-    works somewhere else, as a ladder rung in its copy does."""
+    works somewhere else, as a ladder rung in its copy does; ``verdicts`` are signed with the
+    run's own."""
     from metabot.plugins import enabled_plugins
     from metabot.runner import run_job
 
@@ -343,6 +354,7 @@ async def ask_once(
         meta=meta or None,
         project=(receipt_project or cwd) if project_receipts_on(project_receipt) else None,
         limits=limits,
+        verdicts=verdicts,
     )
 
 
@@ -389,12 +401,37 @@ def receipt_line(result: Any) -> tuple[str, bool]:
     return f"[metabot] receipt {result.receipt} ({state}, {result.steps} steps)", valid
 
 
+def _rung_on(rung: Any, cfg: Config, trace: Trace) -> Any:
+    """The engine a rung runs on: on its login's folder when it names one (S5), else an
+    openai rung on the settings the ladder read, else None, for the engine by name."""
+    from metabot.ladder import rung_engine
+
+    if not rung.login:
+        return rung_engine(rung, cfg)
+    engine = get_engine(rung.engine, login=rung.login)
+    if engine.cleared:
+        trace.note(cleared_line(rung.login, engine.cleared))
+    return engine
+
+
+def cleared_line(login: str, cleared: Sequence[str]) -> str:
+    """What a clearing login unset for a run, by name, never by value."""
+    n = len(cleared)
+    return (
+        f"[metabot] login {login}: cleared {n} other sign-in variable"
+        f"{'' if n == 1 else 's'} for this run ({', '.join(cleared)})"
+    )
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     from metabot.runner import Limits, NoPrice, RunCancelled
 
     trace = Trace(quiet=args.quiet)
     if args.check and not args.ladder:
         _err("--check goes with --ladder: a failing check makes the ladder climb")
+        return EXIT_USAGE
+    if args.ladder and args.login:
+        _err("--login names one engine's login; a ladder's rungs run on several engines")
         return EXIT_USAGE
     if args.ladder:
         return _ask_ladder(args, trace)
@@ -419,6 +456,19 @@ def cmd_ask(args: argparse.Namespace) -> int:
         except RosterError as exc:
             _err(str(exc))
             return EXIT_USAGE
+    try:
+        login_name, login_why = run_login(
+            args.login,
+            role,
+            role_login(role, engine_name) if role and engine_name else None,
+            args.resume,
+        )
+    except ValueError as exc:
+        _err(str(exc))
+        return EXIT_USAGE
+    if login_name is not None and engine_name is None:  # a login names its engine
+        spec = load_config().logins.get(login_name)
+        engine_name = spec.get("engine") if isinstance(spec, dict) else None
     engine_name = engine_name or default_engine()
     if not known_engine(engine_name):
         _err(f"unknown engine {engine_name!r}; choose one of: {', '.join(engine_names())}")
@@ -436,6 +486,17 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if not usable:
         _err(f"{cwd} is not a directory")
         return EXIT_USAGE
+    engine = None
+    if login_name:
+        try:
+            engine = get_engine(engine_name, login=login_name)
+        except ValueError as exc:  # ConfigError is one: an unknown login
+            _err(str(exc))
+            return EXIT_USAGE
+        if login_why:
+            trace.note(login_why)
+        if engine.cleared:
+            trace.note(cleared_line(login_name, engine.cleared))
     if suggested is not None:
         why = reason(suggested)
         said = f"[metabot] suggested the {suggested.role} role (rule {why}): {suggested.engine}"
@@ -462,6 +523,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 suggested=suggested.record() if suggested is not None else None,
                 project_receipt=args.project_receipt,
                 limits=Limits(max_cost_musd=args.max_cost) if args.max_cost else None,
+                engine=engine,
             )
         )
     except NoPrice as exc:
@@ -598,6 +660,12 @@ def ladder_setup(
         + ("; private, so only rungs on this machine" if private else "")
     )
 
+    for rung in rungs:  # a login that refuses here stops the ladder before any rung runs
+        if rung.login:
+            try:
+                get_engine(rung.engine, login=rung.login)
+            except ValueError as exc:
+                raise LadderSetupError(str(exc)) from None
     ladder_id = ladder_id or new_run_id()
     copies = None
     if not args.read_only:  # a read-only rung changes nothing, so it needs no copy
@@ -618,14 +686,19 @@ def ladder_setup(
 
 
 async def ladder_run(
-    setup: LadderSetup, args: argparse.Namespace, trace: Trace, approver: Any = None
+    setup: LadderSetup,
+    args: argparse.Namespace,
+    trace: Trace,
+    approver: Any = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> Any:
     """Run the rungs in order; the record decides each climb.
 
-    ``approver`` answers the gate; None is this terminal.
+    ``approver`` answers the gate; None is this terminal. ``verdicts`` are signed with the
+    ladder's seal.
     """
     from metabot.engines import get_engine
-    from metabot.ladder import Rung, run_ladder, rung_engine
+    from metabot.ladder import Rung, run_ladder
     from metabot.runner import Limits, NoPrice
 
     async def run_rung(
@@ -638,7 +711,7 @@ async def ladder_run(
             cwd=where or setup.cwd,
             receipt_project=setup.cwd,
             model=rung.model,
-            engine=rung_engine(rung, setup.cfg),  # an openai rung on the settings the ladder read
+            engine=_rung_on(rung, setup.cfg, trace),
             allow_write=args.allow_write,
             allows=args.allow,
             read_only=args.read_only,
@@ -672,6 +745,7 @@ async def ladder_run(
         task=setup.prompt,
         cwd=setup.cwd,
         project=setup.cwd if project_receipts_on(args.project_receipt) else None,
+        verdicts=verdicts,
     )
 
 
@@ -996,6 +1070,10 @@ def cmd_receipts_show(args: argparse.Namespace) -> int:
 
 
 def cmd_receipts_verify(args: argparse.Namespace) -> int:
+    if getattr(args, "chain", False):  # a bundle: each receipt in it, its seal and journals
+        from metabot.bundles import cmd_verify_chain
+
+        return cmd_verify_chain(args)
     path = _receipt_path(args.ref)
     if path is None:
         _err(f"no receipt {args.ref!r} (give a run id or a receipt file)")

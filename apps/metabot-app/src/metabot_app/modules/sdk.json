@@ -1,0 +1,12 @@
+{
+  "id": "sdk",
+  "label": "SDK",
+  "icon": "⚿",
+  "order": 70,
+  "kind": "page",
+  "page": "sdk",
+  "phase": 1,
+  "modes": [
+    "dev"
+  ]
+}

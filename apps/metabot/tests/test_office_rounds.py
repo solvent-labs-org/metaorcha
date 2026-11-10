@@ -250,6 +250,7 @@ async def test_spend_is_summed_over_rounds_and_the_cap_stops_the_loop(tmp_path):
     assert not result.ok and len(fixer.jobs) == 2
     assert [r.cost_musd for r in result.rows] == [100, 100]
     assert result.rows[-1].stopped == "the office's $0.0002 is spent"
+    assert result.limit == "limit: $0.0002"  # the office run stopped at its cap
     record = _record(result.office_run_id)
     assert (record["max_cost_musd"], record["spent_musd"]) == (200, 200)
 
@@ -262,6 +263,15 @@ async def test_each_round_runs_under_what_is_left_of_the_cap(tmp_path):
     assert len(fixer.jobs) == 2
     last = result.rows[-1]
     assert not last.ok and "limit: $0.00005" in str(last.error)
+    assert result.limit == "limit: $0.00015"  # a desk past what was left of it
+
+
+async def test_an_office_run_under_its_cap_has_no_limit(tmp_path):
+    save_config(Config(prices=PRICES))
+    root = _trusted(tmp_path, {"tests": WANT}, desks=LOOP)
+    fixer = Fixer("claude", right=1, usage={"prompt_tokens": 100, "completion_tokens": 0})
+    result = await _relay(root, {"claude": fixer}, checks=True, rounds=5, max_cost_musd=1000)
+    assert result.ok and result.limit is None
 
 
 async def test_a_desk_with_no_price_is_refused_under_a_cap_before_any_worktree(tmp_path, home):

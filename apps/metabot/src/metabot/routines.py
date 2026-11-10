@@ -12,6 +12,11 @@ for a firing is its state. The run has no human to ask: a write the routine
 does not allow is declined, and a destructive call always is, each with a
 ``declined: no human present`` verdict in the receipt. An engine whose own
 tools the gate cannot decide, because it runs no hook, runs them read-only.
+
+Such a routine is ``not approved``: its goal was saved, never approved as a
+workflow is, and each of its firing rows and each surface that lists it says
+so. A routine may instead name an approved workflow; ``metabot.workflow_firing``
+fires those, each under the approval and the ceiling of the file it pins.
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ from metabot.connections import (
 from metabot.cron import Cron, CronError, zone
 from metabot.engines import bridge_keeps_read_only, engine_names, get_engine, known_engine
 from metabot.gate import Policy
+from metabot.live import begin_live, end_live
 from metabot.paths import metabot_home, new_run_id, receipts_dir, run_path, safe_id, write_private
 from metabot.receipts import acceptance_of
 from metabot.scope_classes import ScopeClass, is_recognised, is_valid_capability_id
@@ -62,6 +68,7 @@ GOAL_LIMIT = 50_000
 REASON_LIMIT = 500
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 ID_SHAPE = re.compile(r"^rt-[0-9a-f]{12}$")  # a routine's id; a name never has its shape
+NOT_APPROVED = "not approved"  # a routine with a goal of its own: no approval covers it
 
 ListTools = Callable[[Connection], list[Tool]]
 MakeEngine = Callable[[str], Any]
@@ -105,6 +112,14 @@ class Firing:
     at: str  # when this row was written
     receipt: str | None = None
     acceptance: str | None = None  # the declared_acceptance result, when criteria were declared
+    workflow: str | None = None  # the sha256 of the workflow it fired, for a routine on one
+    approval: str | None = None  # the approval it fired under, or NOT_APPROVED; None: older row
+    number: int | None = None  # which firing of the workflow it was, counted from 1
+
+
+def is_workflow_routine(record: Mapping[str, Any]) -> bool:
+    """Whether a routine names a workflow instead of a goal of its own."""
+    return "workflow" in record
 
 
 # ── the save check ──────────────────────────────────────────────────────────
@@ -433,6 +448,11 @@ def utc_stamp(when: datetime) -> str:
 
 def note_firing(routine_id: str, due: datetime | None, state: str, reason: str) -> Firing:
     """A firing that never ran: ``skipped``, or an ``error`` before any run."""
+    try:
+        record: Mapping[str, Any] = get_routine(routine_id)
+    except (KeyError, OSError, ValueError):
+        record = {}
+    sha = record.get("workflow")
     return _append(
         Firing(
             f"fr-{secrets.token_hex(6)}",
@@ -442,6 +462,8 @@ def note_firing(routine_id: str, due: datetime | None, state: str, reason: str) 
             None,
             reason[:REASON_LIMIT],
             utc_now(),
+            workflow=sha if isinstance(sha, str) else None,
+            approval=None if is_workflow_routine(record) else NOT_APPROVED,
         )  # fmt: skip
     )
 
@@ -521,6 +543,10 @@ async def fire(
     from metabot.runner import Limits, RunCancelled, run_job
 
     record = get_routine(routine_id)
+    if is_workflow_routine(record):
+        from metabot.workflow_firing import fire_workflow
+
+        return await fire_workflow(record, due=due, on_event=on_event)
     rid = str(record["id"])
     firing_id = f"fr-{secrets.token_hex(6)}"
     due_text = utc_stamp(due) if due is not None else None
@@ -550,6 +576,7 @@ async def fire(
                 utc_now(),
                 None if receipt is None else str(receipt),
                 None if receipt is None else acceptance_of(receipt),
+                approval=NOT_APPROVED,
             )  # fmt: skip
         )
 
@@ -558,11 +585,15 @@ async def fire(
         return row("refused", reason=refused)
     run_id = new_run_id()
     row("running", run_id)
+    model = record.get("model") or cfg.models.get(record["engine"])
+    begin_live("routine", firing_id, name=f"{record['name']}, {NOT_APPROVED}",
+               engine=record["engine"], model=model, current=f"run {run_id}")  # fmt: skip
     try:
         engine = (make_engine or get_engine)(record["engine"])
         chosen = enabled_plugins() if record.get("plugins", True) else []
         meta: dict[str, Any] = {
             "routine": rid, "routine_name": record["name"], "firing": firing_id, "due": due_text,
+            "approval": NOT_APPROVED,
         }  # fmt: skip
         if chosen:
             meta["plugins"] = [p.pin for p in chosen]
@@ -599,4 +630,6 @@ async def fire(
         raise
     except Exception as exc:  # the engine could not start, or the run broke once sealed
         return row("error", run_id, f"{type(exc).__name__}: {exc}", _sealed_receipt(run_id))
+    finally:
+        end_live(firing_id)
     return row("sealed", run_id, result.error, result.receipt)

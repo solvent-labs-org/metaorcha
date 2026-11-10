@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Fake metabot_python: invoked as [self, mbq.py, SUB, ...]. Answers from the
+scratch $METABOT_HOME with canned shapes (no metabot import)."""
+import glob, json, os, sys
+
+LOG = os.environ.get("FAKE_LOG")
+argv = sys.argv[1:]
+if argv[1:2] == ["serve"]:
+    # the warm reader (mbqw): one JSON request per line, answered by this fake run one-shot
+    import subprocess
+    for line in sys.stdin:
+        q = json.loads(line)
+        r = subprocess.run([sys.executable, __file__, argv[0], *q["args"]], capture_output=True, text=True)
+        try:
+            obj = json.loads(r.stdout)
+        except ValueError:
+            obj = {"error": (r.stderr or "fake mbq failed").strip()[:200]}
+        if r.returncode != 0:
+            reply = {"id": q["id"], "error": obj.get("error") if isinstance(obj, dict) else str(obj)}
+        else:
+            reply = {"id": q["id"], "result": obj}
+        sys.stdout.write(json.dumps(reply) + "\n")
+        sys.stdout.flush()
+    sys.exit(0)
+if LOG:
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"bin": "mbpython", "argv": argv}) + "\n")
+if os.environ.get("FAKE_MBQ_FAIL"):
+    print(json.dumps({"error": "RuntimeError: boom"}))
+    sys.exit(1)
+home = os.environ.get("METABOT_HOME", "")
+sub, rest = (argv[1] if len(argv) > 1 else ""), argv[2:]
+
+
+def state(rid):
+    return "valid" if os.path.isfile(os.path.join(home, "receipts", f"{rid}.json")) else "no receipt"
+
+
+def alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+if sub == "runs":
+    rows = []
+    try:
+        with open(os.path.join(home, "runs.jsonl")) as f:
+            for line in f:
+                if line.strip():
+                    rows.append(json.loads(line))
+    except OSError:
+        pass
+    newest = list(reversed(rows))
+    for r in newest:
+        r["state"] = state(r.get("run_id"))
+    out = {"rows": newest, "total": len(rows), "error": None}
+elif sub == "live":
+    a, s = [], []
+    for p in sorted(glob.glob(os.path.join(home, "live", "*.json"))):
+        with open(p) as f:
+            e = json.load(f)
+        (a if alive(e.get("pid")) else s).append(e)
+    out = {"alive": a, "stale": s}
+elif sub == "run":
+    p = os.path.join(home, "runs", rest[0], "journal.json")
+    if os.path.isfile(p):
+        with open(p) as f:
+            j = json.load(f)
+        out = {"run_id": rest[0], "error": None, "meta": j.get("meta", {}), "steps": j.get("steps", []),
+               "verdicts": j.get("verdicts", []), "state": state(rest[0]), "signer": j.get("signer")}
+    else:
+        out = None
+elif sub == "logins":
+    try:
+        with open(os.path.join(home, "fake-logins.json")) as f:
+            out = json.load(f)
+    except (OSError, ValueError):
+        out = []
+elif sub == "state":
+    out = {"state": state(rest[0])}
+elif sub in ("plugins", "marketplaces", "engines"):
+    # 25.3 B6: $METABOT_HOME/fake-<sub>.json holds the whole answer when a test wrote one
+    try:
+        with open(os.path.join(home, f"fake-{sub}.json")) as f:
+            out = json.load(f)
+    except (OSError, ValueError):
+        out = {"plugins": {"plugins": []},
+               "marketplaces": {"marketplaces": [{"name": "metabot", "folder": os.path.join(home, "builtin"),
+                                                  "plugins": [], "error": None}]},
+               "engines": {"engines": [{"name": n, "kind": "builtin", "local": n == "openai",
+                                        "models": ["qwen2.5:3b"] if n == "openai" else [], "plugin": None}
+                                       for n in ("claude", "codex", "cursor", "openai")],
+                           "error": None}}[sub]
+else:
+    print(json.dumps({"error": f"ValueError: unknown subcommand {sub!r}"}))
+    sys.exit(1)
+print(json.dumps(out))

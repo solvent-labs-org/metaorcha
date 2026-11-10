@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# mc-send <desk> <message...>   — message another MetaChat desk from this one.
+# Run it inside any desk (claude, cursor, shell). The message reaches the other
+# desk the same way the page does: its chat inbox when one is armed, else typed
+# into its running CLI, else it lands in that desk's lane. It shows on the page as
+# "<this desk> → <desk>".  mc-send tablet <message> answers the person in this
+# desk's own lane.
+#   mc-send --list            the desks and how each can be reached
+#   mc-send <desk> -          the message on stdin
+# Token: $METACHAT_STATE/token, else ~/.local/state/metachat/token.
+# The token is never printed.
+set -euo pipefail
+URL="${METACHAT_URL:-http://127.0.0.1:8460}"
+if [ -n "${METACHAT_STATE:-}" ]; then
+  STATE="$METACHAT_STATE"
+else
+  STATE="$HOME/.local/state/metachat"
+fi
+TOKEN="$(cat "$STATE/token")"
+if [ "${1:-}" = "--list" ] || [ $# -eq 0 ]; then
+  curl -fsS -H "Cookie: fc_t=$TOKEN" "$URL/api/desks" | python3 -c '
+import json,sys
+for d in json.load(sys.stdin)["desks"]:
+    print("%-34s %-6s %s" % (d["name"], d.get("reach","?"), d.get("cli","")))'
+  [ $# -eq 0 ] && echo "usage: mc-send <desk> <message...>" >&2
+  exit 0
+fi
+TARGET="$1"; shift
+TEXT="$*"
+[ "$TEXT" = "-" ] && TEXT="$(cat)"
+FROM="${METACHAT_DESK:-}"
+if [ -z "$FROM" ] && [ -n "${TMUX:-}" ]; then
+  S="$(tmux display -p '#S' 2>/dev/null || true)"; FROM="${S#fc-}"
+fi
+FROM="${FROM:-$(hostname -s)-shell}"
+BODY="$(python3 -c 'import json,sys; print(json.dumps({"target":sys.argv[1],"text":sys.argv[2],"from":sys.argv[3]}))' "$TARGET" "$TEXT" "$FROM")"
+OUT="$(curl -sS -H "Cookie: fc_t=$TOKEN" -H 'Content-Type: application/json' -H 'X-MetaChat: 1' \
+  -X POST --data "$BODY" "$URL/api/send")"
+python3 -c 'import json,sys
+r=json.loads(sys.argv[1])
+if r.get("ok"): print("sent to", sys.argv[2], "via", r.get("via"))
+else: print("not sent:", r.get("error")); sys.exit(1)' "$OUT" "$TARGET"

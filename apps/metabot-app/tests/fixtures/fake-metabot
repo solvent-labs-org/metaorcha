@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Fake metabot. Logs argv to $FAKE_LOG; canned output by subcommand.
+login add NAME ... appends to $METABOT_HOME/fake-logins.json (fake-mbpython
+reads it back); a NAME starting with "bad" is refused with exit 1."""
+import json, os, sys, time
+
+LOG = os.environ.get("FAKE_LOG")
+argv = sys.argv[1:]
+if LOG:
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"bin": "metabot", "argv": argv, "cwd": os.getcwd()}) + "\n")
+if os.environ.get("FAKE_ORPHAN_PID_FILE"):
+    # a hung grandchild: fork `sleep 600`, record its pid, wait on it (review server-concurrency-6)
+    import subprocess
+    child = subprocess.Popen(["sleep", "600"])
+    with open(os.environ["FAKE_ORPHAN_PID_FILE"], "w") as f:
+        f.write(str(child.pid))
+    child.wait()
+    sys.exit(0)
+if os.environ.get("FAKE_SLEEP"):
+    time.sleep(float(os.environ["FAKE_SLEEP"]))
+if argv[:1] == ["--version"]:
+    print("metabot 0.3.0")
+    sys.exit(0)
+if argv[:2] == ["login", "add"]:
+    name = argv[2]
+    if name.startswith("bad"):
+        print(f"login add: {name} refused by the fake", file=sys.stderr)
+        print("second line", file=sys.stderr)
+        sys.exit(1)
+    home = os.environ.get("METABOT_HOME", "")
+    path = os.path.join(home, "fake-logins.json")
+    try:
+        with open(path) as f:
+            logins = json.load(f)
+    except (OSError, ValueError):
+        logins = []
+    folder = argv[argv.index("--home") + 1]
+    mao = int(argv[argv.index("--max-at-once") + 1]) if "--max-at-once" in argv else 1
+    logins.append({"name": name, "engine": argv[argv.index("--engine") + 1],
+                   "home": folder, "max_at_once": mao})
+    with open(path, "w") as f:
+        json.dump(logins, f)
+    print(f"added login {name}")
+    sys.exit(0)
+if argv[:2] == ["workflow", "run"] and len(argv) >= 3:
+    # 21.4 end-to-end: a run leaves an index row and a receipt (the golden valid
+    # envelope) under $METABOT_HOME, as MetaBot's seal_and_store does
+    import hashlib
+    home = os.environ.get("METABOT_HOME", "")
+    golden = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden.json")
+    with open(golden) as f:
+        body = json.load(f)["valid"]
+    run_id = "wf-" + argv[2] + "-" + hashlib.sha256(str(time.time()).encode()).hexdigest()[:8]
+    text = json.dumps(body, indent=2) + "\n"
+    os.makedirs(os.path.join(home, "receipts"), exist_ok=True)
+    path = os.path.join(home, "receipts", run_id + ".json")
+    with open(path, "w") as f:
+        f.write(text)
+    row = {"run_id": run_id, "started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
+           "steps": len(body.get("steps", [])), "signer": "did:orcha:agent:x", "receipt": path,
+           "receipt_sha256": hashlib.sha256(text.encode()).hexdigest(), "engine": "claude",
+           "cwd": os.getcwd(), "label": "workflow " + argv[2]}
+    with open(os.path.join(home, "runs.jsonl"), "a") as f:
+        f.write(json.dumps(row) + "\n")
+    print(f"workflow {argv[2]} ran: {run_id}")
+    sys.exit(0)
+if argv[:1] == ["engines"]:
+    # MetaBot 0.4.0 cmd_engines' shape: a built-in line, then a bridge line whose
+    # status is the bridge's command (review 1.2: it must never leave the PC)
+    print("* claude  /usr/bin/claude")
+    print("  openai  http://127.0.0.1:11434/v1 model qwen: local")
+    print("  mybridge bridge from demo@market: /opt/bridges/run --token=s3cr3t-bridge-pass")
+    if "--manifest" in argv:
+        print("    read-only  it says read-only")
+    print("  other   bridge: /opt/bridges/other --token=s3cr3t-bridge-pass (/opt/bridges/other not found)")
+    sys.exit(0)
+if argv[:2] == ["status", "--json"]:
+    print(json.dumps({"runs": [], "fake": True}))
+    sys.exit(0)
+if argv[:2] == ["plugin", "show"] and argv[2:3] == ["missing"]:
+    print("no such plugin: missing", file=sys.stderr)
+    sys.exit(1)
+print("fake metabot: " + " ".join(argv) + "\x1b[0m\x07")
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))

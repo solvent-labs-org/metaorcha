@@ -16,7 +16,6 @@ Tested against codex-cli 0.154.0.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,9 @@ from metabot.events import (
 )
 
 UNKNOWN_TEXT_LIMIT = 500
+
+
+CODEX_SIGN_IN_WORDS = frozenset({"KEY", "TOKEN", "AUTH", "URL", "LOGIN", "ISSUER"})
 
 
 def _toml(value: Any) -> str:
@@ -60,6 +62,20 @@ class CodexEngine(CliEngine):
                 "~/.agents/skills: codex_ignore_user_config is off"
             )
 
+    home_variable = "CODEX_HOME"
+
+    def sign_in_variable(self, name: str) -> bool:
+        """On a login: ``OPENAI_*``, ``AZURE_OPENAI_*``, the codex variables that name a
+        key, token, sign-in or address, and ``CODEX_SQLITE_HOME``, which keeps state outside
+        the login's folder. The names were read from codex's own text."""
+        if name.startswith(("OPENAI_", "AZURE_OPENAI_")):
+            return True
+        if not name.startswith("CODEX_"):
+            return False
+        if name == "CODEX_SQLITE_HOME":
+            return True
+        return not CODEX_SIGN_IN_WORDS.isdisjoint(name.split("_")[1:])
+
     def user_instructions(
         self, cwd: Path | None = None, *, copy_of: Path | None = None
     ) -> list[Path]:
@@ -70,7 +86,7 @@ class CodexEngine(CliEngine):
         """
         if not self.config.codex_ignore_user_config:
             return []
-        raw = os.environ.get("CODEX_HOME")
+        raw = self.env().get("CODEX_HOME")  # a login's folder, on a login
         codex = Path(raw) if raw and Path(raw).is_absolute() else sandbox.user_home() / ".codex"
         found = [codex / name for name in ("AGENTS.md", "AGENTS.override.md", "plugins", "skills")]
         return sandbox.present([*found, sandbox.user_home() / ".agents" / "skills"])

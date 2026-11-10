@@ -1,2 +1,5 @@
 # Everything requires sign-off from the repo owner.
 * @azank1
+
+# The MetaBot app
+/apps/metabot-app/ @azank1

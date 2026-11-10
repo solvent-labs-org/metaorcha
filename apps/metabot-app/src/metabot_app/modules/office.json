@@ -1,0 +1,74 @@
+{
+  "id": "office",
+  "label": "Office",
+  "icon": "▦",
+  "order": 60,
+  "kind": "catalog",
+  "phase": 1,
+  "modes": [
+    "dev"
+  ],
+  "sections": [
+    {
+      "title": "Check",
+      "items": [
+        {
+          "catalog": "office.check",
+          "label": "Check office"
+        }
+      ]
+    },
+    {
+      "title": "Trust",
+      "items": [
+        {
+          "catalog": "office.trust",
+          "label": "Trust checks"
+        }
+      ]
+    },
+    {
+      "title": "Run",
+      "items": [
+        {
+          "catalog": "office.run",
+          "label": "Run office"
+        }
+      ]
+    },
+    {
+      "title": "Desks",
+      "items": [
+        {
+          "catalog": "desks.list",
+          "label": "List"
+        },
+        {
+          "catalog": "desks.pick",
+          "label": "Pick"
+        },
+        {
+          "catalog": "desks.clean",
+          "label": "Clean"
+        }
+      ]
+    },
+    {
+      "title": "Roster",
+      "items": [
+        {
+          "catalog": "roster.show",
+          "label": "Show"
+        },
+        {
+          "catalog": "roster.set",
+          "label": "Set"
+        },
+        {
+          "catalog": "roster.unset",
+          "label": "Unset"
+        }
+      ]
+    }
+  ]
+}

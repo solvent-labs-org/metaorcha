@@ -4,6 +4,253 @@ All notable changes to MetaBot (`apps/metabot`) are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- A run's live page in the web UI says its state in a word, Running, Waiting
+  for you, Finished, Stopped or Failed, lists the calls that wait with Allow
+  and Decline and the destructive call's box for the word `yes`, keeps the
+  trace behind Show details, and, once the run ends, lists the receipt's steps
+  and the command that checks it. The page updates as the run goes: the server
+  streams the run's changes on `/live/RUN_ID/events`, behind the same guard as
+  every page, and one script file, served from this machine under `/static/`,
+  redraws the page on each change, leaving a field being typed in alone. With
+  scripts off, the page refreshes itself every two seconds while the run goes,
+  and holds still while a call waits for you.
+- `metabot ui` opens on Today where MetaBot is set up: what needs you (each
+  ask waiting on a run the page started, linked to its run), the checks that
+  failed lately, each named by the run it judged, from receipts that verify,
+  what is running now, with a Stop button for a run the page started, and the
+  newest receipt, checked as the page is drawn: valid, or INVALID because it
+  was changed after the run. What is running is what each process says of
+  itself, as `metabot status` reads it, and the page says it is unsigned.
+- Plan it, in the web UI, hands one sentence to `metabot propose`'s rules for
+  the folder the UI started in, and shows the plan: each step's engine, what
+  it may change, whether it asks before it writes, the rules that fired and
+  what is missing. A plan with something missing, such as a private ladder
+  with no rung that keeps the work here, offers no approval. Approve and run
+  starts the plan's step once, as the page starts an ask, a ladder or an
+  office run, and its receipt signs a `plan` verdict:
+  `sha256=<the draft's sha256>;runs_on=<sha256>;approved_in=web`. The draft
+  names no ladder rung, and an office desk on `harness: any` takes its engine
+  from the roster, so `runs_on` hashes what the page showed the step runs on.
+  The form carries both hashes you read; the plan is made again from the same
+  sentence, folder and cap, and one that changed in between, in its draft or
+  in what it runs on, is refused and nothing runs. A plan that needs a cap
+  says to give one in the page's spend cap field. It keeps nothing in the
+  workflow store, writes no workflow approval and changes no setting.
+- The Home form and Plan it take an optional spend cap in dollars, "Stop at
+  this spend", read as `--max-cost` reads it, with no default. A cap that is
+  not dollars above 0, or is past $100000.00, is refused on the page. A run
+  whose model cannot be priced up front is refused under its cap, and its
+  page says so. A
+  run, a ladder or an office run that stopped at its cap says so on its page.
+- `/workflows/SHA256` shows a workflow kept in the store and changes nothing:
+  its whole file as text, its name, its steps as `metabot workflow show`
+  gives them, and whether an approval signed with this machine's key is in
+  force, revoked or none. The hash sits in a field to select and copy. An address that is not 64
+  lowercase hex digits is refused, and one the store does not keep is not
+  found. The routines page links a routine's workflow to it.
+
+- `metabot receipts export RUN [--out DIR|FILE.tar.gz] [--journals]` writes a
+  run, an office run or a ladder to one bundle: its receipt, its seal and each
+  member's receipt as kept, and `bundle.json`, which lists every file with its
+  sha256. A plain export holds the receipts alone, which hold hashes and no
+  text. `--journals` puts in the journal of each too: what its receipt hashes,
+  the steps and the prompt, answer or task, leaving out the run's folder, its
+  login and every field outside a hash. Export checks the bundle before it
+  writes it, and never writes over a file or folder that is there. `metabot receipts verify --chain DIR|TARBALL`
+  checks a bundle offline, on any machine: each receipt's signature, each
+  member against the digest its seal signs, and each journal against every
+  hash its receipt signs. One changed byte in any file fails it, and so does a
+  missing file or one the bundle does not list. It reads a tarball in memory,
+  never unpacked, and refuses absolute names, `..`, links, special files and
+  a tarball past its limits of files and bytes.
+- `metabot receipts export` takes a workflow run or a firing (`wff-...`). The
+  bundle holds the seal, each step's receipt and a ladder or office step's own
+  members, the workflow file's exact bytes (`workflows/<sha256>.json`) and the
+  receipt of the approval it ran under (`approvals/<id>.json`).
+  `metabot receipts verify --chain` checks that the file hashes to the sha256
+  the seal's `workflow_run` verdict signs, and that the approval verifies on
+  its own signature, was signed with the seal's key over that sha256, and
+  hashes to the digest the seal signs; a firing's `workflow_firing` verdict
+  must name the same workflow and approval. A bundle holds no revoke, so it
+  cannot show that the approval was not revoked: `verify --chain` says so, and
+  export says when this machine takes the approval as revoked. A run's, an
+  office run's and a ladder's bundle bytes are as before.
+- `metabot status` lists what runs now: each run, office run, ladder, routine
+  firing and `serve`, with its engine and model, its pid, when it started and
+  for how long, and its current step, rung or desk, a desk's run under its
+  office run and a rung's under its ladder. Each keeps a file in `live/` under
+  the MetaBot home while it runs and removes it when it ends, however it ends.
+  A file whose process is gone, has exited, or whose pid now names another
+  process is listed as stale, never as running. The lines are unsigned: what
+  each process says of itself. `--json` prints them as one object.
+- `metabot login add NAME --engine claude|codex --home FOLDER` names one of
+  your own sign-in folders (the folder `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
+  points at), with `login list`, `login check` and `login remove`. MetaBot
+  looks at the folder with `stat` alone and never opens anything in it: it
+  prints the line you run yourself to sign in, and `check` says whether a
+  sign-in file is there without reading it. The folder must be yours and
+  owner-only. It cannot be your home folder itself, sit in MetaBot's own
+  home or in another login's folder, or sit in a git project, where a run's
+  tools could reach it, as named or as its links lead. Cursor has no logins in
+  this version.
+- `metabot ask --login NAME` runs on one of your logins. The engine starts with
+  the login's folder variable set, and with no variable that would sign it in
+  another way or send its calls elsewhere. Nothing in the folder is opened, its
+  settings file included, and the folder is checked again as the run starts.
+  The receipt signs a `login` verdict: the engine, what it said it signed in
+  with (a key or a helper that is not the login's fails; an engine that says
+  nothing passes as `unreported`), the login's choice below, and how
+  many variables were cleared. The login's name and folder are pinned by
+  salted digest, so a receipt that travels names neither.
+- Each login says what happens when an API key or another sign-in is set where
+  a run starts. With `refuse`, the default, the run never starts, and MetaBot
+  names each variable and the command that changes the choice. With `clear`,
+  MetaBot drops them for that login's runs and says so. Change it with
+  `metabot login set NAME --on-sign-in refuse|clear`; `login set` also takes
+  `--max-at-once`. The variables a parent `claude` session sets are dropped
+  for every run and never cause a refusal.
+- `metabot login add` prints the vendors' rules on logins, as facts with
+  links: each login is one of your own accounts, kept apart.
+- A login names its engine, so `ask --login NAME` needs no `-e`.
+  `metabot roster set ROLE --engine E --login NAME` puts a role on one of your
+  logins, and `ask --role ROLE` then runs there; `--login` wins over it.
+  `metabot chat --login NAME` keeps every turn on the login, and `/engine`
+  cannot move the chat to another engine. `ask --resume SESSION` goes back to
+  the login the session ran on, or to none, and refuses another `--login`
+  before anything starts. `login remove` refuses a login a role runs on.
+- A ladder rung (`"login"` in `config.json`) and an office desk (`login:` in
+  `office.yaml`) can run on one of your logins; an `any` desk takes the
+  `build` role's login. A rung or desk whose login does not fit says why
+  before anything starts, and a login that refuses here stops the ladder
+  before its first rung.
+- A login takes `--max-at-once` runs at a time across every MetaBot process
+  here, held by a lock file in MetaBot's home; a run past that waits, and its
+  receipt notes it waited. A `codex` login runs one job at a time, and
+  `login add` and `login set` refuse more for it.
+- `metabot workflow`: a workflow is a file of steps that run one after
+  another, kept by the sha256 of its bytes (`metabot.workflow/1`). Each step is
+  an ask (on an engine, a role or a login), a ladder with its checks, or an
+  office run, with the flags `metabot ask` takes. `workflow new` makes one of a
+  step from flags, `workflow add` keeps a file as written, `workflow check`
+  says where a file is wrong and what stops it here, `workflow show` lists
+  each step's engine, model, endpoint host and login, its checks, allows and
+  money cap, and `workflow list` shows each version kept. The file is read
+  strictly: an unknown key, a key given twice or a value of the wrong type is
+  refused. A name finds its newest version and every older one stays by its
+  sha256; bytes changed since they were kept are refused. An office step pins
+  its `office.yaml` by sha256. A `schedule` needs a `ceiling` (`firings`,
+  `expires` or `month_cap`, with no default amount); both are checked and
+  shown.
+- `metabot workflow approve`, `revoke` and `run`. An approval is a signed
+  receipt over the workflow's sha256 (`workflow_approval`, with the name and
+  `surface=cli`); `approve` shows every step's facts and asks y/N at a
+  terminal, and is refused without one, `--yes` included. `revoke` signs a
+  `workflow_revoke` receipt for each approval it ends, on every version of a
+  name. `run` goes ahead under an approval in force for the bytes as they hash
+  now, signed with this home's key: changed bytes, another version's approval,
+  a revoked or hand-edited approval, and a revoke receipt that does not verify
+  are each refused before a step starts. The steps run as `ask`, `ask
+  --ladder` and `office run` do, in order, stopping at a step that fails,
+  and one seal signs them with a `workflow_run` verdict: the sha256, the
+  approval and its receipt's sha256, the steps run, the money spent and where
+  it stopped.
+- `metabot workflow schedule NAME|SHA` makes a routine that fires an approved
+  workflow on the schedule in its file, under the ceiling you approved. The
+  routine pins the sha256, and a version kept later never moves it. At each
+  firing, `serve` or `routine run` hashes the bytes again and needs an approval
+  in force for that sha256. It needs a schedule and a ceiling in the file, the
+  routine's schedule the same as the file's, and the ceiling not reached:
+  firings used up, the day it expires come in the schedule's zone, or this
+  month's money at or over `month_cap`. Each refusal is a firing row with its
+  reason, and nothing runs. The month's money is what the workflow's earlier
+  firing seals sign, each counted when it verifies. A firing seal that does
+  not verify, or money that is not known, refuses a capped firing. Each step's
+  run takes what is left of the cap as its own. A firing that runs is one seal
+  (`wff-....json`) whose `workflow_firing` verdict signs the sha256, the
+  approval and its receipt's sha256, the routine, the firing's number and the
+  ceiling at fire time. `routine show NAME` is new. `routine list`, `routine
+  show`, `routine firings`, `metabot status` and the routines page label a
+  routine with a goal of its own `not approved`, and each of its firing rows
+  says so. `metabot status` lists each scheduled workflow with its firings used
+  and its money against its cap. Today's routines keep firing as they did.
+- `metabot propose TASK [--folder DIR] [--out FILE] [--json]` drafts a
+  `metabot.workflow/1` file by rules, and prints each rule that fired: a
+  review or a quick look is one ask on its role that changes nothing, build
+  work in a folder with an `office.yaml` is an office run, and other build
+  work is a ladder. A task that reads as private is always a ladder on the `private`
+  role, so its draft names no engine and the run skips every rung that sends
+  the work off this machine. The role, engine, login and model come from
+  `suggest`, the roster and the ladder. Every write asks and every `max_cost`
+  is left empty, with no amount made up; a step that may run on a paid engine
+  says the cap is missing and how to set it. `propose` starts no engine or
+  process and contacts nothing, writes no approval, firing, routine, setting
+  or login, writes no file without `--out`, and never writes over one with
+  it. The same task and settings give the same bytes, and `workflow check`
+  reads the draft as it reads a file written by hand.
+- A ladder on the `private` role with no rung here that keeps the work on
+  this machine would skip every rung: `workflow check`, `workflow run` and a
+  scheduled firing now refuse it, `workflow add` and `workflow approve` say
+  it cannot run here yet, and each says how to add such a rung.
+- `metabot app` serves the web UI and opens it in a window of its own, in a
+  Chromium-family browser's `--app` mode. The browser is given the address
+  with its token, and the command prints the address without its token, so a
+  launcher's log never holds it. With no such browser it prints the address in a terminal, as
+  `metabot ui` does. `metabot app --install` writes a desktop launcher, with
+  the mark as its icon, that runs `metabot app`; on macOS it prints the
+  command instead.
+- `metabot ui` opens on Setup where MetaBot was never set up: seven screens,
+  one step each. It makes the signing key as a run would, lists each engine by
+  its command with how its runs are paid for, checks the key, the engines,
+  each endpoint's key and each login's folder in one list, shows the commands
+  that add a login, and runs one ask in the approval mode you pick: the engine
+  reads and changes nothing, each write waits for a yes (the default), or
+  writes run without asking. The run's page then leads to its receipt and the
+  `metabot receipts verify` line. Setup writes no settings and opens nothing an
+  engine signs in with; a key's value and an endpoint's key are never shown.
+
+### Changed
+
+- `metabot ui` takes the site's look: its tokens in light and dark, a header
+  with the mark, cards, pill buttons and light code panels. The theme switch
+  in the header is a form, kept in a cookie, so it needs no script. Every
+  state colour sits on its word, and a test computes each contrast ratio from
+  the tokens: all reach AA. The ok, warning and bad colours are MetaBot's own,
+  because the site's red falls short of AA on its paper. Below 640 px a page
+  is one column, with buttons at least 44 px high.
+- The UI serves IBM Plex Mono and Geist Pixel itself, each named by its hash
+  and kept by the browser for good; every other response is still never
+  cached. Their OFL licences ship beside them and in the wheel. The page's
+  policy lets fonts and scripts come from the UI alone; the pages hold no
+  script but the live page's one file, which the Added entry above describes.
+
+### Security
+
+- A call that could reach MetaBot's connection tokens (`~/.metabot/secrets`),
+  the key it signs receipts with (`~/.orcha/key`, or `ORCHA_KEY_PATH`) or a
+  login folder is now destructive: you are asked for that exact call, and with
+  no one there it is declined. Before, `cat` of a token, a `Read` of the key and
+  `grep -r` over the home folder ran with no one asked, a write over the key
+  ran wherever writes were allowed, and a routine run in the home folder could
+  read a token and the key and send them to its model.
+  - A shell line is read as the shell reads it: quotes, braces, `~`, the
+    variables it can know, patterns one folder at a time with `..` after them,
+    and `cd` targets. Substitutions, `sh -c`, `find -exec` and here-documents
+    fed to a shell are read as lines; interpreter code is searched for paths.
+  - A command that reads, copies, archives or writes files asks when a word is
+    made as the line runs (`$(...)`, `$'...'`, an unknown variable,
+    `/proc/self/cwd`). A recursive read, copy or archive of a folder that holds
+    one asks, and so do names handed on from one (`xargs`, `read`).
+  - The `openai` engine's file tools, `claude`'s file tools and a connection's
+    arguments are read as the tool opens the path, links followed. A connection
+    call past 4096 values or 16 levels asks.
+  - MetaBot reads what a call names: a program that builds such a path as it
+    runs is beyond it, and the `codex` and `cursor` engines' own tools run in
+    their own sandboxes, outside this gate.
+
 ## [0.3.0] — 2026-11-01
 
 ### Added

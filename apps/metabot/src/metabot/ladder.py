@@ -52,10 +52,19 @@ from emerge.journal import utc_now
 
 from metabot.approvals import printable
 from metabot.checks import CHECKS_SUFFIX, ChecksCancelled, run_gate
-from metabot.config import MODEL_RE, Config, ConfigError, Endpoint, endpoint_of, load_config
+from metabot.config import (
+    LOGIN_ENGINES,
+    MODEL_RE,
+    Config,
+    ConfigError,
+    Endpoint,
+    endpoint_of,
+    load_config,
+)
 from metabot.connections import LOCAL_HOSTS, record_secrets
 from metabot.engines import engine_names, known_engine
 from metabot.ladder_copies import Copies, CopyError
+from metabot.live import begin_live, end_live, note_live
 from metabot.models import cached_mode
 from metabot.paths import (
     kept_home,
@@ -100,6 +109,7 @@ class Rung:
     model: str | None
     tier: str
     endpoint: str | None = None
+    login: str | None = None  # one of your logins (S5): the rung runs on its folder
 
     def label(self) -> str:
         head = f"{self.engine}@{self.endpoint}" if self.endpoint else self.engine
@@ -110,6 +120,7 @@ class Rung:
             "engine": self.engine,
             **({"model": self.model} if self.model else {}),
             **({"endpoint": self.endpoint} if self.endpoint else {}),
+            **({"login": self.login} if self.login else {}),
         }
 
 
@@ -173,12 +184,13 @@ def read_ladder(raw: Any, cfg: Config) -> list[Rung]:
         where = f"ladder rung {n} in config.json"
         if not isinstance(item, dict):
             raise LadderError(f"{where} is not a table")
-        unknown = set(item) - {"engine", "model", "tier", "endpoint"}
+        unknown = set(item) - {"engine", "model", "tier", "endpoint", "login"}
         if unknown:
             raise LadderError(f"{where} has a key MetaBot does not know: {sorted(unknown)[0]}")
         engine = item.get("engine")
         if not known_engine(engine):
             raise LadderError(f"{where} names no engine MetaBot has ({', '.join(engine_names())})")
+        login = _rung_login(where, engine, item, cfg)
         model = item.get("model")
         if model is not None and not (isinstance(model, str) and MODEL_RE.match(model)):
             raise LadderError(f"{where} has a model that is not a model name")
@@ -186,7 +198,7 @@ def read_ladder(raw: Any, cfg: Config) -> list[Rung]:
         if endpoint is not None:
             if engine != "openai":
                 raise LadderError(
-                    f"{where} names an endpoint, and only the openai engine takes one"
+                    f"{where} names an endpoint, and an endpoint is for the openai engine alone"
                 )
             try:
                 ep = endpoint_of(cfg, endpoint) if isinstance(endpoint, str) else None
@@ -209,10 +221,25 @@ def read_ladder(raw: Any, cfg: Config) -> list[Rung]:
         tier = item.get("tier", tier_of(engine, cfg))
         if tier not in TIERS:
             raise LadderError(f"{where} has a tier that is not one of {', '.join(TIERS)}")
-        rungs.append(Rung(engine, model, tier))
+        rungs.append(Rung(engine, model, tier, login=login))
     if not rungs:
         raise LadderError("ladder in config.json has no rungs")
     return rungs
+
+
+def _rung_login(where: str, engine: str, item: Mapping[str, Any], cfg: Config) -> str | None:
+    """The login a rung names, checked against the logins in the config; None for none."""
+    if "login" not in item:
+        return None
+    if engine not in LOGIN_ENGINES:
+        raise LadderError(f"{where} names a login, and a login is for claude or codex alone")
+    name = item["login"]
+    spec = cfg.logins.get(name) if isinstance(name, str) else None
+    if not isinstance(spec, dict):
+        raise LadderError(f"{where} names a login the config does not have: {name!r}")
+    if spec.get("engine") != engine:
+        raise LadderError(f"{where}: {name} is a {spec.get('engine')} login, not one for {engine}")
+    return str(name)
 
 
 def attempts(cfg: Config) -> int:
@@ -253,12 +280,17 @@ def default_ladder(
     return rungs, note
 
 
-def effective_ladder(cfg: Config | None = None) -> tuple[list[Rung], str, str | None]:
-    """The ladder as it stands here, whose it is, and a note about what it leaves out."""
+def effective_ladder(
+    cfg: Config | None = None, found: tuple[Mapping[str, str | None], bool] | None = None
+) -> tuple[list[Rung], str, str | None]:
+    """The ladder as it stands here, whose it is, and a note about what it leaves out.
+
+    ``found`` is what is here, the engine CLIs and whether the local model server counts,
+    when the caller has looked already; without it, the local server is asked."""
     cfg = cfg or load_config()
     if cfg.ladder:
         return read_ladder(cfg.ladder, cfg), YOURS, None
-    installed, reachable = here(cfg)
+    installed, reachable = found if found is not None else here(cfg)
     rungs, note = default_ladder(cfg, installed, reachable)
     return rungs, DEFAULT, note
 
@@ -518,6 +550,7 @@ async def run_ladder(
     task: str = "",
     cwd: Path | None = None,
     project: Path | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> LadderResult:
     """Run the rungs in order until one answers, the ladder stops, or the attempts run out.
 
@@ -527,7 +560,7 @@ async def run_ladder(
     its copy or else in ``cwd``, and judge it. With ``copies``,
     each rung works in its own copy of the project, and the answering rung's
     work is brought back. A cancelled rung's error goes up after the record
-    is saved.
+    is saved. ``verdicts`` are signed with the ladder's seal.
     """
     _claim(ladder_id)
     named = named_here(task, cwd or Path.cwd()) if task else []  # what no rung may answer unread
@@ -537,6 +570,7 @@ async def run_ladder(
     ran = 0
     answered_at: int | None = None
     current: RungRow | None = None  # the rung under way: a stop still seals what it ran
+    begin_live("ladder", ladder_id)
     try:
         for n, rung in enumerate(rungs, 1):
             row = RungRow(n, rung.engine, rung.model, rung.tier, SKIPPED, label=rung.label())
@@ -571,6 +605,8 @@ async def run_ladder(
             if copies is not None:
                 row.workspace = str(copies.trees[n])
             current = row
+            on = f"rung {n} of {len(rungs)}"
+            note_live(ladder_id, current=on, engine=rung.engine, model=rung.model)
             try:
                 ran_result = await run_rung(rung, run_id, meta, cap, where)
             except no_price as exc:
@@ -601,6 +637,7 @@ async def run_ladder(
                     on_line(f"rung {n}'s work changed its copy's .git file; MetaBot put it back")
             if checks and finished(ran_result) and unkept is None:
                 on_line(f"rung {n} {rung.label()} finished; running its checks")
+                note_live(ladder_id, current=f"{on}: its checks")
                 try:
                     gate = await run_gate(
                         checks,
@@ -651,6 +688,7 @@ async def run_ladder(
             result.patch = str(copies.patch_path())
             on_line(result.apply_note)
     finally:
+        end_live(ladder_id)
         if current is not None:  # stopped or broken before its row was kept
             _unfinished(result, current, f"{ladder_id}.{current.n}")
         if copies is not None:  # the copy whose work did not apply stays, for the person
@@ -658,7 +696,7 @@ async def run_ladder(
             if left:
                 on_line(f"{len(left)} rung copy(ies) held work and stay: {left[0].parent}")
         try:
-            result.seal = str(_seal(result, task, private, max_cost_musd, started_at))
+            result.seal = str(_seal(result, task, private, max_cost_musd, started_at, verdicts))
         except (OSError, ValueError) as exc:  # the record says so, and every rung receipt stands
             result.seal_error = str(exc)
         else:  # beside the rungs' copies, so the project's folder checks alone
@@ -688,7 +726,12 @@ def _unfinished(result: LadderResult, row: RungRow, run_id: str) -> None:
 
 
 def _seal(
-    result: LadderResult, task: str, private: bool, cap_musd: int | None, started_at: str
+    result: LadderResult,
+    task: str,
+    private: bool,
+    cap_musd: int | None,
+    started_at: str,
+    signed: Sequence[dict[str, str]] = (),
 ) -> Path:
     """One receipt over every rung's run and checks run, in the order they ran."""
     members: list[Member] = []
@@ -705,6 +748,7 @@ def _seal(
     verdicts = [
         {"check": "workflow", "result": "pass", "detail": workflow},
         *([budget_verdict(cap_musd, _counted(result))] if cap_musd is not None else []),
+        *signed,
     ]
     return seal_runs(
         result.ladder_id,

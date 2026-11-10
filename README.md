@@ -3,7 +3,7 @@
 # Metaorcha
 
 A local bot for the coding agents you already use.<br>
-Every connection gated, every run signed, every receipt checkable offline.
+Gated connections, signed runs, and receipts anyone can check offline.
 
 [![CI](https://github.com/solvent-labs-org/metaorcha/actions/workflows/ci.yml/badge.svg)](https://github.com/solvent-labs-org/metaorcha/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/solvent-labs-org/metaorcha/badge)](https://securityscorecards.dev/viewer/?uri=github.com/solvent-labs-org/metaorcha)
@@ -19,7 +19,7 @@ server on your machine, and keeps a signed record of what happened.
   use, or a local model. It brings no model of its own.
 - **A gate on the calls that pass through it.** Reads run, writes ask, and a
   destructive call runs when you type `yes`.
-- **A receipt for every run.** Each run ends in a receipt signed with your key.
+- **A receipt for every run that starts.** It ends in a receipt signed with your key.
   Anyone can check it offline, with no server of ours.
 - **Offices of agents.** Several agents work one task, each on its own branch
   in its own worktree. MetaBot never pushes, and it never commits to your

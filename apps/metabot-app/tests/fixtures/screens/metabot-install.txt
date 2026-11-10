@@ -1,0 +1,3 @@
+demo 0.1.0  the demo skill
+  skill demo: Say what this skill does, and when an agent should use it.
+install it? [y/N] 

@@ -14,15 +14,21 @@ receipt, says what each desk did.
 An answered or expired ask is kept a while, so a late answer is told it
 came too late. Closing the UI stops every run: each pending ask is
 declined and each run is sealed ``cancelled``.
+
+Each run counts its changes: a trace line, an ask filed, answered or
+expired, and its end. The run's page streams on that count, and
+:meth:`Broker.wait` is how it waits; the close wakes every waiter, so no
+stream outlives the UI.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import secrets
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +39,7 @@ from metabot.scope_classes import ScopeClass
 ASK_KEEP_S = 600.0  # an answered or expired ask is kept this long: a late answer gets 410
 EVENT_LIMIT = 2000  # lines of a run's trace kept for its live page
 YES = "yes"
+NOT_PRICED = "This run never started: MetaBot cannot price it, so it cannot keep the spend cap"
 
 
 class AskExpired(Exception):
@@ -64,6 +71,11 @@ class _Lines(io.TextIOBase):
         self.lines: list[str] = []
         self.dropped = 0
         self._partial = ""
+        self.on_line: Callable[[], None] | None = None  # told once a whole line is in
+
+    def total(self) -> int:
+        """How many lines were written, the dropped ones counted."""
+        return self.dropped + len(self.lines)
 
     def writable(self) -> bool:
         return True
@@ -76,6 +88,8 @@ class _Lines(io.TextIOBase):
         if extra > 0:
             del self.lines[:extra]
             self.dropped += extra
+        if whole and self.on_line is not None:
+            self.on_line()
         return len(text)
 
 
@@ -101,9 +115,33 @@ class LiveRun:
     error: str | None = None
     why: str | None = None  # a ladder's line: what it did and why, once it ends
     answered: bool | None = None  # a ladder: whether a rung's answer was taken; None for a run
+    then: str | None = None  # where its page goes on to once it ends: Setup's receipt
+    version: int = 0  # counts its changes; the page's stream waits on it
 
     def __post_init__(self) -> None:
         self.trace = Trace(out=self.out)
+        self.changed = asyncio.Event()
+        try:  # opened on the UI's loop; a run made outside one is told on its own thread
+            self.loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = None
+        self.out.on_line = self.touch
+
+    def touch(self) -> None:
+        """Count a change and wake whoever waits on it; safe from any thread."""
+        self.version += 1
+        try:
+            here: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            here = None
+        if self.loop is None or here is self.loop:
+            self.changed.set()
+            return
+        with contextlib.suppress(RuntimeError):  # the loop has closed: nothing waits any more
+            self.loop.call_soon_threadsafe(self.changed.set)
+
+
+STREAM_DRAIN_S = 2.0  # how long a closing UI waits for its open event streams to end
 
 
 class Broker:
@@ -113,6 +151,10 @@ class Broker:
         self.ask_timeout_s = ask_timeout_s
         self.runs: dict[str, LiveRun] = {}
         self.asks: dict[str, Ask] = {}
+        self.closed = False  # once closing: every waiter is woken, and none waits again
+        self.streams = 0  # event streams open on this UI's runs; close waits for them
+        self._no_streams = asyncio.Event()
+        self._no_streams.set()
 
     # ── runs ────────────────────────────────────────────────────────────────
 
@@ -141,7 +183,7 @@ class Broker:
 
     async def _run(self, live: LiveRun, coro: Coroutine[Any, Any, Any]) -> None:
         from metabot.office import OfficeError
-        from metabot.runner import RunCancelled
+        from metabot.runner import NoPrice, RunCancelled
 
         try:
             live.result = await coro
@@ -159,6 +201,8 @@ class Broker:
             live.state = "stopped"
             if live.office is None:  # a run stopped here had not begun: nothing was sealed
                 live.error = "stopped before the run began"
+        except NoPrice as exc:  # under a spend cap: a run that cannot be priced never starts
+            live.state, live.error = "failed", f"{NOT_PRICED} ({exc})."
         except OfficeError as exc:  # the office run could not open: it says why
             live.state, live.error = "failed", str(exc)
         except Exception as exc:  # the engine could not start, or the run broke
@@ -166,11 +210,23 @@ class Broker:
         finally:
             for ask in self.pending(live.run_id):
                 ask.close("ended")
+            live.touch()  # its end, and its state
 
     def events(self, run_id: str, after: int = 0) -> list[str]:
         """The run's trace lines from line ``after`` on; KeyError for a run not started here."""
         out = self.runs[run_id].out
         return out.lines[max(0, after - out.dropped) :]
+
+    async def wait(self, run_id: str, seen: int) -> int:
+        """Wait until the run has changed since its version ``seen``, or this broker closes;
+        the version now. KeyError for a run not started here."""
+        live = self.runs[run_id]
+        while live.version == seen and not self.closed:
+            live.changed.clear()
+            if live.version != seen or self.closed:  # changed between the check and the clear
+                break
+            await live.changed.wait()
+        return live.version
 
     def stop(self, run_id: str) -> None:
         """Stop a run; it is sealed ``cancelled``. KeyError for a run not started here."""
@@ -178,12 +234,33 @@ class Broker:
         if task is not None and not task.done():
             task.cancel()
 
+    @contextlib.asynccontextmanager
+    async def stream(self) -> AsyncIterator[None]:
+        """Marks an event stream open on this UI while the body runs, so ``close`` waits for
+        it to write its ``end`` before the server goes away."""
+        self.streams += 1
+        self._no_streams.clear()
+        try:
+            yield
+        finally:
+            self.streams -= 1
+            if self.streams == 0:
+                self._no_streams.set()
+
     async def close(self) -> None:
-        """Stop every run and wait until each is sealed."""
+        """Stop every run and wait until each is sealed. Every stream on a run ends first:
+        the waiters are woken, and the streams get up to ``STREAM_DRAIN_S`` to write their
+        last event, so a page never sees its stream cut off before ``end``."""
+        self.closed = True
+        for live in self.runs.values():
+            live.touch()
         tasks = [live.task for live in self.runs.values() if live.task and not live.task.done()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.streams:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._no_streams.wait(), STREAM_DRAIN_S)
 
     # ── asks ────────────────────────────────────────────────────────────────
 
@@ -202,6 +279,11 @@ class Broker:
         if live is not None:
             live.trace.line(text)
 
+    def _touch(self, run_id: str) -> None:
+        live = self.runs.get(run_id)
+        if live is not None:
+            live.touch()
+
     async def ask(self, run_id: str, req: ApprovalRequest) -> bool:
         """File an ask and wait for its answer; declined when nobody answers in time."""
         self._prune()
@@ -211,16 +293,19 @@ class Broker:
         tool = printable(req.tool, 120)
         said = f"{_who(req)}{req.cls.label} call {tool} waits for you ({ask.ask_id})"
         self._say(run_id, f"[metabot] {said}")
+        self._touch(run_id)
         try:
             await asyncio.wait({ask.future}, timeout=self.ask_timeout_s)
         except asyncio.CancelledError:  # the run is stopping: the gate records the decline
             if ask.state == "waiting":
                 ask.close("ended")
+            self._touch(run_id)
             raise
         if ask.future.done():  # answered, also in the moment the time ran out
             return ask.future.result()
         ask.close("expired")
         self._say(run_id, f"[metabot] {_who(req)}no answer in time: {tool} declined")
+        self._touch(run_id)
         return False
 
     def answer(self, ask_id: str, allow: bool, word: str = "") -> Ask:
@@ -244,6 +329,7 @@ class Broker:
         verb = "allowed" if allow else "declined"
         tool = printable(ask.request.tool, 120)
         self._say(ask.run_id, f"[metabot] {_who(ask.request)}{tool} {verb} in the page")
+        self._touch(ask.run_id)
         return ask
 
 

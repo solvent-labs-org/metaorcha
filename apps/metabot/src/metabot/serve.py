@@ -30,6 +30,7 @@ from typing import Any, TextIO
 
 from metabot.approvals import printable
 from metabot.cron import CronError
+from metabot.live import hold_live
 from metabot.paths import metabot_home
 from metabot.routines import (
     Firing,
@@ -272,7 +273,7 @@ async def serve(
         print(f"[metabot] {text}", file=stream, flush=True)
 
     try:
-        with serve_lock():
+        with serve_lock(), hold_live("serve", "serve"):
             return await _serve(clock, sleep, once, make_engine, say)
     except ServeLocked as exc:
         print(f"metabot: {exc}; one serve fires every routine", file=stream, flush=True)

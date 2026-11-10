@@ -1,0 +1,13 @@
+{
+  "id": "runs",
+  "label": "Runs & Receipts",
+  "icon": "◎",
+  "order": 10,
+  "kind": "page",
+  "page": "runs",
+  "phase": 1,
+  "modes": [
+    "user",
+    "dev"
+  ]
+}

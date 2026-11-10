@@ -29,6 +29,8 @@ from metabot.engines import get_engine
 from metabot.engines.base import CliEngine, EngineJob, run_cli
 from metabot.events import ErrorEvent, Event, Final, Notice, Started, TextEvent, ToolCall, Usage
 from metabot.gate import Policy
+from metabot.live import begin_live, end_live, note_event, run_place
+from metabot.logins import login_slot
 from metabot.paths import claim_run_dir, metabot_home, new_run_id, safe_id, write_private
 from metabot.plugins import plugin_skills
 from metabot.prices import (
@@ -44,6 +46,7 @@ from metabot.receipts import (
     budget_verdict,
     declined_and_failed,
     ensure_key,
+    login_verdict,
     model_verdict,
     project_copy,
     provenance_verdicts,
@@ -158,6 +161,7 @@ class _Run:
     early_more: bool = False  # more of them came than were kept
     named_late: bool = False  # the model then named prices them otherwise than they were
     answered: bool = False  # the model gave text, a call or a usage report
+    key_source: str | None = None  # what the engine said it signed in with, if it said
     unsent: bool = False  # an error said nothing reached the model
     lost: bool = False  # an error said a request went out and what it spent never came back
 
@@ -305,6 +309,7 @@ class _Run:
             self.answered = True  # the model said something, so it ran
         if isinstance(event, Started):
             self.session_id = event.session_id or self.session_id
+            self.key_source = event.key_source or self.key_source
             if event.model and not self.named:
                 self._name(event.model)
             self.model = event.model or self.model
@@ -327,6 +332,15 @@ def _metabot_command(*args: str) -> list[str]:
     # The engine runs these in the person's project: -I keeps a folder there
     # named "metabot" from standing in for the gate or the switchboard.
     return [sys.executable, "-I", "-m", "metabot", *args]
+
+
+def _gate_hook_command(control: str, prefix: str, switchboard: bool = False) -> list[str]:
+    """The gate the engine runs before each tool call: a client that loads the standard
+    library alone (G1), with -I like every command the engine runs for MetaBot."""
+    return [
+        sys.executable, "-I", "-m", "metabot.gate_client", "--control", control,
+        "--prefix", prefix, *(["--switchboard"] if switchboard else []),
+    ]  # fmt: skip
 
 
 @contextlib.asynccontextmanager
@@ -362,9 +376,16 @@ async def _events(
             run.stopping = True
             server.withdraw()
 
+        login = getattr(engine, "login", None)
         try:
             await server.start()
-            async with contextlib.aclosing(run_cli(engine, job, stopping)) as stream:
+            # a login runs as many at once as it says, across every MetaBot here (S5)
+            slot = (
+                login_slot(login, on_wait=run.notices.append)
+                if login is not None
+                else contextlib.nullcontext()
+            )
+            async with slot, contextlib.aclosing(run_cli(engine, job, stopping)) as stream:
                 yield stream
         finally:
             await server.close()  # also when it never started: it gives back its folder
@@ -429,6 +450,7 @@ async def run_job(
     criteria: Mapping[str, bool] | None = None,
     connection_ids: Sequence[str] | None = None,
     project: Path | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> RunResult:
     """Run one job and seal its receipt.
 
@@ -445,7 +467,7 @@ async def run_job(
     one ``declared_acceptance`` verdict. ``connection_ids`` keeps the
     switchboard to those connections; None means every active one. With
     ``project``, the sealed receipt is also copied into that folder's project,
-    under ``.orcha/receipts/``.
+    under ``.orcha/receipts/``. ``verdicts`` are signed with the run's own.
     """
     if run_id is not None:
         safe_id(run_id)
@@ -543,10 +565,7 @@ async def run_job(
     )
     job.sandbox = plan
     if getattr(cli, "supports_hooks", False):
-        job.gate_hook = _metabot_command(
-            "hook", "pre-tool-use", "--control", str(sock), "--prefix", cli.tool_prefix,
-            *(["--switchboard"] if board else []),
-        )  # fmt: skip
+        job.gate_hook = _gate_hook_command(str(sock), cli.tool_prefix, switchboard=board)
     if board:
         only = [a for did in connection_ids or [] for a in ("--only", did)]
         job.switchboard = _metabot_command(
@@ -555,6 +574,7 @@ async def run_job(
         )  # fmt: skip
     started_at = utc_now()
     cancelled = False
+    begin_live("run", run_id, engine=cli.name, model=asked, **run_place(meta))
     try:
         async with _events(
             cli, job, server, approve, run, board, connections=opens, skills=skills,
@@ -562,6 +582,7 @@ async def run_job(
         ) as stream:  # fmt: skip
             async for event in stream:
                 run.on_event(event)
+                note_event(run_id, event)
                 if on_event is not None:
                     on_event(event)
                 run.check(limits, at_call=isinstance(event, ToolCall))
@@ -573,9 +594,11 @@ async def run_job(
         cancelled = True
         run.errors.append("cancelled")
     finally:
+        end_live(run_id)
         result = _seal(
-            run, run_id, prompt, cwd, started_at, key, secrets, cancelled, meta, criteria
-        )
+            run, run_id, prompt, cwd, started_at, key, secrets, cancelled, meta, criteria,
+            verdicts,
+        )  # fmt: skip
         result.project_receipt, result.project_error = project_copy(result.receipt, project)
     if cancelled:
         raise RunCancelled(result)
@@ -600,6 +623,7 @@ def _seal(
     cancelled: bool,
     extra: Mapping[str, Any] | None = None,
     criteria: Mapping[str, bool] | None = None,
+    signed: Sequence[dict[str, str]] = (),
 ) -> RunResult:
     if run.final is None and not run.errors:
         run.errors.append(f"{run.engine.name} ended without a final answer")
@@ -614,6 +638,21 @@ def _seal(
         money.append(budget_verdict(run.cap_musd, cost))
     placed = {**(extra or {}), **(getattr(run.engine, "receipt_meta", None) or {})}
     sandboxed = run.sandbox.verdict() if run.sandbox is not None else None
+    # A run on a login signs a login verdict; its name and folder are pinned, never named.
+    login = getattr(run.engine, "login", None)
+    on_login = {"login": login.name, "login_folder": login.home} if login is not None else {}
+    signed_in = (
+        [
+            login_verdict(
+                run.engine.name,
+                run.key_source,
+                login.on_sign_in,
+                len(getattr(run.engine, "cleared", ())),
+            )
+        ]
+        if login is not None
+        else []
+    )
     receipt = seal_and_store(
         run_id=run_id,
         steps=steps,
@@ -621,15 +660,17 @@ def _seal(
             model_verdict(run.engine.name, run.model, run.ran_on),
             *provenance_verdicts(placed),
             *([sandboxed] if sandboxed is not None else []),
+            *signed_in,
             *money,
             *run.decider.verdicts,
+            *signed,
         ],
         started_at=started_at,
         finished_at=utc_now(),
         key=key,
         secrets=secrets,
         criteria=criteria,
-        commit=("prompt", "final"),
+        commit=("prompt", "final", *on_login),
         meta={
             **(extra or {}),
             **_chosen(run, extra),
@@ -651,6 +692,7 @@ def _seal(
             "tool_calls": run.tool_calls,
             "limit": run.limit,
             "notices": run.notices,
+            **on_login,
         },
     )
     declined, failed = declined_and_failed(steps, run.decider.verdicts)

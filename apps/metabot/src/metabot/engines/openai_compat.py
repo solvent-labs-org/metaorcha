@@ -36,6 +36,7 @@ from metabot.events import (
 )
 from metabot.paths import metabot_home, private_dir, safe_id, write_private
 from metabot.scope_classes import ScopeClass
+from metabot.secret_paths import builtin_asks
 from metabot.shell import TIMEOUT_EXIT, run_shell, stop_group
 from metabot.shell_policy import classify_shell
 from metabot.spend import spend_of
@@ -289,14 +290,18 @@ class OpenAIEngine:
             return await shells.run(command, cwd)
         return f"no tool named {name}", False
 
-    def _class(self, name: str, args: dict[str, Any]) -> ScopeClass:
-        if name in ("read_file", "list_dir"):
-            return ScopeClass.READ
-        if name == "write_file":
-            return ScopeClass.WRITE
+    def _class(self, name: str, args: dict[str, Any], cwd: Path) -> ScopeClass:
         if name == "shell":
-            return classify_shell(str(args.get("command") or ""))
-        return ScopeClass.DESTRUCTIVE
+            return classify_shell(str(args.get("command") or ""), str(cwd))
+        if name not in ("read_file", "list_dir", "write_file"):
+            return ScopeClass.DESTRUCTIVE
+        path = args.get("path") or ("." if name == "list_dir" else None)
+        try:  # a path in MetaBot's secrets, its signing key or a login folder always asks
+            if isinstance(path, str) and builtin_asks(path, str(cwd)):
+                return ScopeClass.DESTRUCTIVE
+        except Exception:  # a config.json that does not read: fail closed
+            return ScopeClass.DESTRUCTIVE
+        return ScopeClass.WRITE if name == "write_file" else ScopeClass.READ
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -325,7 +330,7 @@ class OpenAIEngine:
             return text, not result.is_error
         if name not in BUILTINS or (job.read_only and name in WRITERS):
             return f"no tool named {name}", False
-        cls = self._class(name, args)
+        cls = self._class(name, args, job.cwd)
         if cls is not ScopeClass.READ:
             reply = await approve(
                 {

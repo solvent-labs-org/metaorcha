@@ -1,0 +1,8 @@
+      1       0 /sbin/init splash
+    812       1 /usr/bin/tmux -L metabot new-session -d -s fc-deskA
+    901     812 -bash
+    955     901 claude --resume 0f3b2c4e-1111-4222-8333-944455556666
+   1203       1 /usr/bin/tmux -L metabot new-session -d -s main
+   1210    1203 -zsh
+   1300    1210 python3 -m metabot_app serve
+   1400     955 node /opt/claude/cli.js --child

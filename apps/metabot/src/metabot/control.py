@@ -6,6 +6,8 @@ journal themselves; they send the runner approvals to decide and steps to
 record, and the runner stays the only writer.
 
 Ops: ``{"op": "approve", ...}`` -> ``{"allow": bool, "reason": str}``;
+``{"op": "gate", "payload": {...}, "prefix": str, "switchboard": bool}``, a tool call as
+the engine's hook got it -> the same answer (``metabot.hook.gate_call``);
 ``{"op": "step", "step": {...}}`` -> ``{"ok": true}``; anything else ->
 ``{"error": "unknown op"}``.
 
@@ -123,6 +125,10 @@ class ControlServer:
         op = msg.get("op")
         if op == "approve":
             return await self.on_approve(msg)
+        if op == "gate":  # a tool call as the engine's hook got it; decided in metabot.hook
+            from metabot.hook import gate_call
+
+            return await gate_call(msg, self.on_approve)
         if op == "step":
             step = msg.get("step")
             if not isinstance(step, dict):
