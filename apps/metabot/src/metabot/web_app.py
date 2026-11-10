@@ -15,6 +15,7 @@ import copy
 import json
 import os
 import re
+import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,7 @@ OFFICE_FIELDS = (
     "max_cost",
 )
 MODES = ("relay", "fan")
+STREAM_EXITS: list[str] = []  # diagnostic: how event streams ended early (CI, Python 3.11)
 KEEPALIVE_S = 15.0  # a run's event stream says it is still open this often, when nothing changed
 TITLES = {400: "Not done", 404: "Not found", 409: "Answered already", 410: "No longer waiting"}
 
@@ -661,9 +663,18 @@ def make_ui(
             return Response(text, status_code=404, media_type="text/plain")
 
         async def guarded() -> AsyncIterator[str]:
-            async with broker.stream():  # a closing UI waits for this stream's end
-                async for chunk in changes(run_id):
-                    yield chunk
+            try:
+                async with broker.stream():  # a closing UI waits for this stream's end
+                    async for chunk in changes(run_id):
+                        yield chunk
+            except BaseException as exc:  # diagnostic (CI, Python 3.11): how a stream ends early
+                task = asyncio.current_task()
+                STREAM_EXITS.append(
+                    f"{type(exc).__name__}: {exc!r}; cancelling="
+                    f"{task.cancelling() if task else '?'}; closed={broker.closed}; "
+                    f"streams={broker.streams}; python={sys.version_info[:3]}"
+                )
+                raise
 
         return StreamingResponse(
             guarded(),

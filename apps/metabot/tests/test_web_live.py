@@ -336,7 +336,11 @@ def test_a_closing_ui_ends_an_open_stream(tmp_path):
         stream = Stream(client, run_id)
         time.sleep(0.1)
     response = stream.finish()  # the UI stopped: the run was sealed and the stream ended
-    assert _events(response.text)[-1][0] == "end", f"the stream as received:\n{response.text}"
+    from metabot import web_app
+
+    assert _events(response.text)[-1][0] == "end", (
+        f"the stream as received:\n{response.text}\nstream exits: {web_app.STREAM_EXITS}"
+    )
 
 
 # ── closing waits for the streams ───────────────────────────────────────────
