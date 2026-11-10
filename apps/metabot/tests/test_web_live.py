@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 from metabot import web_app
 from metabot.events import Started
 from metabot.paths import new_run_id
-from metabot.web_guard import COOKIE
+from metabot.web_guard import COOKIE, Guard
 from metabot.web_pages import live_page
 from metabot.web_runs import Broker, LiveRun
 from metabot.web_theme import STATIC_CACHE
@@ -22,6 +22,7 @@ from test_web_office import _start as _start_office
 from test_web_office import office_ui
 from test_web_runs import (
     FORM,
+    PORT,
     REFRESH,
     TOKEN,
     Answers,
@@ -330,17 +331,24 @@ def test_the_stream_keeps_alive_while_nothing_changes(tmp_path, monkeypatch):
 
 
 def test_a_closing_ui_ends_an_open_stream(tmp_path):
-    with ui(tmp_path, Sleeps()) as (client, guard):
+    """The UI's own close ends every open stream with ``end`` before the server goes away.
+    (Driven through the broker: a newer Starlette test client aborts its open requests
+    before it sends the lifespan shutdown, so leaving the client block cannot show this.)"""
+    from metabot.web_app import make_ui
+
+    guard = Guard(TOKEN, PORT)
+    app, broker = make_ui(guard, start_dir=tmp_path, make_engine=lambda name: Sleeps())
+    with TestClient(app, base_url=f"http://127.0.0.1:{PORT}", follow_redirects=False) as client:
+        client.cookies.set(COOKIE, TOKEN)
         run_id = _start(client, guard, tmp_path)
         _until(client, run_id, _started)
         stream = Stream(client, run_id)
         time.sleep(0.1)
-    response = stream.finish()  # the UI stopped: the run was sealed and the stream ended
-    from metabot import web_app
-
-    assert _events(response.text)[-1][0] == "end", (
-        f"the stream as received:\n{response.text}\nstream exits: {web_app.STREAM_EXITS}"
-    )
+        assert client.portal is not None
+        client.portal.call(broker.close)  # the UI stopped: the run was sealed, the stream ended
+        response = stream.finish()
+    assert _events(response.text)[-1][0] == "end", f"the stream as received:\n{response.text}"
+    assert json.loads(_events(response.text)[-2][1])["state"] == "stopped"
 
 
 # ── closing waits for the streams ───────────────────────────────────────────
