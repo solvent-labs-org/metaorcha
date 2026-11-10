@@ -659,6 +659,7 @@ def make_ui(
         if run_id not in broker.runs:
             text = f"No run {run_id} was started here.\n"
             return Response(text, status_code=404, media_type="text/plain")
+
         async def guarded() -> AsyncIterator[str]:
             async with broker.stream():  # a closing UI waits for this stream's end
                 async for chunk in changes(run_id):
