@@ -1,0 +1,65 @@
+name: My first receipt
+description: You ran MetaBot and got a receipt. Tell us how it went, in one minute.
+labels: ["first-receipt"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying it. Three things help most: how long it took, what got in the way,
+        and whether the receipt verified. Paste nothing private: a receipt holds hashes, not
+        your prompt, but check the folder and file names in it before you paste.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you run it?
+      options:
+        - Linux, the app
+        - Linux, the core alone (metabot ask)
+        - Android, paired to a computer
+        - Android, on the phone alone (preview)
+        - macOS (preview)
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine answered?
+      options:
+        - A local model server (OpenAI-compatible)
+        - A hosted API key
+        - Claude Code sign-in
+        - Codex sign-in
+        - Cursor sign-in
+        - Something else (say what below)
+    validations:
+      required: true
+  - type: input
+    id: minutes
+    attributes:
+      label: Minutes from download to a verified receipt
+      placeholder: "7"
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: What got in the way?
+      description: The step you had to think about, redo, or look up. "Nothing" is a fine answer.
+    validations:
+      required: true
+  - type: dropdown
+    id: verified
+    attributes:
+      label: Did the receipt verify?
+      options:
+        - "Yes, VALID"
+        - "No (paste what it said below)"
+        - "I did not try"
+    validations:
+      required: true
+  - type: textarea
+    id: receipt
+    attributes:
+      label: The receipt, or its first lines (optional)
+      description: Remove anything you would not post publicly. A run id and the verdict lines are enough.
+      render: json

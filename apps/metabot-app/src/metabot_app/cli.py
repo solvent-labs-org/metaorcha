@@ -1,11 +1,14 @@
 """``metabot-app``: start the app server and look after it.
 
-    metabot-app serve                 start the server
-    metabot-app pair [--port N]       show a pairing code for a phone (the server must be running)
-    metabot-app devices [--remove ID] list paired phones, or remove one
-    metabot-app doctor [--json]       what this machine has for a first run; exit 1 on a blocker
-    metabot-app --version
+metabot-app serve                 start the server
+metabot-app pair [--port N]       show a pairing code for a phone (the server must be running)
+metabot-app devices [--remove ID] list paired phones, or remove one
+metabot-app doctor [--json]       what this machine has for a first run; exit 1 on a blocker
+metabot-app service install|remove|status [--kind systemd|launchd]
+                                  keep the server running across logins (no root)
+metabot-app --version
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,12 +26,32 @@ def _parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("serve", help="start the app server")
     pair = sub.add_parser("pair", help="show a pairing code for a phone")
-    pair.add_argument("--port", type=int, help="the running server's loopback port (default: the config's)")
+    pair.add_argument(
+        "--port",
+        type=int,
+        help="the running server's loopback port (default: the config's)",
+    )
     dev = sub.add_parser("devices", help="list paired phones")
-    dev.add_argument("--port", type=int, help="the running server's loopback port (default: the config's)")
-    dev.add_argument("--remove", metavar="ID", help="remove this device; its token stops working")
+    dev.add_argument(
+        "--port",
+        type=int,
+        help="the running server's loopback port (default: the config's)",
+    )
+    dev.add_argument(
+        "--remove", metavar="ID", help="remove this device; its token stops working"
+    )
     doc = sub.add_parser("doctor", help="what this machine has for a first run")
-    doc.add_argument("--json", action="store_true", help="the report as one JSON object")
+    doc.add_argument(
+        "--json", action="store_true", help="the report as one JSON object"
+    )
+    svc = sub.add_parser("service", help="keep the server running across logins")
+    svc.add_argument("action", choices=("install", "remove", "status"))
+    svc.add_argument(
+        "--kind",
+        default="auto",
+        choices=("auto", "systemd", "launchd"),
+        help="the service manager (default: the host's)",
+    )
     return ap
 
 
@@ -37,9 +60,11 @@ class _Api:
 
     def __init__(self, port):
         from . import server
+
         cfg = server.load_config()
-        from pathlib import Path
         import os
+        from pathlib import Path
+
         state = Path(os.environ.get("METACHAT_STATE") or cfg["state_dir"]).expanduser()
         self.port = port or int(cfg["port"])
         try:
@@ -50,8 +75,16 @@ class _Api:
     def call(self, method, path, body=None):
         url = f"http://127.0.0.1:{self.port}{path}?t={self.token}"
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method, headers={
-            "Host": f"127.0.0.1:{self.port}", "Content-Type": "application/json", "X-MetaChat": "1"})
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "Host": f"127.0.0.1:{self.port}",
+                "Content-Type": "application/json",
+                "X-MetaChat": "1",
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read() or b"{}")
@@ -61,8 +94,10 @@ class _Api:
             except ValueError:
                 return e.code, {}
         except (urllib.error.URLError, OSError, ValueError) as e:
-            print(f"metabot-app: the server is not running on 127.0.0.1:{self.port} ({e.reason if hasattr(e, 'reason') else e})",
-                  file=sys.stderr)
+            print(
+                f"metabot-app: the server is not running on 127.0.0.1:{self.port} ({e.reason if hasattr(e, 'reason') else e})",
+                file=sys.stderr,
+            )
             return None, None
 
 
@@ -77,10 +112,17 @@ def _pair(port) -> int:
     code = reply["code"]
     addrs = reply["addresses"] or ["<this computer's address>"]
     print("Pair a phone (MetaBot for Android):")
-    print(f"  Address: {addrs[0]}:{reply['port']}" + (f"   (also {', '.join(addrs[1:])})" if len(addrs) > 1 else ""))
-    print(f"  Code:    {code[:4]} {code[4:]}        good for {reply['expires_in'] // 60} minutes")
+    print(
+        f"  Address: {addrs[0]}:{reply['port']}"
+        + (f"   (also {', '.join(addrs[1:])})" if len(addrs) > 1 else "")
+    )
+    print(
+        f"  Code:    {code[:4]} {code[4:]}        good for {reply['expires_in'] // 60} minutes"
+    )
     print(f"  Words:   {' '.join(reply['words'])}")
-    print("  The phone shows four words after it reads the address. Say Yes there only if they match these.")
+    print(
+        "  The phone shows four words after it reads the address. Say Yes there only if they match these."
+    )
     print(f"  QR text: {reply['payload']}")
     return 0
 
@@ -107,13 +149,16 @@ def _devices(port, remove) -> int:
         print("no paired phones")
         return 0
     for d in rows:
-        print(f"{d['id']}  {d['name']}  ({d['scope']}; seen: {'yes' if d.get('seen') else 'never'})")
+        print(
+            f"{d['id']}  {d['name']}  ({d['scope']}; seen: {'yes' if d.get('seen') else 'never'})"
+        )
     return 0
 
 
 def _doctor(as_json: bool) -> int:
     """No server needed: the same report GET /api/doctor gives, from this process."""
     from . import doctor, server
+
     server.configure()
     rep = doctor.report(server.MB, server.on_device())
     if as_json:
@@ -128,6 +173,44 @@ def _doctor(as_json: bool) -> int:
     return 0 if rep["ok"] else 1
 
 
+def _service(action: str, kind: str) -> int:
+    from . import service
+
+    try:
+        if action == "install":
+            path = service.install(kind)
+            print(f"installed {path}")
+            if path.suffix == ".service":
+                print(
+                    f"  it is running now and after every login: systemctl --user status {service.UNIT}"
+                )
+                print(
+                    "  to keep it running when you are logged out: loginctl enable-linger"
+                )
+            else:
+                print(
+                    f"  it is running now and after every login: launchctl list {service.LABEL}"
+                )
+            return 0
+        if action == "remove":
+            if service.remove(kind):
+                print("removed; the server is no longer started at login")
+                return 0
+            print("metabot-app: not installed; nothing to remove", file=sys.stderr)
+            print("  (metabot-app service install puts one in)", file=sys.stderr)
+            return 1
+        st = service.status(kind)
+        print(
+            f"{st['kind']}: {'installed' if st['installed'] else 'not installed'}"
+            + (f", {st['active']}" if st["active"] else "")
+            + f"  ({st['path']})"
+        )
+        return 0
+    except service.ServiceError as exc:
+        print(f"metabot-app: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
@@ -136,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.cmd == "serve":
         from . import server
+
         return int(server.main() or 0)
     if args.cmd == "pair":
         return _pair(args.port)
@@ -143,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
         return _devices(args.port, args.remove)
     if args.cmd == "doctor":
         return _doctor(args.json)
+    if args.cmd == "service":
+        return _service(args.action, args.kind)
     return 2
 
 

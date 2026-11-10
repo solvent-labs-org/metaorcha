@@ -1,0 +1,31 @@
+# What MetaBot, the app, claims, and what proves each claim
+
+Public copy about the app says only what a row here says, and every row names the test
+that would fail if the claim stopped being true. `tests/test_claims.py` reads this table
+and checks that each proof exists. A claim with no row is not made. Proof kinds:
+`tests/<file>.py::<test>` (a unit test), `selftest:<journey>/<step>` (a self-test journey
+step, run on Linux in CI and on the tablet), `tablet-e2e:<step>` (the scripted tablet
+walk, `tools/tablet-e2e.sh`), `ui:<file>` (a page suite). Several proofs are separated
+by `;`.
+
+| Claim | Proof |
+|---|---|
+| Every run ends in a signed receipt, and the app and the core both verify it on this machine | `selftest:ask_receipt/verify (app)`; `selftest:ask_receipt/verify (core)` |
+| A run whose model server fails, cuts off, refuses or stalls still ends, says why, and leaves a receipt that verifies | `selftest:recovery_engine/error_500`; `selftest:recovery_engine/truncate`; `selftest:recovery_engine/refuse`; `selftest:recovery_engine/slow`; `selftest:recovery_engine/app run on a failing engine` |
+| A receipt names every tool the run used, and the files it wrote are where it says | `selftest:tools_offline/receipt names the tools`; `selftest:tools_offline/files exist` |
+| A workflow runs across more than one provider and more than one account, and its receipts name each engine, endpoint and ladder rung | `selftest:workflow_chain/receipts name every engine, account and rung` |
+| A workflow's approval is given at a terminal; a script cannot give it | `selftest:workflow_chain/approve at a terminal` |
+| An exported bundle verifies offline as one chain: the workflow file, its approval and every member receipt | `selftest:workflow_chain/bundle verifies offline` |
+| A receipt that has been edited does not verify | `selftest:workflow_chain/a rewritten rung is caught` |
+| A run stopped by a missing account still leaves receipts that verify | `selftest:workflow_chain/a missing account stops the chain, sealed` |
+| A phone pairs by a typed code or a QR, pins the computer's certificate, and shows four words the computer also shows | `tablet-e2e:words match`; `tests/test_pairing.py::test_like_the_apk`; `tests/test_tlscert.py::test_the_handshake_presents_the_pinned_fingerprint` |
+| A pairing code is used once, dies after five wrong tries, and expires | `tests/test_pair.py::test_start_then_claim_then_use`; `tests/test_pairing.py::test_five_wrong_tries_kill_the_code`; `tests/test_pairing.py::test_malformed_and_expired` |
+| Revoking a phone closes that phone's live connections at once, and no other's | `tests/test_revoke.py::test_revoke_cuts_the_stream_and_the_terminal_of_that_device_only`; `tablet-e2e:pairing screen after revoke` |
+| The desktop token works on loopback only; a phone token works on the TLS listener only | `tests/test_pair.py::test_scopes_of_the_routes`; `tests/test_devices.py::test_match_is_scope_bound` |
+| A revoked phone's retries never lock the desktop out, and never block a new pairing | `tests/test_revoke.py::test_a_revoked_phone_never_locks_out_the_desktop_on_the_same_address`; `tests/test_revoke.py::test_a_stale_token_never_blocks_a_new_pairing_from_the_same_phone` |
+| Device tokens are stored as hashes; a listing never shows one | `tests/test_devices.py::test_rows_persist_and_list_hides_hashes` |
+| The page never shows a surface the host cannot serve: no desks without tmux, only the engines the host has | `tests/test_caps.py::test_no_tmux_means_no_desks`; `tests/test_caps.py::test_engines_follow_the_binaries` |
+| The server starts once per state folder; a second start reports the first one's port and takes nothing over | `tests/test_instance.py::test_two_serves_give_one_server`; `tests/test_instance.py::test_a_port_taken_by_another_program_is_left_alone` |
+| A model server on this machine is enough: no vendor login is needed for a first run and its receipt | `selftest:ask_receipt/run done` |
+| The app keeps running across logins when asked, without root, and can be removed as easily | `tests/test_service.py::test_install_writes_the_unit_and_enables_it`; `tests/test_service.py::test_remove_disables_then_deletes_and_is_quiet_when_absent` |
+| Nothing private ships in the tree: no names, no home paths, no keys | `tests/test_private_strings.py::test_no_private_string_in_the_shipped_tree` |
