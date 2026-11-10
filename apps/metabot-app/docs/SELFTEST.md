@@ -51,6 +51,7 @@ exits 0 clean, 1 a failed step, 2 a budget miss, 3 incomplete.
 | `setup_first_run` | setup | the key was made for this world, the core's `doctor` reads clean, `GET /api/doctor` has no blocker and sees the local model server, the caps are reported |
 | `ask_receipt` | clarity | a run through the app, verified by the app's route and by the core |
 | `tools_offline` | real work | write, read and shell through the core's gate; the receipt names every tool; a read-only run through the app |
+| `workflow_chain` | real work | a four-step `metabot.workflow/1` (two asks, a ladder, an ask) across two providers (the OpenAI-compatible fake and a `metabot.bridge/1` bridge) and two accounts (the ladder's first rung, account alpha, answers 500; the second, account beta, answers); approved at a terminal, refused when piped; every receipt names its engine, endpoint and rung; the exported bundle verifies offline as one chain; a rewritten rung is caught; a missing account stops the chain and still leaves receipts that verify |
 | `recovery_engine` | recovery | a failing, refusing, truncating or slow model server: every run ends, says why, and its receipt verifies and records the failure |
 
 A run whose model server fails still gets a signed receipt that verifies, with

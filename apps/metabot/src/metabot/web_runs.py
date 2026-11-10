@@ -28,7 +28,7 @@ import contextlib
 import io
 import secrets
 import time
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -141,6 +141,9 @@ class LiveRun:
             self.loop.call_soon_threadsafe(self.changed.set)
 
 
+STREAM_DRAIN_S = 2.0  # how long a closing UI waits for its open event streams to end
+
+
 class Broker:
     """Every run this UI started, and every ask they filed."""
 
@@ -149,6 +152,9 @@ class Broker:
         self.runs: dict[str, LiveRun] = {}
         self.asks: dict[str, Ask] = {}
         self.closed = False  # once closing: every waiter is woken, and none waits again
+        self.streams = 0  # event streams open on this UI's runs; close waits for them
+        self._no_streams = asyncio.Event()
+        self._no_streams.set()
 
     # ── runs ────────────────────────────────────────────────────────────────
 
@@ -228,8 +234,23 @@ class Broker:
         if task is not None and not task.done():
             task.cancel()
 
+    @contextlib.asynccontextmanager
+    async def stream(self) -> AsyncIterator[None]:
+        """Marks an event stream open on this UI while the body runs, so ``close`` waits for
+        it to write its ``end`` before the server goes away."""
+        self.streams += 1
+        self._no_streams.clear()
+        try:
+            yield
+        finally:
+            self.streams -= 1
+            if self.streams == 0:
+                self._no_streams.set()
+
     async def close(self) -> None:
-        """Stop every run and wait until each is sealed. Every stream on a run ends first."""
+        """Stop every run and wait until each is sealed. Every stream on a run ends first:
+        the waiters are woken, and the streams get up to ``STREAM_DRAIN_S`` to write their
+        last event, so a page never sees its stream cut off before ``end``."""
         self.closed = True
         for live in self.runs.values():
             live.touch()
@@ -237,6 +258,9 @@ class Broker:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.streams:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._no_streams.wait(), STREAM_DRAIN_S)
 
     # ── asks ────────────────────────────────────────────────────────────────
 

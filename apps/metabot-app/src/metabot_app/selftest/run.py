@@ -79,6 +79,7 @@ class Session:
         self.server: subprocess.Popen | None = None
         self.token = ""
         self.journey = ""
+        self.extra_env: dict[str, str] = {}   # a journey's own variables (account keys for the core)
 
     # ── the world ───────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ class Session:
         env.update({"HOME": str(self.userhome), "METABOT_HOME": str(self.home),
                     "ORCHA_KEY_PATH": str(self.home / "key"), "METACHAT_CONFIG": str(self.config),
                     "METACHAT_STATE": str(self.state), "PYTHONDONTWRITEBYTECODE": "1"})
+        env.update(self.extra_env)
         return env
 
     def write_app_config(self) -> None:
@@ -145,6 +147,42 @@ class Session:
     def core(self, args: list[str], timeout: float = 120, stdin: str | None = None) -> subprocess.CompletedProcess:
         return subprocess.run([self.metabot_bin, *args], env=self.env(), cwd=str(self.job),
                               capture_output=True, text=True, timeout=timeout, input=stdin)
+
+    def core_tty(self, args: list[str], timeout: float = 120) -> tuple[int, str]:
+        """The core at a terminal of its own (a workflow approval is given at a tty, never
+        piped): the exit code and everything it wrote."""
+        import pty
+        import select
+
+        master, slave = pty.openpty()
+        try:
+            proc = subprocess.Popen([self.metabot_bin, *args], env=self.env(), cwd=str(self.job),
+                                    stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+        finally:
+            os.close(slave)
+        out = bytearray()
+        deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([master], [], [], 0.2)
+                if ready:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:       # the slave end closed: the child is done
+                        break
+                    if not chunk:
+                        break
+                    out += chunk
+                elif proc.poll() is not None:
+                    break
+            else:
+                proc.kill()
+                proc.wait(timeout=5)
+                raise TimeoutError(f"{' '.join(args[:2])} did not finish in {timeout:g} s")
+        finally:
+            os.close(master)
+        code = proc.wait(timeout=timeout)
+        return code, out.decode("utf-8", "replace")
 
     def init_core(self) -> None:
         r = self.core(["init", "--engine", "openai"])

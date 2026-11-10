@@ -640,10 +640,10 @@ def make_ui(
                 "asks": len(broker.pending(run_id)),
                 "trace_len": live.out.total(),
             }
-            yield f"data: {json.dumps(told)}\n\n"
-            if live.state != "running" or broker.closed:
-                yield "event: end\ndata: {}\n\n"
+            if live.state != "running" or broker.closed:  # the last state and the end, in one write
+                yield f"data: {json.dumps(told)}\n\nevent: end\ndata: {{}}\n\n"
                 return
+            yield f"data: {json.dumps(told)}\n\n"
             while True:
                 try:
                     await asyncio.wait_for(broker.wait(run_id, seen), KEEPALIVE_S)
@@ -659,8 +659,13 @@ def make_ui(
         if run_id not in broker.runs:
             text = f"No run {run_id} was started here.\n"
             return Response(text, status_code=404, media_type="text/plain")
+        async def guarded() -> AsyncIterator[str]:
+            async with broker.stream():  # a closing UI waits for this stream's end
+                async for chunk in changes(run_id):
+                    yield chunk
+
         return StreamingResponse(
-            changes(run_id),
+            guarded(),
             media_type="text/event-stream",
             headers={"cache-control": "no-store", "x-accel-buffering": "no"},
         )

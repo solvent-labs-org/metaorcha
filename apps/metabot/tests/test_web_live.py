@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import threading
@@ -336,3 +337,59 @@ def test_a_closing_ui_ends_an_open_stream(tmp_path):
         time.sleep(0.1)
     response = stream.finish()  # the UI stopped: the run was sealed and the stream ended
     assert _events(response.text)[-1][0] == "end"
+
+
+# ── closing waits for the streams ───────────────────────────────────────────
+
+
+def test_close_waits_for_an_open_event_stream():
+    """A UI that closes lets every open event stream write its ``end`` first, so a page never
+    sees its stream cut off mid-message."""
+    from metabot.web_runs import Broker
+
+    async def scenario():
+        broker = Broker()
+        order = []
+
+        async def a_stream():
+            async with broker.stream():
+                order.append("stream open")
+                await asyncio.sleep(0.2)
+                order.append("stream done")
+
+        task = asyncio.create_task(a_stream())
+        await asyncio.sleep(0.05)
+        assert broker.streams == 1
+        await broker.close()
+        order.append("closed")
+        await task
+        return order
+
+    assert asyncio.run(scenario()) == ["stream open", "stream done", "closed"]
+
+
+def test_close_does_not_wait_forever_for_a_stuck_stream(monkeypatch):
+    from metabot import web_runs
+
+    monkeypatch.setattr(web_runs, "STREAM_DRAIN_S", 0.1)
+
+    async def scenario():
+        broker = web_runs.Broker()
+        started = asyncio.Event()
+
+        async def stuck():
+            async with broker.stream():
+                started.set()
+                await asyncio.sleep(10)
+
+        task = asyncio.create_task(stuck())
+        await started.wait()
+        t0 = time.monotonic()
+        await broker.close()
+        waited = time.monotonic() - t0
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return waited
+
+    waited = asyncio.run(scenario())
+    assert 0.1 <= waited < 2.0
