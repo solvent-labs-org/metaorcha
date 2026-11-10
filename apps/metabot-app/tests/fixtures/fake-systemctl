@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Fake systemctl. Logs argv to $FAKE_LOG. ``--user is-active UNIT...`` prints one
+state per unit: "active" when the unit is named in $FAKE_ACTIVE_UNITS (comma
+separated), else "inactive"; exit 0 when every unit is active, else 3. Every
+other command is refused (tests never start, stop or restart anything)."""
+import json, os, sys
+
+LOG = os.environ.get("FAKE_LOG")
+argv = sys.argv[1:]
+if LOG:
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"bin": "systemctl", "argv": argv}) + "\n")
+if argv[:2] == ["--user", "is-active"]:
+    active = {u for u in os.environ.get("FAKE_ACTIVE_UNITS", "").split(",") if u}
+    states = ["active" if (u in active or u.removesuffix(".service") in active) else "inactive"
+              for u in argv[2:]]
+    print("\n".join(states))
+    sys.exit(0 if states and all(s == "active" for s in states) else 3)
+print(f"fake systemctl: refused {' '.join(argv)}", file=sys.stderr)
+sys.exit(1)

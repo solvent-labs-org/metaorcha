@@ -19,7 +19,15 @@ import urllib.request
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
-from metabot.config import MODEL_RE, Config, ConfigError, endpoint_of, load_config, save_config
+from metabot.config import (
+    MODEL_RE,
+    Config,
+    ConfigError,
+    endpoint_of,
+    load_config,
+    login_name_ok,
+    save_config,
+)
 from metabot.connections import LOCAL_HOSTS
 from metabot.engines import BINARIES, available, engine_names, known_engine
 
@@ -131,6 +139,9 @@ def _mine(cfg: Config, role: str) -> Entry | None:
     entry = {"engine": str(raw["engine"])}
     if isinstance(model, str) and MODEL_RE.match(model):
         entry["model"] = model
+    login = raw.get("login")
+    if isinstance(login, str) and login_name_ok(login):
+        entry["login"] = login
     return entry
 
 
@@ -203,6 +214,25 @@ def pick(
     return fill(role_entry(role, cfg), engine, model)
 
 
+def role_login(role: str, engine: str, cfg: Config | None = None) -> str | None:
+    """The login a role you set runs on, when the run is on the role's own engine.
+
+    A login names one engine's sign-in folder, so with another engine named (``-e``) the
+    role's login does not go with it, and that engine signs in as it would without one.
+    """
+    if role not in ROLES:
+        return None
+    mine = _mine(cfg or load_config(), role)
+    if mine is None or mine["engine"] != engine:
+        return None
+    return mine.get("login")
+
+
+def roles_on_login(name: str, cfg: Config) -> list[str]:
+    """The roles you set to run on the login ``name``."""
+    return [role for role in ROLES if (_mine(cfg, role) or {}).get("login") == name]
+
+
 def fill(entry: Mapping[str, str], engine: str | None, model: str | None) -> tuple[str, str | None]:
     """``-e`` and ``-m`` win over an entry; its model goes with its own engine only."""
     chosen = engine or entry["engine"]
@@ -234,6 +264,8 @@ def cmd_roster(_args: argparse.Namespace) -> int:
         if engine in BINARIES and not installed.get(engine):
             note = f"{BINARIES[engine]} is not installed"
         model = entry.get("model") or "(its own)"
+        if entry.get("login"):
+            note = f"login {entry['login']}: {note}"
         print(f"{role:<8} {engine:<8} {model[:22]:<22} {whose:<8} {note}")
     if not roster:
         why = "no engine CLI is installed"
@@ -254,10 +286,24 @@ def cmd_roster_set(args: argparse.Namespace) -> int:
         _err(f"{args.model!r} is not a model name")
         return 2
     cfg = load_config()
-    entry = {"engine": args.engine, **({"model": args.model} if args.model else {})}
+    login = getattr(args, "login", None)
+    if login is not None:
+        spec = cfg.logins.get(login)
+        if not isinstance(spec, dict):
+            _err(f"there is no login {login!r}; see metabot login list")
+            return 2
+        if spec.get("engine") != args.engine:
+            _err(f"{login} is a {spec.get('engine')} login, not one for {args.engine}")
+            return 2
+    entry = {
+        "engine": args.engine,
+        **({"model": args.model} if args.model else {}),
+        **({"login": login} if login else {}),
+    }
     cfg.roster = {**_table(cfg), args.role: entry}
     save_config(cfg)
-    print(f"{args.role}: {args.engine}{'/' + args.model if args.model else ''} (yours)")
+    on = f" on the login {login}" if login else ""
+    print(f"{args.role}: {args.engine}{'/' + args.model if args.model else ''}{on} (yours)")
     if args.role == "private" and not stays_here(entry, cfg):
         print(f"note: {OFF_MACHINE}; the private role is meant for the local model server")
     return 0

@@ -1,0 +1,108 @@
+{
+  "id": "workflows",
+  "label": "Workflows & Routines",
+  "icon": "⇶",
+  "order": 40,
+  "kind": "catalog",
+  "phase": 1,
+  "modes": [
+    "user",
+    "dev"
+  ],
+  "commands": [
+    {
+      "slash": "a2a",
+      "label": "Run a workflow",
+      "hint": "/a2a <workflow> — workflow → workflow: run an approved workflow by name or sha256",
+      "args": [
+        {
+          "name": "ref",
+          "type": "text"
+        }
+      ],
+      "run": {
+        "catalog": "workflow.run"
+      }
+    }
+  ],
+  "sections": [
+    {
+      "title": "Workflows",
+      "items": [
+        {
+          "catalog": "workflow.list",
+          "label": "List"
+        },
+        {
+          "catalog": "workflow.show",
+          "label": "Show"
+        },
+        {
+          "catalog": "workflow.check",
+          "label": "Check"
+        },
+        {
+          "catalog": "workflow.new",
+          "label": "New"
+        },
+        {
+          "catalog": "workflow.add",
+          "label": "Add"
+        },
+        {
+          "catalog": "workflow.approve",
+          "label": "Approve"
+        },
+        {
+          "catalog": "workflow.revoke",
+          "label": "Revoke"
+        },
+        {
+          "catalog": "workflow.run",
+          "label": "Run"
+        },
+        {
+          "catalog": "workflow.schedule",
+          "label": "Schedule"
+        }
+      ]
+    },
+    {
+      "title": "Routines",
+      "items": [
+        {
+          "catalog": "routine.list",
+          "label": "List"
+        },
+        {
+          "catalog": "routine.show",
+          "label": "Show"
+        },
+        {
+          "catalog": "routine.firings",
+          "label": "Firings"
+        },
+        {
+          "catalog": "routine.save",
+          "label": "Save"
+        },
+        {
+          "catalog": "routine.run",
+          "label": "Run now"
+        },
+        {
+          "catalog": "routine.enable",
+          "label": "Enable"
+        },
+        {
+          "catalog": "routine.disable",
+          "label": "Disable"
+        },
+        {
+          "catalog": "routine.remove",
+          "label": "Remove"
+        }
+      ]
+    }
+  ]
+}

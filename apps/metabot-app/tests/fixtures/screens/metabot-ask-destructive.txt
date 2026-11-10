@@ -1,0 +1,5 @@
+
+[metabot] destructive call wants to run
+  tool: Bash
+  args: {"command": "rm -rf build"}
+  allow? type 'yes' to allow, anything else declines: 

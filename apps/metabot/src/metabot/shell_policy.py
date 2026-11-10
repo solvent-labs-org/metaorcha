@@ -38,6 +38,7 @@ import shlex
 from typing import Any
 
 from metabot.scope_classes import ScopeClass, resolve_scope_class
+from metabot.secret_paths import tool_asks
 from metabot.text import ascii_digits
 
 READ, WRITE, DESTRUCTIVE = ScopeClass.READ, ScopeClass.WRITE, ScopeClass.DESTRUCTIVE
@@ -1161,11 +1162,19 @@ def _classify(command: str, depth: int, strict: bool) -> ScopeClass:
     return worst
 
 
-def classify_shell(command: str) -> ScopeClass:
-    """The class of a shell command line; never raises."""
+def classify_shell(command: str, cwd: str | None = None) -> ScopeClass:
+    """The class of a shell command line run in ``cwd`` (default: here); never raises.
+
+    A line that could reach MetaBot's secrets, its signing key or a login folder is
+    destructive (``metabot.secret_lines``)."""
     try:
-        return _classify(command, 0, strict=True)
-    except Exception:  # a classifier bug must fail closed
+        cls = _classify(command, 0, strict=True)
+        if cls is DESTRUCTIVE:
+            return cls
+        from metabot.secret_lines import line_asks  # it reads lines with this module's lexer
+
+        return DESTRUCTIVE if line_asks(command, cwd) else cls
+    except Exception:  # a classifier bug, or a config.json that does not read: fail closed
         return DESTRUCTIVE
 
 
@@ -1175,13 +1184,27 @@ _ENGINE_READ_TOOLS = frozenset(
 _ENGINE_WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch"})
 
 
-def classify_engine_tool(tool_name: str, tool_input: dict[str, Any]) -> ScopeClass:
-    """The class of one of an engine's own tools, for its permission prompts."""
+def classify_engine_tool(
+    tool_name: str, tool_input: dict[str, Any], cwd: str | None = None
+) -> ScopeClass:
+    """The class of one of an engine's own tools, for its permission prompts; one whose
+    path names MetaBot's secrets, its signing key or a login folder is destructive."""
     if tool_name == "Bash":
         command = tool_input.get("command") if isinstance(tool_input, dict) else None
-        return classify_shell(command if isinstance(command, str) else "")
-    if tool_name in _ENGINE_READ_TOOLS:
-        return ScopeClass.READ
-    if tool_name in _ENGINE_WRITE_TOOLS:
-        return ScopeClass.WRITE
-    return resolve_scope_class(tool_name)
+        return classify_shell(command if isinstance(command, str) else "", cwd)
+    try:
+        if tool_name in _ENGINE_READ_TOOLS:
+            cls = ScopeClass.READ
+        elif tool_name in _ENGINE_WRITE_TOOLS:
+            cls = ScopeClass.WRITE
+        else:
+            cls = resolve_scope_class(tool_name)
+        if (
+            cls is not DESTRUCTIVE
+            and isinstance(tool_input, dict)
+            and tool_asks(tool_name, tool_input, cwd)
+        ):
+            return DESTRUCTIVE
+        return cls
+    except Exception:  # a config.json that does not read: fail closed
+        return DESTRUCTIVE

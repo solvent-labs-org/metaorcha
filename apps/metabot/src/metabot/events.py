@@ -15,6 +15,7 @@ from typing import Any
 class Started:
     session_id: str | None
     model: str | None
+    key_source: str | None = None  # what the engine says it signed in with, when it says
 
 
 @dataclass(frozen=True)

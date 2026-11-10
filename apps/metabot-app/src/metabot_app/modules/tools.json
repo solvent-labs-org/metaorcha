@@ -1,0 +1,12 @@
+{
+  "id": "tools",
+  "label": "Tools",
+  "icon": "⚒",
+  "order": 90,
+  "kind": "page",
+  "page": "tools",
+  "phase": 1,
+  "modes": [
+    "dev"
+  ]
+}

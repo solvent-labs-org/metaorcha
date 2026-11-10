@@ -1,0 +1,13 @@
+{
+  "id": "desktop",
+  "label": "Desktop",
+  "icon": "▣",
+  "order": 80,
+  "kind": "page",
+  "page": "desktop",
+  "phase": 1,
+  "modes": [
+    "user",
+    "dev"
+  ]
+}

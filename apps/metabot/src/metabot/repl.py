@@ -31,6 +31,11 @@ Ctrl-C stops the run in progress; its receipt is still sealed."""
 def _ask(**kwargs: Any) -> Any:
     from metabot.commands import ask_once
 
+    login = kwargs.pop("login", None)
+    if login:  # each turn starts the engine on the login's folder, as ask --login does
+        from metabot.engines import get_engine
+
+        kwargs["engine"] = get_engine(kwargs["engine_name"], login=login)
     return asyncio.run(ask_once(**kwargs))
 
 
@@ -43,6 +48,7 @@ def repl(
     trace: Trace | None = None,
     run: Callable[..., Any] = _ask,
     options: dict[str, Any] | None = None,
+    login: str | None = None,
 ) -> int:
     """Read lines until /exit or end of input; each line is one run."""
     from metabot.commands import cancelled_result, receipt_line
@@ -52,7 +58,10 @@ def repl(
     options = dict(options or {})
     session: str | None = None
     last: Any = None
-    write(f"metabot {__version__}: {engine} in {printable(str(cwd), 2000)}. /help lists commands.")
+    on = f" on the login {login}" if login else ""
+    write(
+        f"metabot {__version__}: {engine}{on} in {printable(str(cwd), 2000)}. /help lists commands."
+    )
     while True:
         try:
             line = read_line(f"{engine}> ")
@@ -76,7 +85,12 @@ def repl(
                 session = None
                 write("new conversation")
             elif command == "/engine":
-                if known_engine(arg):
+                if login and arg != engine:
+                    write(
+                        f"this chat runs on the {engine} login {login};"
+                        f" start a new chat for {arg or 'another engine'}"
+                    )
+                elif known_engine(arg):
                     engine, session = arg, None
                     options.pop("role", None)  # the role named the last engine
                     if options and options.pop("model", None):
@@ -97,6 +111,7 @@ def repl(
                 cwd=cwd,
                 resume=session,
                 trace=trace,
+                **({"login": login} if login else {}),
                 **options,
             )
         except (asyncio.CancelledError, KeyboardInterrupt) as exc:
@@ -123,15 +138,37 @@ def repl(
 
 def cmd_chat(args: argparse.Namespace) -> int:
     from metabot.cmdline import given_folder
-    from metabot.commands import EXIT_USAGE, default_engine
-    from metabot.roster import RosterError, pick
+    from metabot.commands import EXIT_USAGE, cleared_line, default_engine
+    from metabot.config import load_config
+    from metabot.engines import get_engine
+    from metabot.logins import run_login
+    from metabot.roster import RosterError, pick, role_login
 
     try:
         engine, model = pick(args.role, args.engine, args.model)
-    except RosterError as exc:
+        login, why = run_login(
+            getattr(args, "login", None),
+            args.role,
+            role_login(args.role, engine) if args.role and engine else None,
+            None,
+        )
+    except (RosterError, ValueError) as exc:
         print(f"metabot: {exc}")
         return EXIT_USAGE
+    if login is not None and engine is None:  # a login names its engine
+        spec = load_config().logins.get(login)
+        engine = spec.get("engine") if isinstance(spec, dict) else None
     engine = engine or default_engine()
+    if login is not None:
+        try:  # refuse before the first turn, not at it
+            cleared = get_engine(engine, login=login).cleared
+        except ValueError as exc:  # ConfigError is one: an unknown login
+            print(f"metabot: {exc}")
+            return EXIT_USAGE
+        if why:
+            print(why)
+        if cleared:
+            print(cleared_line(login, cleared))
     cwd, usable = given_folder(args.cwd)
     if not usable:
         print(f"metabot: {printable(str(cwd), 2000)} is not a directory")
@@ -147,4 +184,4 @@ def cmd_chat(args: argparse.Namespace) -> int:
         "connections": not args.no_connections,
         "plugins": not args.no_plugins,
     }
-    return repl(input, print, engine=engine, cwd=cwd, options=options)
+    return repl(input, print, engine=engine, cwd=cwd, options=options, login=login)

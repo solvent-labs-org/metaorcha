@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MetaBot</title>
+<style>
+  body { background:#17171A; color:#F5F5F7; font-family:sans-serif; margin:0;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center; }
+  main { width:min(420px, 100%); padding:28px 20px 40px; box-sizing:border-box; }
+  h1 { font-size:28px; font-weight:600; margin:12px 0 8px; }
+  p { color:#C7C7CC; line-height:1.45; }
+  label { display:block; margin:16px 0 6px; font-size:14px; }
+  input { width:100%; box-sizing:border-box; font-size:18px; padding:12px;
+    border-radius:10px; border:1px solid #3A3A3C; background:#1C1C1E; color:#F5F5F7; }
+  button { font-size:17px; padding:14px 18px; border:0; border-radius:10px;
+    background:#0A84FF; color:white; margin-top:14px; width:100%; }
+  button.ghost { background:#2C2C2E; }
+  #ask { margin-top:22px; }
+  #wordlist { font-size:22px; letter-spacing:0.02em; color:#F5F5F7; }
+  #msg { min-height:1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MetaBot</h1>
+  <p>Scan the code on your computer, or type the address and the code.</p>
+  <button id="scan" type="button">Scan</button>
+  <label for="addr">Address and port</label>
+  <input id="addr" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <label for="code">Code</label>
+  <input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false">
+  <button id="go" type="button">Continue</button>
+  <div id="ask" hidden>
+    <p>Does your computer show these words?</p>
+    <p id="wordlist"></p>
+    <button id="yes" type="button">Yes</button>
+    <button id="no" class="ghost" type="button">No</button>
+  </div>
+  <p id="msg"></p>
+</main>
+<script>
+function showMsg(s) {
+  document.getElementById("msg").textContent = s || "";
+}
+function showWords(list) {
+  document.getElementById("ask").hidden = false;
+  document.getElementById("wordlist").textContent = list.join("   ");
+  showMsg("");
+}
+document.getElementById("scan").onclick = function () { Pair.scan(); };
+document.getElementById("go").onclick = function () {
+  Pair.typed(document.getElementById("addr").value, document.getElementById("code").value);
+};
+document.getElementById("yes").onclick = function () { Pair.confirm(true); };
+document.getElementById("no").onclick = function () {
+  document.getElementById("ask").hidden = true;
+  Pair.confirm(false);
+};
+</script>
+</body>
+</html>

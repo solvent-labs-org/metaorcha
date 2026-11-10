@@ -9,9 +9,12 @@ they start.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import copy
+import json
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -19,20 +22,27 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from metabot import web_data as data
+from metabot import web_home as home_page
 from metabot import web_pages as pages
+from metabot import web_setup as setup
+from metabot import web_theme as theme
 from metabot.checks import NOT_ONE_LINE, refused
 from metabot.web_guard import Guard, checked_form, guarded, nonce_of
 from metabot.web_runs import AskAnswered, AskExpired, Broker, WebApprover
 
 PROMPT_LIMIT = 100_000  # characters of a task typed in the page
 FIELDS = ("prompt", "engine", "role", "model", "folder")
-EVERYDAY_FIELDS = ("prompt", "folder", "check")  # a task, a folder, and a check if you have one
+# a task, a folder, a check if you have one, and a spend cap if you want one
+EVERYDAY_FIELDS = ("prompt", "folder", "check", "max_cost")
 CHECK_LIMIT = 1000
+CAP_MOST_USD = 100_000  # a spend cap past this many dollars is a slip of the keyboard
+CAP_TEXT = re.compile(r"(?:[0-9]{1,9}(?:\.[0-9]{1,6})?|\.[0-9]{1,6})")  # dollars, as typed
+CAP_SAID = "the spend cap is dollars above 0, such as 2 or 0.50"
 # and a "desk" per desk
 OFFICE_FIELDS = (
     "prompt",
@@ -45,6 +55,7 @@ OFFICE_FIELDS = (
     "max_cost",
 )
 MODES = ("relay", "fan")
+KEEPALIVE_S = 15.0  # a run's event stream says it is still open this often, when nothing changed
 TITLES = {400: "Not done", 404: "Not found", 409: "Answered already", 410: "No longer waiting"}
 
 
@@ -89,6 +100,22 @@ def connections(request: Request) -> HTMLResponse:
 def routines(request: Request) -> HTMLResponse:
     rows, recent, error = data.routine_view()
     return HTMLResponse(pages.routines_page(rows, recent, error, nonce_of(request)))
+
+
+def font(request: Request) -> Response:
+    """One of the fonts the pages use, by its hash; the guard lets the browser keep it."""
+    found = theme.font_bytes(request.path_params["name"])
+    if found is None:
+        return Response("Not found\n", status_code=404, media_type="text/plain")
+    return Response(found, media_type="font/woff2")
+
+
+def live_script(request: Request) -> Response:
+    """The live page's script, by its hash; the guard lets the browser keep it."""
+    found = theme.live_script_bytes(request.path_params["name"])
+    if found is None:
+        return Response("Not found\n", status_code=404, media_type="text/plain")
+    return Response(found, media_type="text/javascript")
 
 
 # ── a run started in the page ───────────────────────────────────────────────
@@ -143,29 +170,53 @@ def plan_everyday(values: dict[str, str], start_dir: Path) -> dict[str, Any]:
         )
     if len(check) > CHECK_LIMIT:
         raise ValueError(f"the check is longer than {CHECK_LIMIT} characters")
-    return {"prompt": prompt, "cwd": cwd, "check": check or None}
+    cap = spend_cap(values.get("max_cost", ""))
+    return {"prompt": prompt, "cwd": cwd, "check": check or None, "max_cost": cap}
+
+
+def spend_cap(said: str) -> int | None:
+    """A form's spend cap in micro-dollars, read as ``--max-cost`` reads it; None when the
+    field is empty. ValueError for one that is not dollars, is not above 0, or is past
+    ``CAP_MOST_USD``."""
+    from metabot.cli import _dollars
+    from metabot.spend import MUSD, dollars
+
+    text = said.strip()
+    if not text:
+        return None
+    if not CAP_TEXT.fullmatch(text):
+        raise ValueError(CAP_SAID)
+    try:
+        musd = _dollars(text)
+    except argparse.ArgumentTypeError:  # 0, or less than a micro-dollar
+        raise ValueError(CAP_SAID) from None
+    if musd > CAP_MOST_USD * MUSD:
+        raise ValueError(f"the spend cap is at most {dollars(CAP_MOST_USD * MUSD)}")
+    return musd
 
 
 def ladder_args(plan: dict[str, Any]) -> argparse.Namespace:
     """The ``ask --ladder`` options a home-page task runs with.
 
-    These are the defaults, which write only when asked.
+    These are the defaults, which write only when asked, with the plan's spend cap; a plan
+    from Plan it also gives its step's role, checks and approval.
     """
+    checks = list(plan.get("checks") or ([plan["check"]] if plan.get("check") else []))
     return argparse.Namespace(
         prompt=[plan["prompt"]],
         cwd=str(plan["cwd"]),
-        check=[plan["check"]] if plan.get("check") else None,
+        check=checks or None,
         engine=None,
         model=None,
         suggest=False,
         resume=None,
-        role=None,
-        allow_write=False,
-        allow=None,
-        read_only=False,
-        no_connections=False,
-        no_plugins=False,
-        max_cost=None,
+        role=plan.get("role"),
+        allow_write=bool(plan.get("allow_write")),
+        allow=list(plan.get("allow") or []) or None,
+        read_only=bool(plan.get("read_only")),
+        no_connections=not plan.get("connections", True),
+        no_plugins=not plan.get("plugins", True),
+        max_cost=plan.get("max_cost"),
         project_receipt=None,
         json=False,
     )
@@ -340,6 +391,22 @@ def make_app(
     ask_timeout_s: float = 600.0,
 ) -> ASGIApp:
     """The UI for one start: its routes, behind ``guard``. Its runs stop when it stops."""
+    app, _broker = make_ui(
+        guard, start_dir=start_dir, make_engine=make_engine, ask_timeout_s=ask_timeout_s
+    )
+    return app
+
+
+def make_ui(
+    guard: Guard,
+    *,
+    start_dir: Path,
+    make_engine: Callable[[str], Any] | None = None,
+    ask_timeout_s: float = 600.0,
+) -> tuple[ASGIApp, Broker]:
+    """The UI and the broker that holds its runs. The server closes the broker before it
+    waits on its connections, so an open event stream ends and lets the UI stop; the
+    UI's own shutdown closes it again, which is harmless."""
     broker = Broker(ask_timeout_s)
 
     def started() -> list[Any]:
@@ -395,16 +462,21 @@ def make_app(
         broker.start(run_id, coro)
         return RedirectResponse(f"/live/{run_id}", status_code=303)
 
-    def everyday_response(
+    async def everyday_response(
         request: Request, values: dict[str, str], error: str | None = None, status: int = 200
     ) -> HTMLResponse:
+        today = await home_page.today_html(broker, guard.csrf)
         page = pages.everyday_page(
-            nonce_of(request), guard.csrf, values=values, started=started(), error=error
-        )
+            nonce_of(request), guard.csrf, values=values, started=started(), error=error,
+            today=today,
+        )  # fmt: skip
         return HTMLResponse(page, status_code=status)
 
-    async def start_ladder(plan: dict[str, Any]) -> RedirectResponse:
-        """Open a run and start its ladder as a task on this loop, so its asks reach the page."""
+    async def start_ladder(
+        plan: dict[str, Any], verdicts: tuple[dict[str, str], ...] = ()
+    ) -> RedirectResponse:
+        """Open a run and start its ladder as a task on this loop, so its asks reach the page.
+        ``verdicts`` are signed with its seal."""
         from metabot.commands import LadderSetupError, ladder_run, ladder_setup
         from metabot.paths import new_run_id
 
@@ -418,6 +490,7 @@ def make_app(
             setup = await run_in_threadpool(ladder_setup, args, live.trace, plan["prompt"], run_id)
         except LadderSetupError as exc:  # the run is shown as failed, with the reason
             live.state, live.error = "failed", str(exc)
+            live.touch()
             return RedirectResponse(f"/live/{run_id}", status_code=303)
         approver = WebApprover(broker, run_id)
 
@@ -425,7 +498,7 @@ def make_app(
             from metabot.ladder import why_line
 
             live.answered = False  # until the ladder takes a try: a stop takes none
-            ladder = await ladder_run(setup, args, live.trace, approver=approver)
+            ladder = await ladder_run(setup, args, live.trace, approver=approver, verdicts=verdicts)
             live.why, live.answered = why_line(ladder, pages.WHY_LIMIT), ladder.answered
             return ladder.final
 
@@ -433,9 +506,12 @@ def make_app(
         return RedirectResponse(f"/live/{run_id}", status_code=303)
 
     async def home(request: Request) -> HTMLResponse | RedirectResponse:
-        """The home page: the everyday box, unless the settings ask for the developer runs list."""
+        """The home page: the everyday box, unless the settings ask for the developer runs list,
+        or MetaBot was never set up here, when Setup's welcome is shown."""
         from metabot.config import ConfigError, load_config
 
+        if request.method != "POST" and await run_in_threadpool(setup.first_start):
+            return HTMLResponse(setup.welcome_page(nonce_of(request)))  # never set up here
         try:
             developer = load_config().ui_mode == "developer"
         except ConfigError:
@@ -443,13 +519,14 @@ def make_app(
         if developer and request.method != "POST":
             return await run_in_threadpool(runs, request)
         if request.method != "POST":
-            return everyday_response(request, {"prompt": "", "folder": str(start_dir), "check": ""})
+            empty = {"prompt": "", "folder": str(start_dir), "check": "", "max_cost": ""}
+            return await everyday_response(request, empty)
         form = await checked_form(request, guard)
         values = {k: v if isinstance(v := form.get(k), str) else "" for k in EVERYDAY_FIELDS}
         try:
             plan = await run_in_threadpool(plan_everyday, values, start_dir)
         except ValueError as exc:
-            return everyday_response(request, values, error=str(exc), status=400)
+            return await everyday_response(request, values, error=str(exc), status=400)
         return await start_ladder(plan)
 
     async def office_form(
@@ -538,13 +615,55 @@ def make_app(
         # and a desk that asks was saved before it asked, so its row is there too
         seen = copy.copy(found)
         asks = broker.pending(run_id)
-        state, office = None, None
+        state, office, record = None, None, None
         if seen.office is not None:  # its record says how each desk is doing
             office = await run_in_threadpool(data.office_view, run_id)
-        elif seen.result is not None:
+        elif seen.state != "running":  # its receipt, if one was sealed, and the steps it signs
             state = await run_in_threadpool(data.receipt_state, run_id)
-        page = pages.live_page(seen, asks, state, nonce_of(request), guard.csrf, office=office)
+            if state != "no receipt":
+                record = await run_in_threadpool(data.run_view, run_id)
+        part = request.query_params.get("part")
+        page = pages.live_page(
+            seen, asks, state, nonce_of(request), guard.csrf, office=office, record=record,
+            part="main" if part == "main" else None,
+        )  # fmt: skip
         return HTMLResponse(page)
+
+    async def changes(run_id: str) -> AsyncIterator[str]:
+        """One event per change of the run, a comment while nothing changes, and ``end`` once
+        it ended or this UI closes."""
+        while True:
+            live = broker.runs[run_id]
+            seen = live.version
+            told = {
+                "state": live.state,
+                "asks": len(broker.pending(run_id)),
+                "trace_len": live.out.total(),
+            }
+            yield f"data: {json.dumps(told)}\n\n"
+            if live.state != "running" or broker.closed:
+                yield "event: end\ndata: {}\n\n"
+                return
+            while True:
+                try:
+                    await asyncio.wait_for(broker.wait(run_id, seen), KEEPALIVE_S)
+                    break
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+
+    async def events(request: Request) -> Response:
+        """The run's changes as a stream of events; its page listens for them."""
+        run_id = request.path_params["run_id"]
+        if not data.is_safe_id(run_id):
+            return Response("That is not a run id.\n", status_code=400, media_type="text/plain")
+        if run_id not in broker.runs:
+            text = f"No run {run_id} was started here.\n"
+            return Response(text, status_code=404, media_type="text/plain")
+        return StreamingResponse(
+            changes(run_id),
+            media_type="text/event-stream",
+            headers={"cache-control": "no-store", "x-accel-buffering": "no"},
+        )
 
     async def answer(request: Request) -> HTMLResponse | RedirectResponse:
         form = await checked_form(request, guard)
@@ -576,6 +695,23 @@ def make_app(
             return _message(request, 404, "No run under that name was started here.")
         return RedirectResponse(f"/live/{run_id}", status_code=303)
 
+    async def switch_theme(request: Request) -> HTMLResponse | RedirectResponse:
+        """Keep the theme a form asks for in a cookie, and go back to the page it came from."""
+        form = await checked_form(request, guard)
+        chosen = form.get("theme")
+        if chosen not in theme.THEMES:
+            return _message(request, 400, "There is no such theme: light or dark.")
+        back = RedirectResponse(theme.back_to(form.get("back")), status_code=303)
+        back.set_cookie(
+            theme.THEME_COOKIE,
+            str(chosen),
+            max_age=theme.THEME_KEEP_S,
+            path="/",
+            httponly=True,
+            samesite="strict",
+        )
+        return back
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         try:
@@ -593,7 +729,14 @@ def make_app(
         Route("/chat", chat, methods=["GET", "POST"]),
         Route("/office", office_run, methods=["GET", "POST"]),
         Route("/live/{run_id}", live),
+        Route("/live/{run_id}/events", events),
         Route("/live/{run_id}/stop", stop, methods=["POST"]),
         Route("/asks/{ask_id}", answer, methods=["POST"]),
+        Route("/theme", switch_theme, methods=["POST"]),
+        Route("/static/fonts/{name}", font),
+        Route("/static/live/{name}", live_script),
+        *setup.setup_routes(guard, broker, start_dir, make_engine),
+        *home_page.home_routes(guard, broker, start_dir, make_engine, start_ladder),
     ]
-    return guarded(Starlette(routes=routes, lifespan=lifespan), guard)
+    app = Starlette(routes=routes, lifespan=lifespan)
+    return guarded(theme.themed(app, guard.csrf), guard), broker

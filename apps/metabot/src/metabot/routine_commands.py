@@ -40,6 +40,7 @@ from metabot.routines import (
     save_routine,
     set_enabled,
 )
+from metabot.workflow_firing import firing_label
 
 
 def _err(text: str) -> None:
@@ -113,6 +114,16 @@ def _last(rid: str, latest: dict[str, Any]) -> str:
     return f"{firing.state} {firing.at}" if firing else "never fired"
 
 
+def _label(record: dict[str, Any]) -> str:
+    """What fires: ``not approved`` for a goal of its own, or the workflow, its approval and
+    what its ceiling has counted."""
+    from metabot.workflow_firing import summarize, used_text
+
+    summary = summarize(record)
+    used = used_text(summary, "this month")
+    return printable(summary.label + (f", {used}" if used else ""), 300)
+
+
 def cmd_routine_list(_args: argparse.Namespace) -> int:
     saved = routines()
     if not saved:
@@ -122,11 +133,63 @@ def cmd_routine_list(_args: argparse.Namespace) -> int:
     for record in saved:
         state = "on" if record.get("enabled") else "off"
         when = f"{record.get('cron')} ({record.get('tz')})"
+        last = _last(str(record.get("id")), latest)
         print(
             f"{printable(str(record.get('name')), 64):<20} {state:<4} {printable(when, 60):<36} "
-            f"next {_next(record):<26} last {_last(str(record.get('id')), latest)}"
+            f"next {_next(record):<26} last {last:<32} {_label(record)}"
         )
     return EXIT_OK
+
+
+def cmd_routine_show(args: argparse.Namespace) -> int:
+    from metabot.workflow_commands import ceiling_text
+    from metabot.workflow_firing import summarize, used_text
+
+    try:
+        record = get_routine(args.name)
+    except KeyError as exc:
+        _err(str(exc.args[0]))
+        return EXIT_USAGE
+    rid = str(record.get("id"))
+    summary = summarize(record)
+    when = f"{record.get('cron')} ({record.get('tz')})"
+    print(f"routine   {printable(str(record.get('name')), 64)} ({printable(rid, 40)})")
+    print(f"state     {'on' if record.get('enabled') else 'off'}")
+    print(f"schedule  {printable(when, 120)}")
+    print(f"next      {_next(record)}")
+    wf = summary.wf
+    if "workflow" not in record:
+        engine = printable(str(record.get("engine")), 40)
+        print(f"runs      goal on {engine}: {printable(str(record.get('goal')), 300)}")
+        print("approval  not approved: saved with a goal of its own, never approved as a workflow")
+        allowed = _allowed_lines(record)
+        print(f"allows    {', '.join(allowed) if allowed else 'none'}; any other write is declined")
+    elif wf is None:
+        print(f"runs      {printable(summary.label, 200)}")
+        print(f"          {printable(summary.problem or '', 400)}")
+    else:
+        print(f"runs      workflow {wf.name} {wf.sha256}")
+        approved = summary.approved_by
+        if approved is not None:
+            print(f"approval  approved at {approved.signed_at} (receipt {approved.run_id})")
+        else:
+            print(f"approval  {summary.approval}")
+        print(f"ceiling   {ceiling_text(wf)}")
+        used = used_text(summary)
+        print(f"used      {_used_line(used)} (from receipts that verify)")
+        print("          It runs on a schedule under a ceiling you approved.")
+        if summary.problem:
+            print(f"          its next firing is refused now: {printable(summary.problem, 400)}")
+    print(f"last      {_last(rid, {f.routine_id: f for f in firings(rid)})}")
+    print(f"next: metabot routine firings {printable(str(record.get('name')), 64)}")
+    return EXIT_OK
+
+
+def _used_line(used: str) -> str:
+    """``firings 1 of 40, $1.00 of $20.00 in 2026-11`` as ``1 of 40 firings; $1.00 ...``."""
+    head, _, rest = used.partition(", ")
+    count = head.removeprefix("firings ")
+    return f"{count} firings" + (f"; {rest.replace(', ', '; ')}" if rest else "")
 
 
 def _toggle(args: argparse.Namespace, enabled: bool) -> int:
@@ -180,6 +243,7 @@ def cmd_routine_firings(args: argparse.Namespace) -> int:
         name = printable(str(names.get(f.routine_id, f.routine_id)), 40)
         due = f"due {f.due}" if f.due else "asked for"
         extra = [
+            firing_label(f),
             f"run {f.run_id}" if f.run_id else "",
             f"acceptance {f.acceptance}" if f.acceptance else "",
         ]
@@ -231,6 +295,8 @@ def cmd_routine_run(args: argparse.Namespace) -> int:
     if firing.state == "refused":
         _err(f"routine not fired: {printable(firing.reason or '', 400)}")
         return EXIT_FAILED
+    if firing.workflow:
+        return _fired_workflow(firing, trace)
     journal = _journal(firing.run_id)
     answer = _final(journal)
     caveat = _caveat(journal)
@@ -249,3 +315,19 @@ def cmd_routine_run(args: argparse.Namespace) -> int:
         trace.note(f"[metabot] declared acceptance: {firing.acceptance}")
     ok = firing.state == "sealed" and firing.reason is None and firing.acceptance != "fail"
     return EXIT_OK if ok and valid else EXIT_FAILED
+
+
+def _fired_workflow(firing: Any, trace: Trace) -> int:
+    from metabot.seals import seal_state
+
+    sealed = bool(firing.receipt) and seal_state(firing.receipt, str(firing.run_id)).startswith(
+        "valid"
+    )
+    said = "valid" if sealed else "INVALID" if firing.receipt else "none"
+    print(f"firing {firing.firing_id} {firing.state}, {firing_label(firing)}; seal {said}")
+    if firing.reason:
+        trace.line(f"[metabot] {printable(firing.reason, 400)}")
+    if firing.receipt:
+        print(f"next: metabot receipts verify {firing.run_id}")
+    ok = firing.state == "sealed" and firing.reason is None
+    return EXIT_OK if ok and sealed else EXIT_FAILED

@@ -1,0 +1,49 @@
+{
+  "id": "connections",
+  "label": "Connections",
+  "icon": "⌁",
+  "order": 50,
+  "kind": "catalog",
+  "phase": 1,
+  "modes": [
+    "dev"
+  ],
+  "commands": [
+    {
+      "slash": "mcp",
+      "label": "Connections",
+      "hint": "/mcp — list the attested connections (opens this dock)",
+      "args": [],
+      "run": {
+        "catalog": "connect.list"
+      }
+    }
+  ],
+  "sections": [
+    {
+      "title": "Connections",
+      "items": [
+        {
+          "catalog": "connect.list",
+          "label": "List"
+        },
+        {
+          "catalog": "connect.scope",
+          "label": "Scope"
+        },
+        {
+          "catalog": "connect.test",
+          "label": "Test"
+        },
+        {
+          "catalog": "connect.add",
+          "label": "Add"
+        },
+        {
+          "catalog": "connect.revoke",
+          "label": "Revoke"
+        }
+      ]
+    }
+  ]
+}

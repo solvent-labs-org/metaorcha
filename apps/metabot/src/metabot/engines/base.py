@@ -24,10 +24,13 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from metabot.events import ErrorEvent, Event, Notice, TextEvent
 from metabot.sandbox import SandboxPlan, named_file
+
+if TYPE_CHECKING:
+    from metabot.config import Login
 
 DROPPED_ENV = frozenset(
     {
@@ -127,8 +130,34 @@ class CliEngine(ABC):
         except Exception:  # an adapter that trips on a strange line must not end the run
             return [TextEvent(text)]
 
+    # A run on a login (S3): the engine's folder variable names the login's folder, and
+    # every variable the CLI would sign in with instead, or send its calls elsewhere
+    # with, is dropped. Only engines with a folder variable take a login. Whether such a
+    # variable may be set at all is the login's choice (S4): a refusing login never gets
+    # here with one set; ``cleared`` names those a clearing login drops for the run.
+    login: Login | None = None
+    home_variable: str | None = None
+    cleared: tuple[str, ...] = ()
+
+    def sign_in_variable(self, name: str) -> bool:
+        """Whether the CLI reads ``name`` to sign in, pick a provider, or send its calls."""
+        return False
+
+    def sign_in_present(self) -> tuple[str, ...]:
+        """The variables set here that would sign the engine in another way, by name.
+
+        The ones every run drops (a parent Claude Code session's own) are not counted:
+        they never reach an engine, on a login or off one."""
+        return tuple(
+            sorted(k for k in os.environ if k not in DROPPED_ENV and self.sign_in_variable(k))
+        )
+
     def env(self) -> dict[str, str]:
-        return {k: v for k, v in os.environ.items() if k not in DROPPED_ENV}
+        env = {k: v for k, v in os.environ.items() if k not in DROPPED_ENV}
+        if self.login is not None and self.home_variable is not None:
+            env = {k: v for k, v in env.items() if not self.sign_in_variable(k)}
+            env[self.home_variable] = self.login.home
+        return env
 
 
 class _Proc:

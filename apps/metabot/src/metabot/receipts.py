@@ -270,6 +270,28 @@ def provenance_verdicts(meta: Mapping[str, Any]) -> list[dict[str, str]]:
     return found
 
 
+PLAN_CHECK = "plan"
+PLAN_SURFACE = "web"  # where a person approved the plan
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def plan_verdict(sha256: str, runs_on_sha256: str) -> dict[str, str]:
+    """A plan a person approved in the web UI before its run began (U2): the draft's sha256,
+    and the sha256 of what the page showed it runs on, which the draft does not name.
+
+    It is signed with the run's receipt, never left in the meta, which the receipt does not
+    sign: ``sha256=<the draft's sha256>;runs_on=<what it runs on>;approved_in=web``.
+    """
+    for said in (sha256, runs_on_sha256):
+        if not _SHA256.fullmatch(said):
+            raise ValueError(f"not a sha256: {said[:80]!r}")
+    return {
+        "check": PLAN_CHECK,
+        "result": "pass",
+        "detail": f"sha256={sha256};runs_on={runs_on_sha256};approved_in={PLAN_SURFACE}",
+    }
+
+
 def approval_verdict(
     call_id: str,
     *,
@@ -282,6 +304,30 @@ def approval_verdict(
         return {"check": check, "result": "pass", "detail": ascii_text(approver or "human")}
     detail = f"declined: {reason}" if reason else "declined"
     return {"check": check, "result": "warn", "detail": ascii_text(detail)}
+
+
+def login_verdict(
+    engine: str, key_source: str | None, on_sign_in: str, cleared: int
+) -> dict[str, str]:
+    """A run on a login (S3): its engine, and what the engine said it signed in with.
+
+    The login's name and folder are never named here: the run's ``content`` verdict pins
+    both, by salted digest. claude says ``none`` when it signs in from its folder; any
+    other source is a key or a helper that is not the login's, and fails. An engine that
+    says nothing passes as ``unreported``: MetaBot pointed it at the folder and dropped
+    every other way to sign in.
+
+    It also records the login's choice about another sign-in set here (S4), ``refuse`` or
+    ``clear``, and how many variables MetaBot cleared for the run: 0 on a refusing login,
+    which never starts with one set.
+    """
+    said = "unreported" if key_source is None else key_source
+    result = "pass" if key_source in (None, "none") else "fail"
+    detail = (
+        f"engine={_field(engine)};key_source={_field(said)}"
+        f";on_sign_in={_field(on_sign_in)};cleared={int(cleared)}"
+    )
+    return {"check": "login", "result": result, "detail": detail}
 
 
 def allow_verdict(call_id: str, allow: str) -> dict[str, str]:

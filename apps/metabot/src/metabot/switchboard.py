@@ -57,6 +57,7 @@ from metabot.origins import (
 from metabot.paths import write_private
 from metabot.plugins import skill_description
 from metabot.scope_classes import ScopeClass, resolve_scope_class
+from metabot.secret_paths import connection_asks
 from metabot.serverlog import RedactedLog
 from metabot.steps import MAY_HAVE_RUN, ascii_text
 from metabot.upstream import Upstream
@@ -113,8 +114,15 @@ def classify(
     """A call's class: by the tool's name, tightened by its hints and the person's settings.
 
     A browser connection's call is classed by the origin it acts on first: the
-    urls in ``args``, else ``last_origin``, where its page was last sent.
+    urls in ``args``, else ``last_origin``, where its page was last sent. A call whose
+    arguments could name a path in MetaBot's secrets, its signing key or a login folder is
+    destructive, whatever else it is (``metabot.secret_paths.connection_asks``).
     """
+    try:
+        if args and connection_asks(args):
+            return ScopeClass.DESTRUCTIVE
+    except Exception:  # a config.json that does not read: fail closed
+        return ScopeClass.DESTRUCTIVE
     declared = declared_class(tool, browser=conn.origins is not None)
     override = conn.overrides.get(tool.name)
     if conn.origins is None:

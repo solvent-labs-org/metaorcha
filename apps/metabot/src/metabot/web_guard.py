@@ -9,9 +9,10 @@ reach the UI. A request that changes anything must also come from the UI's
 own origin and carry the form token rendered into its pages, so another
 site open in the same browser cannot send one.
 
-Every response, refused or not, carries headers that let no script run, no
-frame hold the page, and no address leak to another site. The token is held
-in memory only and never logged.
+Every response, refused or not, carries headers that let no script or font
+in from anywhere but this server, no frame hold the page, and no address leak
+to another site. Nothing is cached, except a file under ``/static/``, which is
+named by its hash. The token is held in memory only and never logged.
 
 A limit: browsers send a cookie for 127.0.0.1 to every port on it, so any
 other server the browser visits on this machine is sent the token while the
@@ -29,6 +30,8 @@ from starlette.datastructures import FormData, Headers
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from metabot.web_theme import STATIC, STATIC_CACHE
 
 COOKIE = "metabot_ui"
 READS = frozenset({"GET", "HEAD"})
@@ -54,17 +57,19 @@ class Guard:
         return value is not None and hmac.compare_digest(value.encode(), self.token.encode())
 
 
-def page_headers(nonce: str) -> dict[str, str]:
-    """The headers on every response: no script, no frame, no referrer, no cache."""
+def page_headers(nonce: str, cache: str = "no-store") -> dict[str, str]:
+    """The headers on every response: fonts and scripts from this server alone, no frame,
+    no referrer, and ``cache`` (no cache, but for a static file)."""
     return {
         "content-security-policy": (
-            f"default-src 'none'; style-src 'nonce-{nonce}'; form-action 'self'; "
+            f"default-src 'none'; style-src 'nonce-{nonce}'; font-src 'self'; "
+            "script-src 'self'; connect-src 'self'; form-action 'self'; "
             "frame-ancestors 'none'; base-uri 'none'"
         ),
         "x-frame-options": "DENY",
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
-        "cache-control": "no-store",
+        "cache-control": cache,
     }
 
 
@@ -101,10 +106,13 @@ def guarded(app: ASGIApp, guard: Guard) -> ASGIApp:
             return
         nonce = secrets.token_urlsafe(16)
         scope["metabot_nonce"] = nonce
-        extra = [(k.encode(), v.encode()) for k, v in page_headers(nonce).items()]
+        static = scope["path"].startswith(STATIC)
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
+                found = static and message["status"] == 200  # a miss is never kept
+                ours = page_headers(nonce, STATIC_CACHE if found else "no-store")
+                extra = [(k.encode(), v.encode()) for k, v in ours.items()]
                 names = {k for k, _ in extra}
                 kept = [(k, v) for k, v in message.get("headers", []) if k.lower() not in names]
                 message = {**message, "headers": kept + extra}

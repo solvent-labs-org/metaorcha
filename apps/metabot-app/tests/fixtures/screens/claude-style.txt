@@ -1,0 +1,10 @@
+
+ Choose the text style that looks best with your terminal
+
+ ❯ ✔ Dark mode
+   Light mode
+   Dark mode (colorblind-friendly)
+   Light mode (colorblind-friendly)
+   Dark mode (ANSI colors only)
+   Light mode (ANSI colors only)
+

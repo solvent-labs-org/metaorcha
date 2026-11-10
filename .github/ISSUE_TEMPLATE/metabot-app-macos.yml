@@ -1,0 +1,59 @@
+name: MetaBot app on macOS
+description: Something in the MetaBot app (apps/metabot-app) isn't working on macOS.
+labels: ["bug", "os:macos"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The checklist in apps/metabot-app/CONTRIBUTING-macos.md lists what helps.
+        A `metabot-app doctor --json` report is coming in the first preview; until then, paste the versions below.
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: macOS 15.1, Apple Silicon
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: The output of these commands, run in Terminal.
+      placeholder: |
+        $ metabot-app --version
+        $ python3 --version
+        $ tmux -V
+        $ node --version
+        $ sw_vers && uname -m
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened instead. Include any error the app or the terminal showed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove tokens, keys and anything private before pasting.
+      render: shell

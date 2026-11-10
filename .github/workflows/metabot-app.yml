@@ -1,0 +1,144 @@
+name: MetaBot app
+
+# The app's own CI (apps/metabot-app). The OS jobs call only Makefile targets, the same
+# ones the contributing guides give; apps/metabot-app/tests/test_contributing.py fails
+# if this file and the guides drift apart. Every action is pinned by SHA, copied from
+# ci.yml and secret-scan.yml.
+
+on:
+  push:
+    paths:
+      - "apps/metabot-app/**"
+      - ".github/workflows/metabot-app.yml"
+  pull_request:
+    # `labeled` so that adding the macos-ci label starts the macOS job
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "apps/metabot-app/**"
+      - ".github/workflows/metabot-app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (make test-linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      METABOT_SRC: ${{ github.workspace }}/apps/metabot/src
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          tmux -V
+
+      # test_extend runs its real-MetaBot tests only when METABOT_PYTHON exists and
+      # METABOT_SRC holds the metabot package; install this tree's MetaBot and SDK
+      # so those tests run here and never skip.
+      - name: MetaBot venv
+        run: |
+          uv venv --no-project --python 3.12 "$RUNNER_TEMP/metabot"
+          uv pip install --python "$RUNNER_TEMP/metabot/bin/python" -e ./sdk -e ./apps/metabot
+
+      - name: make test-linux
+        env:
+          METABOT_PYTHON: ${{ runner.temp }}/metabot/bin/python
+        run: make -C apps/metabot-app test-linux
+
+      # Stream T: the self-test journeys against this tree's server and core, in a
+      # loopback-only network namespace when the runner allows one. The report is
+      # kept whatever the verdict; the verdict is the step's exit code.
+      - name: make selftest-linux
+        env:
+          METABOT_PYTHON: ${{ runner.temp }}/metabot/bin/python
+          SELFTEST_OUT: ${{ runner.temp }}/selftest
+        run: make -C apps/metabot-app selftest-linux
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: selftest-linux-report
+          path: ${{ runner.temp }}/selftest/**/report.*
+          if-no-files-found: ignore
+
+  # macOS runner minutes are the maintainers' call: this job runs only on a manual dispatch,
+  # or on a pull request that carries the `macos-ci` label. It never runs on a push.
+  macos:
+    name: macOS (make test-macos)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'macos-ci'))
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      METABOT_SRC: ${{ github.workspace }}/apps/metabot/src
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install tmux
+        run: |
+          brew install tmux
+          tmux -V
+
+      - name: MetaBot venv
+        run: |
+          uv venv --no-project --python 3.12 "$RUNNER_TEMP/metabot"
+          uv pip install --python "$RUNNER_TEMP/metabot/bin/python" -e ./sdk -e ./apps/metabot
+
+      - name: make test-macos
+        env:
+          METABOT_PYTHON: ${{ runner.temp }}/metabot/bin/python
+        run: make -C apps/metabot-app test-macos
+
+  # Every commit in the pull request is signed off by its author (`git commit -s`).
+  # A script in this repo, not a third-party app.
+  dco:
+    name: DCO sign-off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/check_dco.py "${BASE_SHA}..${HEAD_SHA}"

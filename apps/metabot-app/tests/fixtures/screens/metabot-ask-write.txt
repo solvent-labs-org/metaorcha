@@ -1,0 +1,5 @@
+
+[metabot] write call wants to run
+  tool: Write
+  args: {"file_path": "notes.md", "content": "hello"}
+  allow? type 'y' to allow, anything else declines: 

@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 from urllib.parse import urlparse
 
-from metabot.paths import metabot_home, write_private
+from metabot.paths import kept_home, metabot_home, write_private
 from metabot.prices import read_prices
 
 # A model name as an engine takes it: never empty, never a flag.
@@ -48,6 +48,21 @@ class Config:
     bridges: dict[str, object] = field(
         default_factory=dict
     )  # name: command, models, tools, read_only; metabot.engines.bridge
+    logins: dict[str, object] = field(
+        default_factory=dict
+    )  # name: engine, home, max_at_once, on_sign_in; metabot.logins
+
+
+@dataclass(frozen=True)
+class Login:
+    """One of the person's own sign-in folders for an engine, by name. MetaBot points the
+    engine at ``home`` and never opens anything in it."""
+
+    name: str
+    engine: str
+    home: str  # absolute
+    max_at_once: int = 1  # runs on this login at once
+    on_sign_in: str = "refuse"  # another sign-in set here: refuse the run, or clear it
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,60 @@ UI_MODES = ("everyday", "developer")
 BRIDGE_KEYS = frozenset({"command", "models", "tools", "read_only"})
 BRIDGE_TOOLS = ("own", "switchboard")  # its own tools only, or MetaBot's switchboard too
 BRIDGE_READ_ONLY = ("honored", "no")  # whether it keeps to a read-only job
+LOGIN_ENGINES = ("claude", "codex")  # cursor's sign-in moves only with HOME, which git needs
+LOGIN_KEYS = frozenset({"engine", "home", "max_at_once", "on_sign_in"})
+# What a run on a login does when a variable that would sign the engine in another way is
+# set: refuse to start (the default), or drop the variables for the run (the person chose).
+ON_SIGN_IN = ("refuse", "clear")
+MAX_AT_ONCE = 5
+DEFAULT_LOGIN = "default"  # the sign-in the environment already has, as before logins
+
+
+def login_name_ok(name: Any) -> bool:
+    """A short lower-case word: no ``@`` and no ``.``, so never an email address."""
+    return (
+        isinstance(name, str) and bool(ENDPOINT_NAME_RE.fullmatch(name)) and name != DEFAULT_LOGIN
+    )
+
+
+def _whole(value: Any, low: int, high: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _logins(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for name, spec in value.items():
+        if not login_name_ok(name) or not isinstance(spec, dict) or set(spec) - LOGIN_KEYS:
+            return False
+        home = spec.get("home")
+        if spec.get("engine") not in LOGIN_ENGINES or not isinstance(home, str):
+            return False
+        if "\0" in home or not os.path.isabs(home):
+            return False
+        if "max_at_once" in spec and not _whole(spec["max_at_once"], 1, MAX_AT_ONCE):
+            return False
+        if spec.get("engine") == "codex" and spec.get("max_at_once", 1) != 1:
+            return False  # one sign-in file per folder: one job at a time
+        if "on_sign_in" in spec and spec["on_sign_in"] not in ON_SIGN_IN:
+            return False
+    return True
+
+
+def login_of(cfg: Config, name: str) -> Login | None:
+    """The login a step names; None for ``default``, the environment's own sign-in."""
+    if name == DEFAULT_LOGIN:
+        return None
+    spec = cfg.logins.get(name)
+    if not isinstance(spec, dict):
+        raise ConfigError(f"config.json has no login named {name!r}")
+    return Login(
+        name,
+        spec["engine"],
+        spec["home"],
+        spec.get("max_at_once", 1),
+        spec.get("on_sign_in", "refuse"),
+    )
 
 
 def bridge_ok(name: Any, spec: Any) -> bool:
@@ -199,6 +268,11 @@ SETTING_TYPES: dict[str, tuple[Callable[[Any], bool], str]] = {
         "(own or switchboard) and read_only (honored or no); a bridge never takes a "
         "built-in engine's name",
     ),
+    "logins": (
+        _logins,
+        "a table of login names to their engine (claude or codex), home (an absolute "
+        "folder), max_at_once (1 to 5) and on_sign_in (refuse or clear)",
+    ),
 }
 
 
@@ -234,7 +308,7 @@ def load_config() -> Config:
 
     A key MetaBot does not know is left alone, so a file a newer version wrote still reads.
     """
-    path = _path()
+    path = kept_home() / "config.json"  # a read makes no home: a write does
     if not path.exists():
         return Config()
     try:

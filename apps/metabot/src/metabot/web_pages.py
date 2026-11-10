@@ -2,13 +2,16 @@
 
 Every value from a file, a run or a model goes through ``e``, so it shows as
 text, with control characters and the marks that reorder text escaped. The
-pages hold no script; the one style block carries the response's nonce,
-which the Content-Security-Policy names.
+pages hold no inline script; the one style block carries the response's nonce,
+which the Content-Security-Policy names, and its look is ``metabot.web_theme``.
+A run's live page loads one script file from this server, which redraws the
+page as the run goes; without it, the page refreshes itself.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from html import escape
 from pathlib import Path
@@ -17,45 +20,30 @@ from typing import Any
 from metabot.approvals import terminal_safe
 from metabot.spend import dollars
 from metabot.web_data import is_safe_id
-
-STYLE = """
-body { font: 15px/1.5 system-ui, sans-serif; margin: 0; color: #1d1d1f; background: #fbfbfa; }
-header { padding: 12px 24px; border-bottom: 1px solid #e5e5e2; }
-header b { font-weight: 600; margin-right: 24px; }
-nav a { margin-right: 16px; color: #2f4f9e; text-decoration: none; }
-main { padding: 8px 24px 32px; max-width: 1180px; }
-h1 { font-size: 20px; font-weight: 600; }
-h2 { font-size: 16px; font-weight: 600; margin-top: 24px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid #ecece8;
-         vertical-align: top; }
-th { font-weight: 600; color: #4a4a46; }
-table.facts th { width: 8em; }
-a { color: #2f4f9e; }
-code, pre { font: 13px/1.45 ui-monospace, monospace; }
-pre { white-space: pre-wrap; word-break: break-word; background: #f3f3ef; padding: 10px; }
-summary { cursor: pointer; color: #4a4a46; }
-.bad { color: #b3261e; } .ok { color: #1b6e3a; } .muted { color: #6b6b66; }
-.indent { padding-left: 22px; }
-footer { padding: 0 24px 24px; }
-textarea, input, select, button { font: inherit; }
-textarea { width: 100%; box-sizing: border-box; }
-form.ask { border: 1px solid #e5e5e2; padding: 4px 12px 8px; margin: 12px 0; background: #fff; }
-"""
+from metabot.web_theme import PAGE, live_script_path, mark, stylesheet
 
 NAV: Sequence[tuple[str, str]] = (
     ("/", "Home"),
+    ("/plan", "Plan it"),
     ("/runs", "Runs"),
     ("/chat", "Chat"),
     ("/office", "Office"),
     ("/connections", "Connections"),
     ("/routines", "Routines"),
+    ("/setup", "Setup"),
 )
-FOOT = "This page runs on this machine only, until metabot ui stops."
+FOOT = "This page is served from this machine, until MetaBot stops."
 CLIP = 160  # characters of a value in a table cell
 TEXT_LIMIT = 20_000  # characters of a prompt, an answer, or a step's arguments or output
 WHY_LIMIT = 2000  # characters of a ladder's line; its reasons are cut, not its end
 NO_RUNS = "No runs yet: metabot ask, chat and office run make them."
+SHA256 = re.compile(r"[0-9a-f]{64}")  # a workflow's name in the store, and a plan's
+CAP_LABEL = "Stop at this spend (optional)"
+CAP_HELP = (
+    "End the run once it has cost this much. A run MetaBot cannot price is refused, "
+    "or ends at its next tool call."
+)
+CAP_FIELD_LIMIT = 20  # characters of a cap shown back in its field
 
 
 def e(value: Any) -> str:
@@ -74,16 +62,57 @@ def link(prefix: str, value: Any, text: Any = None) -> str:
     return f'<a href="{prefix}{e(value)}">{shown}</a>' if is_safe_id(value) else shown
 
 
-def layout(title: str, body: str, nonce: str, *, refresh: int | None = None) -> str:
-    """A whole page. ``refresh`` reloads it every that many seconds."""
-    reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
-    nav = "".join(f'<a href="{e(href)}">{e(label)}</a>' for href, label in NAV)
+def _nav_link(href: str, label: str, here: str) -> str:
+    path = here.split("?", 1)[0]
+    on = path == href if href == "/" else path == href or path.startswith(href + "/")
+    current = ' aria-current="page"' if on else ""
+    return f'<a href="{e(href)}"{current}>{e(label)}</a>'
+
+
+def _theme_switch() -> str:
+    """A form that flips the theme: the server keeps it in a cookie, so no script is needed."""
+    page = PAGE.get()
+    if not page.csrf:  # drawn outside a request
+        return ""
+    other = "light" if page.theme == "dark" else "dark"
     return (
-        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<form class="theme" method="post" action="/theme">'
+        f'<input type="hidden" name="csrf" value="{e(page.csrf)}">'
+        f'<input type="hidden" name="back" value="{e(page.path)}">'
+        f'<button name="theme" value="{other}">{other.capitalize()} theme</button></form>'
+    )
+
+
+def layout(
+    title: str,
+    body: str,
+    nonce: str,
+    *,
+    refresh: int | None = None,
+    kicker: str | None = None,
+    narrow: bool = False,
+    script: str | None = None,
+) -> str:
+    """A whole page. ``refresh`` reloads it every that many seconds; ``kicker`` is a small
+    label above the title; ``narrow`` sets it in one reading column. ``script`` is a path
+    under ``/static/`` the page loads; the refresh then runs only where scripts are off."""
+    page = PAGE.get()
+    reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    if script:
+        reload = f"<noscript>{reload}</noscript>" if reload else ""
+        reload += f'<script src="{e(script)}" defer></script>'
+    nav = "".join(_nav_link(href, label, page.path) for href, label in NAV)
+    above = f'<p class="kicker">{e(kicker)}</p>' if kicker else ""
+    width = ' class="narrow"' if narrow else ""
+    return (
+        f'<!doctype html>\n<html lang="en" data-theme="{e(page.theme)}"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{e(clip(title, 80))} · MetaBot</title>{reload}"
-        f'<style nonce="{e(nonce)}">{STYLE}</style></head>'
-        f"<body><header><b>MetaBot</b><nav>{nav}</nav></header>"
-        f"<main><h1>{e(clip(title, 200))}</h1>{body}</main>"
+        f'<style nonce="{e(nonce)}">{stylesheet()}</style></head>'
+        f'<body><header class="top"><div class="bar"><a class="brand" href="/">{mark()}'
+        f"<span>MetaBot</span></a><nav>{nav}</nav>{_theme_switch()}</div></header>"
+        f"<main{width}>{above}<h1>{e(clip(title, 200))}</h1>{body}</main>"
         f'<footer class="muted">{e(FOOT)}</footer></body></html>\n'
     )
 
@@ -98,7 +127,7 @@ def message_page(title: str, text: str, nonce: str, *, back: str | None = None) 
 
 def _state(state: str) -> str:
     good = state == "valid" or state.startswith("valid, ")  # a seal says how many members
-    cls = "ok" if good else "muted" if state == "no receipt" else "bad"
+    cls = "ok" if good else "none" if state == "no receipt" else "bad"
     return f'<span class="{cls}">{e(state)}</span>'
 
 
@@ -183,7 +212,11 @@ def _step_row(step: dict[str, Any]) -> str:
     return _tr(
         _td(f"<code>{e(clip(step.get('call_id'), 80))}</code>"),
         _td(e(clip(step.get("tool"), 120))),
-        _td('<span class="ok">ok</span>' if step.get("success") is True else "FAIL"),
+        _td(
+            '<span class="ok">ok</span>'
+            if step.get("success") is True
+            else '<span class="bad">FAIL</span>'
+        ),
         _td(e(clip(step.get("approval"), 200))),
         _td(what),
     )
@@ -379,9 +412,21 @@ def _routine_row(row: dict[str, Any]) -> str:
         _td("on" if row.get("enabled") is True else "off"),
         _td(e(when)),
         _td(e(row.get("next_due"))),
-        _td(e(clip(_runs_on(row.get("engine"), row.get("model")), 60))),
+        _td(_runs_on_cell(row)),
+        _td(e(clip(row.get("approval"), 300))),
         _td(_firing(row.get("last"))),
     )
+
+
+def _runs_on_cell(row: dict[str, Any]) -> str:
+    """What a routine runs on: its engine, or its workflow's steps, which link to the workflow
+    by its sha256."""
+    if "workflow" not in row:
+        return e(clip(_runs_on(row.get("engine"), row.get("model")), 60))
+    sha = row.get("workflow")
+    if isinstance(sha, str) and SHA256.fullmatch(sha):
+        return f'<a href="/workflows/{sha}">its workflow\'s steps</a>'
+    return "its workflow's steps"
 
 
 def _firing_row(row: dict[str, Any]) -> str:
@@ -390,6 +435,7 @@ def _firing_row(row: dict[str, Any]) -> str:
         _td(e(clip(row.get("routine_name"), 64))),
         _td(e(clip(row.get("due") or "asked for", 40))),
         _td(e(clip(row.get("state"), 20))),
+        _td(e(clip(row.get("label"), 200))),
         _td(link("/runs/", run_id) if run_id else "-"),
         _td(e(clip(row.get("reason") or "", 300))),
         _td(e(clip(row.get("at"), 40))),
@@ -402,13 +448,13 @@ def routines_page(
     body = (
         _error(error)
         + _table(
-            ("name", "id", "on", "schedule", "next due", "runs on", "last firing"),
+            ("name", "id", "on", "schedule", "next due", "runs on", "approval", "last firing"),
             map(_routine_row, rows),
             "No routines. metabot routine save makes one.",
         )
         + "<h2>Firings</h2>"
         + _table(
-            ("routine", "due", "state", "run", "why", "at"),
+            ("routine", "due", "state", "approval", "run", "why", "at"),
             map(_firing_row, recent),
             "No routine has fired.",
         )
@@ -419,6 +465,8 @@ def routines_page(
 # ── chat and a run going on in the page ─────────────────────────────────────
 
 LIVE_REFRESH_S = 2  # how often a live page reloads while its run goes and asks nothing
+CAP_REACHED = "The run stopped at the spend cap. Its receipt records the spend."
+CAP_LIMIT = re.compile(r"limit: \$[0-9.]+")  # a run past its money cap, its spend counted
 TRACE_LIMIT = TEXT_LIMIT - 64  # leaves room for the line that says how many are not shown
 
 
@@ -484,14 +532,14 @@ def chat_page(
         + e(values.get("model", ""))
         + '"></label></p><p><label>Folder <input name="folder" size="70" value="'
         + e(values.get("folder", ""))
-        + '"></label></p><p><button>Start</button></p></form>'
+        + '"></label></p><p><button class="primary">Start</button></p></form>'
     )
     body = (
         _error(error)
         + form
         + '<p class="muted">The run asks you on its page before a call that writes or '
-        + "destroys. Allow lets a write run; a destructive call runs only when you type yes. "
-        + "Its receipt is sealed when it ends.</p>"
+        + "destroys. Allow lets a write run; a destructive call waits until you type yes. "
+        + "A run that starts is sealed in a receipt when it ends.</p>"
         + "<h2>Runs started here</h2>"
         + _table(("run", "state", "runs on", "task"), map(_started_row, started), "None yet.")
     )
@@ -499,9 +547,9 @@ def chat_page(
 
 
 EVERYDAY_NOTE = (
-    "MetaBot tries the cheapest model first. It moves to the next one only when a run shows "
-    "it failed, and it says why in the run's page. Anything that writes asks you first. "
-    "Anything destructive always stops."
+    "MetaBot starts on the cheapest rung of your ladder, and moves up a rung when a run "
+    "shows it failed. The run's page says why. A write asks you unless you allowed it, and "
+    "a call classed destructive waits for your yes."
 )
 
 
@@ -511,6 +559,21 @@ CHECK_NOTE = (
 )
 
 
+PLAN_FIRST = (  # HTML: the link is Plan it's screen
+    'Or <a href="/plan">plan it</a>: rules draft the steps, and nothing runs until you approve '
+    "the plan."
+)
+
+
+def cap_field(value: str) -> str:
+    """The optional spend cap of a run a form starts, in dollars, with no default."""
+    return (
+        f'<p><label>{e(CAP_LABEL)} <input name="max_cost" size="10" inputmode="decimal" '
+        f'autocomplete="off" value="{e(clip(value, CAP_FIELD_LIMIT))}"></label> '
+        f'<span class="muted">{e(CAP_HELP)} In dollars, such as 2 or 0.50.</span></p>'
+    )
+
+
 def everyday_page(
     nonce: str,
     csrf: str,
@@ -518,8 +581,10 @@ def everyday_page(
     values: dict[str, str],
     started: Sequence[Any],
     error: str | None = None,
+    today: str = "",
 ) -> str:
-    """The home page for someone who wants a task done: one box, one folder, one button."""
+    """The home page for someone who wants a task done: what needs them today, then one box,
+    one folder, one button. ``today`` is the HTML of Today's groups."""
     form = (
         '<form method="post" action="/">'
         + _hidden(csrf)
@@ -530,18 +595,22 @@ def everyday_page(
         + '"></label></p><p><label>Check it with <input name="check" size="50" value="'
         + e(values.get("check", ""))
         + f'"></label> <span class="muted">{e(CHECK_NOTE)}</span></p>'
-        + "<p><button>Do it</button></p></form>"
+        + cap_field(values.get("max_cost", ""))
+        + '<p><button class="primary">Do it</button></p></form>'
     )
     body = (
         _error(error)
+        + today
+        + "<h2>Start a run</h2>"
         + form
         + f'<p class="muted">{e(EVERYDAY_NOTE)}</p>'
+        + f'<p class="muted">{PLAN_FIRST}</p>'
         + '<p class="muted">Want to pick models, engines or roles yourself? '
         + '<a href="/chat">Use the developer chat</a>.</p>'
         + "<h2>Recent</h2>"
         + _table(("run", "state", "runs on", "task"), map(_started_row, started), "Nothing yet.")
     )
-    return layout("What should MetaBot do?", body, nonce)
+    return layout("Today", body, nonce)
 
 
 MODES = (
@@ -640,7 +709,7 @@ def office_form_page(
             + _select("mode", MODES, values.get("mode") or "relay")
             + "</label></p>"
             + extra
-            + "<p><button>Start</button></p></form>"
+            + '<p><button class="primary">Start</button></p></form>'
             + f'<p class="muted">{e(OFFICE_NOTE)}</p>'
         )
     body = (
@@ -674,6 +743,72 @@ def _ask_form(ask: Any, csrf: str) -> str:
     )
 
 
+UPDATES = "This page updates as the run goes."
+UPDATES_NOSCRIPT = (  # shown with the refresh alone: the page holds still while a call waits
+    f"This page updates every {LIVE_REFRESH_S} seconds while the run goes, and holds still"
+    " while a call waits for you."
+)
+WAITING = "Waiting for you. Nothing else runs until you answer."
+WAITING_OFFICE = "Its other desks go on."  # the office run waits on one desk alone
+ALLOW_NOTE = "Allow lets a write run. A destructive call waits until you type yes."
+STOPPED = "Stopped. The steps so far are in the receipt."
+FAILED = "Failed. The receipt records the failure."
+FINISHED_OFFICE = "Finished. The office run's record says what each desk did."
+NO_STEPS = "This run made no tool call."
+# the state in a word, with its colour: the tokens Home and Setup use for the same words
+WORDS = {
+    "running": ("none", "Running"),
+    "waiting": ("warn", "Waiting for you"),
+    "done": ("ok", "Finished"),
+    "stopped": ("none", "Stopped"),
+    "failed": ("bad", "Failed"),
+}
+
+
+def _state_word(live: Any, asks: Sequence[Any], sealed: bool) -> str:
+    """The run's state in a word with its colour, and the line that goes with it."""
+    key = "waiting" if live.state == "running" and asks else live.state
+    cls, word = WORDS.get(key, ("none", key))
+    office = live.office is not None
+    said = ""
+    if key == "waiting":
+        said = WAITING_OFFICE if office else WAITING
+    elif key == "done" and office:
+        said = FINISHED_OFFICE
+    elif key == "stopped" and sealed:
+        said = STOPPED
+    elif key == "failed" and sealed:
+        said = FAILED
+    elif key in ("stopped", "failed"):
+        said = word + "."
+    tail = f" {e(said)}" if said else ""
+    return f'<p class="state"><span class="{cls}">{e(word)}</span>{tail}</p>'
+
+
+def _receipt_line(run_id: str) -> str:
+    verify = f"metabot receipts verify {run_id}"
+    return f"<p>Receipt {e(run_id)}. Check it any time: <code>{e(verify)}</code>.</p>"
+
+
+def _live_step_row(step: dict[str, Any]) -> str:
+    ok = step.get("success") is True
+    return _tr(
+        _td(e(clip(step.get("tool"), 120))),
+        _td('<span class="ok">ok</span>' if ok else '<span class="bad">FAIL</span>'),
+        _td(e(clip(step.get("approval"), 200))),
+    )
+
+
+def _steps(record: dict[str, Any]) -> str:
+    """The sealed receipt's steps, one line each; nothing is shown before the seal."""
+    more = record.get("more_steps")
+    return (
+        "<h2>Steps</h2>"
+        + _table(("tool", "result", "approval"), map(_live_step_row, record["steps"]), NO_STEPS)
+        + (f'<p class="muted">{e(f"{more} more steps are in the journal.")}</p>' if more else "")
+    )
+
+
 def live_page(
     live: Any,
     asks: Sequence[Any],
@@ -681,12 +816,19 @@ def live_page(
     nonce: str,
     csrf: str,
     office: dict[str, Any] | None = None,
+    record: dict[str, Any] | None = None,
+    part: str | None = None,
 ) -> str:
-    """A run started here, as it goes. An office run's ``office`` is its record's view."""
+    """A run started here, as it goes. An office run's ``office`` is its record's view;
+    a sealed run's ``record`` is its journal's view, whose steps the page lists. ``state``
+    is its receipt's state once it ended. ``part="main"`` gives the page's main part alone,
+    which its script fetches on each change."""
     from metabot.receipts import answer_caveat, named_here, unread_caveat
 
     going = live.state == "running"
     what = "office run" if live.office is not None else "run"
+    receipt = None if state in (None, "no receipt") else state  # its state, once sealed
+    sealed = receipt is not None
     if live.office is not None:
         facts = [
             ("office run", e(live.run_id)),
@@ -705,40 +847,75 @@ def live_page(
             ("folder", f"<code>{e(clip(live.cwd, 300))}</code>"),
             ("state", e(live.state)),
         ]
-    if state is not None:
-        facts.append(("receipt", f"{_state(state)} {link('/runs/', live.run_id, 'the run')}"))
-    body = [_error(live.error)]
-    if getattr(live, "why", None):
-        body.append(f'<p class="why">{e(clip(live.why, WHY_LIMIT))}</p>')
-    body.append(_facts(facts))
-    if asks:
-        body.append("<h2>Waiting for you</h2>" + "".join(_ask_form(a, csrf) for a in asks))
+    if receipt is not None:
+        facts.append(("receipt", f"{_state(receipt)} {link('/runs/', live.run_id, 'the run')}"))
+    head = [_state_word(live, asks, sealed)]
+    refresh = LIVE_REFRESH_S if going and not asks else None  # an answer being typed stays
     if going:
-        body.append(
+        head.append(f'<p class="muted">{e(UPDATES)}</p>')
+    if refresh:  # the noscript line says what the noscript refresh does, so it goes with it
+        head.append(f'<noscript><p class="muted">{e(UPDATES_NOSCRIPT)}</p></noscript>')
+    head.append(_error(live.error))
+    if getattr(live, "why", None):
+        head.append(f'<p class="why">{e(clip(live.why, WHY_LIMIT))}</p>')
+    if sealed and live.office is None:
+        head.append(_receipt_line(live.run_id))
+    head.append(_facts(facts))
+    limit = getattr(live.result, "limit", None)
+    if isinstance(limit, str) and CAP_LIMIT.fullmatch(limit):
+        head.append(f'<p class="warn">{e(CAP_REACHED)}</p>')
+    if live.then and not going:  # a Setup run: its receipt is the next screen
+        then = f'<a class="button primary" href="{e(live.then)}">See your receipt</a>'
+        head.append(f'<div class="actions">{then}</div>')
+    waiting = ""
+    if asks:
+        waiting = (
+            "<h2>Waiting for you</h2>"
+            + "".join(_ask_form(a, csrf) for a in asks)
+            + f'<p class="muted">{e(ALLOW_NOTE)}</p>'
+        )
+    rest = []
+    if going:
+        rest.append(
             f'<form method="post" action="/live/{e(live.run_id)}/stop">{_hidden(csrf)}'
             f"<p><button>Stop the {what}</button></p></form>"
         )
     if office is not None:
-        body.append("<h2>Desks</h2>" + _desks_table(office, going))
+        rest.append("<h2>Desks</h2>" + _desks_table(office, going))
         if live.state == "done":
-            body.append("<h2>Pick</h2>" + _offer(office))
+            rest.append("<h2>Pick</h2>" + _offer(office))
     result = live.result
     if live.office is None and result is not None and result.final_text:
         taken = getattr(live, "answered", None) is not False
         heading = "Answer" if taken else "The last try's answer, which the ladder did not take"
-        body.append(f"<h2>{heading}</h2>" + _pre(result.final_text))
+        rest.append(f"<h2>{heading}</h2>" + _pre(result.final_text))
         caveat = answer_caveat(result.declined, result.failed)
         if caveat:
-            body.append(f'<p class="bad">{e(caveat)}</p>')
+            rest.append(f'<p class="bad">{e(caveat)}</p>')
         if not result.steps:  # a page run never resumes, so nothing earlier read them
             unread = unread_caveat(named_here(live.prompt, Path(live.cwd)))
             if unread:
-                body.append(f'<p class="bad">{e(unread)}</p>')
+                rest.append(f'<p class="bad">{e(unread)}</p>')
+    if record is not None and not going:
+        rest.append(_steps(record))
     # the newest lines are what the person needs: what waits for them, and how the run ended
     lines, cut = _newest(live.out.lines)
     dropped = live.out.dropped + cut
     skipped = f"{dropped} earlier lines are not shown.\n" if dropped else ""
-    body.append("<h2>Trace</h2>" + _pre(skipped + "\n".join(lines) if lines else "Nothing yet."))
-    refresh = LIVE_REFRESH_S if going and not asks else None
-    title = f"{what.capitalize()} {clip(live.run_id, 80)}"
-    return layout(title, "".join(body), nonce, refresh=refresh)
+    trace = _pre(skipped + "\n".join(lines) if lines else "Nothing yet.")
+    rest.append(f"<h2>Trace</h2><details><summary>Show details</summary>{trace}</details>")
+    main = (
+        f'<div id="live"><div id="head">{"".join(head)}</div>'
+        f'<section id="asks">{waiting}</section><div id="rest">{"".join(rest)}</div></div>'
+    )
+    if part == "main":
+        return main
+    title = clip(live.prompt.strip().splitlines()[0] if live.prompt.strip() else what, 120)
+    return layout(
+        title,
+        main,
+        nonce,
+        refresh=refresh,
+        kicker=f"{what.capitalize()} {clip(live.run_id, 80)}",
+        script=live_script_path() if going else None,
+    )

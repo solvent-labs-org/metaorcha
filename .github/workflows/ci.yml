@@ -68,8 +68,14 @@ jobs:
               - 'services/superagent/src/superagent/middleware/**'
             frontend:
               - 'frontend/**'
+            # Every app except apps/metabot-app, which has its own workflow
+            # (metabot-app.yml). Listed, not negated: under paths-filter's default
+            # `some` quantifier a '!apps/metabot-app/**' entry would match every
+            # file outside that folder, and `every` would change all the filters.
             apps:
-              - 'apps/**'
+              - 'apps/*'
+              - 'apps/attestation-playground/**'
+              - 'apps/metabot/**'
             metabot:
               - 'apps/metabot/**'
               - 'sdk/**'

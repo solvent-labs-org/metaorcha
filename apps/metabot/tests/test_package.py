@@ -200,6 +200,13 @@ def test_the_wheel_holds_the_package_and_nothing_else(tmp_path):
     shipped = {p.relative_to(PKG / "src").as_posix() for p in market.rglob("*") if p.is_file()}
     assert shipped and shipped <= names
     assert any(n.endswith(".dist-info/licenses/LICENSE") for n in names), sorted(names)
+    fonts = PKG / "src" / "metabot" / "static" / "fonts"  # the web UI's fonts, with their OFL
+    served = {p.relative_to(PKG / "src").as_posix() for p in fonts.iterdir() if p.is_file()}
+    assert len(served) == 6 and served <= names
+    for licence in ("OFL-IBM-Plex-Mono.txt", "OFL-Geist-Pixel.txt"):
+        assert any(
+            n.endswith(f".dist-info/licenses/src/metabot/static/fonts/{licence}") for n in names
+        )
     stray = [
         n
         for n in names

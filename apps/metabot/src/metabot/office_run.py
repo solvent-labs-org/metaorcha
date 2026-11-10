@@ -129,12 +129,14 @@ from metabot.events import ErrorEvent, Event, Notice
 from metabot.gate import Policy
 from metabot.gitcmd import GitError, toplevel
 from metabot.kits import KitError, build_kit, kits_root
+from metabot.live import begin_live, end_live
 from metabot.office import (
     YOU,
     DeskSpec,
     OfficeError,
     OfficeSpec,
     desk_engine,
+    desk_login,
     desk_problem,
     fan_cap_of,
 )
@@ -195,6 +197,7 @@ class DeskResult:
     round: int | None = None  # its round, once its desk ran more than one; else None
     next_round: str | None = None  # the run id of the round after it
     stopped: str | None = None  # why its desk's loop ended here, on a loop's last round
+    login: str | None = None  # the login its run starts on (S5); None: the engine's own
     cost_musd: int | None = None  # what its run cost; None when it has no price
     declined: int = 0  # the calls of its run the gate declined
     answer: str = ""
@@ -230,6 +233,8 @@ class OfficeResult:
     seal: Path | None = None  # the receipt over every run of it; None if it could not be signed
     cost_unknown: list[str] = field(default_factory=list)  # runs under the cap it cannot count
     record_error: str | None = None  # why the office run's record could not be written
+    # "limit: $X" once the office run's money cap of $X stopped it, as a run's limit says it
+    limit: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -465,7 +470,7 @@ class _Office:
     connections: bool
     on_event: Callable[[Event], None] | None
     on_desk: Callable[[DeskResult], None] | None
-    make: Callable[[str], Any]
+    make: Callable[..., Any]
     cfg: Config
     chosen: list[Any]
     pins: dict[str, Any]
@@ -483,6 +488,7 @@ class _Office:
     cap_musd: int | None = None  # the office run's money cap, over every desk run
     spent_musd: int = 0
     uncounted: str | None = None  # why the first run under the cap has no cost
+    signed: Sequence[dict[str, str]] = ()  # verdicts the caller has the seal sign
 
 
 def _advisors(
@@ -608,12 +614,13 @@ def _open(
     plugins: bool,
     on_event: Callable[[Event], None] | None,
     on_desk: Callable[[DeskResult], None] | None,
-    make_engine: Callable[[str], Any] | None,
+    make_engine: Callable[..., Any] | None,
     checks: bool = False,
     advisors: bool = False,
     office_run_id: str | None = None,
     rounds: int = 1,
     max_cost_musd: int | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> _Office:
     """Check the office run can start, and write its record."""
     from metabot.plugins import enabled_plugins
@@ -647,6 +654,7 @@ def _open(
     }
     result = OfficeResult(office_run_id, mode, checks_skipped=start.checks_skipped)
     _claim(record)
+    begin_live("office", office_run_id, name=office.name)
     try:
         advising = (n for mine in start.advisors.values() for n in mine)
         kit_dirs, kits = _load_kits(office, [*start.names, *advising], office_run_id)
@@ -654,6 +662,7 @@ def _open(
             record["kits"] = kits
         _save(record, result.rows)
     except BaseException:  # no run begins: no close removes the kits, and the id is free again
+        end_live(office_run_id)
         shutil.rmtree(kits_root(office_run_id), ignore_errors=True)
         office_journal_path(office_run_id).unlink(missing_ok=True)
         raise
@@ -686,6 +695,7 @@ def _open(
         kits=kit_dirs,
         rounds=rounds,
         cap_musd=max_cost_musd,
+        signed=tuple(verdicts),
     )
 
 
@@ -749,6 +759,7 @@ async def _opened(*args: Any, **kw: Any) -> _Office:
 
 
 def _close(run: _Office) -> None:
+    end_live(run.result.office_run_id)
     run.record["finished_at"] = utc_now()
     if run.cap_musd is not None:
         run.record["spent_musd"] = run.spent_musd
@@ -808,6 +819,7 @@ def _seal(run: _Office) -> Path:
         {"check": "workflow", "result": "pass", "detail": ascii_text(workflow, limit=1000)},
         *([budget_verdict(run.cap_musd, _counted(run))] if run.cap_musd is not None else []),
         *provenance_verdicts(run.pins),
+        *run.signed,
     ]
     name, mode = ascii_text(run.office.name).replace(";", "_"), run.result.mode
     return seal_runs(
@@ -850,6 +862,7 @@ def _new_row(run: _Office, name: str, copy: int | None, advises: str | None = No
         model=model or run.cfg.models.get(engine_name),
         advises=advises,
         read_only=read_only,
+        login=desk_login(desk, run.roster),
     )
     run.result.rows.append(row)
     return row
@@ -901,7 +914,7 @@ async def _run_row(
     try:
         async with run.slots:
             left = None if run.cap_musd is None else run.cap_musd - run.spent_musd
-            unkept = _unkept(run)
+            unkept = _held(run)
             if unkept is not None:
                 row.error = row.stopped = unkept
                 return
@@ -940,7 +953,13 @@ async def _run_row(
             _save_so_far(run)
             if run.on_desk is not None:
                 run.on_desk(row)
-            engine = run.make(row.engine)
+            try:
+                engine = (
+                    run.make(row.engine, login=row.login) if row.login else run.make(row.engine)
+                )
+            except ValueError as exc:  # its login refuses here, or is not one for this engine
+                row.error = str(exc)
+                return
             policy = Policy(
                 allow_write=run.allow_write and files,
                 allows=resolve_allows(list(run.allows), engine, run.store)
@@ -1013,6 +1032,8 @@ async def _run_row(
                 raise
             _spend(run, row, result.cost_musd, result.tokens, result.lost, result.named_late)
             row.declined = result.declined
+            if left is not None and result.limit == f"limit: {dollars(left)}":  # what was left
+                _at_cap(run)
             _copied(run, result)
             hint = limit_hint(row.desk, result.limit)
             if hint and events is not None:  # said where the person watches, as it happens
@@ -1142,6 +1163,20 @@ def _spend(
             run.uncounted = run.uncounted or uncounted(label, tokens, lost, late)
 
 
+def _at_cap(run: _Office) -> None:
+    """The office run stopped at its money cap: its result says so, as a run's does."""
+    run.result.limit = f"limit: {dollars(run.cap_musd or 0)}"
+
+
+def _held(run: _Office) -> str | None:
+    """``_unkept``, for a run that is about to start and does not: once the cap is spent,
+    and not one it cannot keep, the office run stopped at its cap."""
+    unkept = _unkept(run)
+    if unkept is not None and run.uncounted is None:
+        _at_cap(run)
+    return unkept
+
+
 def _spent(run: _Office) -> str:
     return f"the office's {dollars(run.cap_musd or 0)} is spent"
 
@@ -1197,7 +1232,7 @@ async def _run_rounds(
             calls = "a declined call" if row.declined == 1 else f"{row.declined} declined calls"
             row.stopped = f"round {row.round or 1} had {calls}; the checks still fail"
             return
-        unkept = _unkept(run)
+        unkept = _held(run)
         if unkept is not None:
             row.stopped = unkept
             return
@@ -1283,25 +1318,26 @@ async def run_relay(
     plugins: bool = True,
     on_event: Callable[[Event], None] | None = None,
     on_desk: Callable[[DeskResult], None] | None = None,
-    make_engine: Callable[[str], Any] | None = None,
+    make_engine: Callable[..., Any] | None = None,
     checks: bool = False,
     advisors: bool = True,
     office_run_id: str | None = None,
     rounds: int = 1,
     max_cost_musd: int | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> OfficeResult:
     """Run desks one after another; a desk with no good run stops the relay.
 
     After each desk, its advisors review its work; once every desk is done,
     the advisors of you review the office's work. ``advisors=False`` runs
-    the desks alone.
+    the desks alone. ``verdicts`` are signed with the office run's seal.
     """
     run = await _opened(
         office, task, "relay", approver=approver, desks=desks, allow_write=allow_write,
         allows=allows, roster=roster, connections=connections, plugins=plugins,
         on_event=on_event, on_desk=on_desk, make_engine=make_engine, checks=checks,
         advisors=advisors, office_run_id=office_run_id, rounds=rounds,
-        max_cost_musd=max_cost_musd,
+        max_cost_musd=max_cost_musd, verdicts=verdicts,
     )  # fmt: skip
     earlier: list[tuple[str, str]] = []
     start, parent = run.base, None
@@ -1347,21 +1383,23 @@ async def run_fan(
     plugins: bool = True,
     on_event: Callable[[Event], None] | None = None,
     on_desk: Callable[[DeskResult], None] | None = None,
-    make_engine: Callable[[str], Any] | None = None,
+    make_engine: Callable[..., Any] | None = None,
     checks: bool = False,
     office_run_id: str | None = None,
     rounds: int = 1,
     max_cost_musd: int | None = None,
+    verdicts: Sequence[dict[str, str]] = (),
 ) -> OfficeResult:
     """Run every chosen desk at once from one base; nothing is handed between them.
 
-    Advisors do not run in a fan.
+    Advisors do not run in a fan. ``verdicts`` are signed with the office run's seal.
     """
     run = await _opened(
         office, task, "fan", approver=approver, desks=desks, allow_write=allow_write,
         allows=allows, roster=roster, connections=connections, plugins=plugins,
         on_event=on_event, on_desk=on_desk, make_engine=make_engine, checks=checks,
         office_run_id=office_run_id, rounds=rounds, max_cost_musd=max_cost_musd,
+        verdicts=verdicts,
     )  # fmt: skip
     try:
         rows = [

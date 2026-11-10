@@ -74,7 +74,54 @@ def bridge_keeps_read_only(name: str) -> bool:
     return bridge_specs().get(name, {}).get("read_only") == "honored"
 
 
-def get_engine(name: str) -> Any:
+def with_login(engine: Any, name: str | None) -> Any:
+    """``engine``, to run on the login ``name`` (S3); unchanged for None or ``default``.
+
+    The login must be the engine's own, and its folder must still be fit to be one: there,
+    the person's, owner-only, and outside every project and MetaBot's own home, looked at
+    with ``stat`` alone. Anything else refuses the run before it starts.
+
+    A variable set here that would sign the engine in another way (S4) refuses the run on a
+    login that refuses, the default, naming each variable and the command that changes the
+    choice; a login that clears drops them for the run and says how many in ``cleared``.
+    """
+    if name is None:
+        return engine
+    from metabot.config import LOGIN_ENGINES, load_config, login_of
+    from metabot.logins import run_problems
+
+    engine_name = getattr(engine, "name", "?")
+    takes = engine_name in LOGIN_ENGINES and getattr(engine, "home_variable", None) is not None
+    login = login_of(load_config(), name)  # an unknown name is refused here
+    if login is None:
+        return engine
+    if not takes:
+        raise ValueError(
+            f"{engine_name} takes no login: logins are for {' and '.join(LOGIN_ENGINES)}"
+        )
+    if login.engine != engine_name:
+        raise ValueError(f"{login.name} is a {login.engine} login, not one for {engine_name}")
+    problems = run_problems(login.home)
+    if problems:
+        raise ValueError(f"login {login.name} cannot be used: " + "; ".join(problems))
+    present = engine.sign_in_present()
+    if present and login.on_sign_in != "clear":
+        names = ", ".join(present)
+        it, verb = ("it", "is") if len(present) == 1 else ("them", "are")
+        raise ValueError(
+            f"login {login.name}: {names} {verb} set here, and would sign {engine_name} in "
+            f"instead of the login. Unset {it}, or let MetaBot clear {it} for this login's "
+            f"runs: metabot login set {login.name} --on-sign-in clear"
+        )
+    engine.cleared = present
+    engine.login = login
+    return engine
+
+
+def get_engine(name: str, login: str | None = None) -> Any:
+    """The engine ``name``, on the login ``login`` when one is named (see ``with_login``)."""
+    if login is not None:
+        return with_login(get_engine(name), login)
     if name in ENGINES:
         module, cls = ENGINES[name]
         return getattr(importlib.import_module(module), cls)()

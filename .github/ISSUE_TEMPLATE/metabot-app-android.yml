@@ -1,0 +1,57 @@
+name: MetaBot app on Android
+description: Something in the MetaBot app (apps/metabot-app) isn't working on Android.
+labels: ["bug", "os:android"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The Android app is coming in the first preview; say which build you used.
+        A `metabot-app doctor --json` report is coming in the first preview; until then, paste the versions below.
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: Android 14, device model
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: The app's version on the phone, and the output of these commands on the computer it pairs with.
+      placeholder: |
+        App on the phone: ...
+        $ metabot-app --version
+        $ uname -srm
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened instead. Include any error the app or the terminal showed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove tokens, keys and anything private before pasting.
+      render: shell

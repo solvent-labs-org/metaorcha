@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+target/
+dist/
+build/
+wheels/
+node_modules/
+*.apk
+*.aab
+*.dmg
+*.AppImage
+*.deb
+*.jks
+*.keystore
+BUILD

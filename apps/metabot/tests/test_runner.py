@@ -310,7 +310,7 @@ async def test_hook_command_is_wired_for_claude(tmp_path, monkeypatch):
     argv = json.loads(out.read_text())["argv"]
     settings = json.loads(argv[argv.index("--settings") + 1])
     command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "-I -m metabot hook pre-tool-use --control" in command
+    assert "-I -m metabot.gate_client --control" in command  # G1: the standard library alone
     assert "--switchboard" not in command
     assert "--permission-prompts" in argv
 

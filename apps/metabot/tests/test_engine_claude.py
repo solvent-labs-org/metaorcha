@@ -309,7 +309,7 @@ def test_a_settings_path_that_is_not_a_file_is_never_opened(tmp_path, claude_con
 def test_parse_echo_fixture():
     events = [e for e in _parse("claude-echo.jsonl") if not isinstance(e, Usage)]
     assert events == [
-        Started("00000000-0000-4000-8000-000000000001", "claude-haiku-5-5"),
+        Started("00000000-0000-4000-8000-000000000001", "claude-haiku-5-5", "none"),
         ToolCall(
             "toolu_0001",
             "Bash",

@@ -1,0 +1,15 @@
+{
+  "id": "a2a",
+  "label": "A2A",
+  "icon": "⇄",
+  "order": 100,
+  "kind": "card",
+  "phase": 2,
+  "modes": [
+    "dev"
+  ],
+  "card": {
+    "text": "Agent-to-agent links between this PC and other devices come in phase 2. Phase 1 keeps the seam: every write already goes through the catalogue, so a remote agent will use the same gate.",
+    "links": []
+  }
+}

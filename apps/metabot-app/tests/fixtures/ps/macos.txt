@@ -1,0 +1,7 @@
+    1     0 /sbin/launchd
+  345     1 /opt/homebrew/bin/tmux -L metabot new-session -d -s fc-deskA
+  402   345 -zsh
+  455   402 /Users/u/.local/bin/claude --session-id 0f3b2c4e-1111-4222-8333-944455556666
+  600     1 /Applications/MetaBot.app/Contents/MacOS/metabot-app
+  601   600 /usr/bin/python3 -m metabot_app serve
+  700   455 cursor-agent --use-system-ca

@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Fake orcha. verify --json FILE|- : exit 2 when not a JSON object, exit 1
+(invalid) when the envelope is the golden tampered one (steps[0].latency_ms
+== 133) or carries no format, else exit 0 (valid)."""
+import json, os, sys
+
+LOG = os.environ.get("FAKE_LOG")
+argv = sys.argv[1:]
+if LOG:
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"bin": "orcha", "argv": argv}) + "\n")
+if argv[:1] == ["--version"]:
+    print("orcha 0.2.2")
+    sys.exit(0)
+if argv[:2] == ["verify", "--json"]:
+    src = argv[2]
+    try:
+        raw = sys.stdin.buffer.read() if src == "-" else open(src, "rb").read()
+        if LOG and src == "-":   # the exact bytes that arrived on stdin, for VP-1
+            import hashlib
+            with open(LOG, "a") as f:
+                f.write(json.dumps({"bin": "orcha", "argv": argv,
+                                    "stdin_sha256": hashlib.sha256(raw).hexdigest()}) + "\n")
+        env = json.loads(raw)
+    except (OSError, ValueError):
+        print("cannot read envelope: not JSON", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(env, dict):
+        print("envelope is not a JSON object", file=sys.stderr)
+        sys.exit(2)
+    steps = env.get("steps") or []
+    tampered = bool(steps) and isinstance(steps[0], dict) and steps[0].get("latency_ms") == 133
+    bad_schema = env.get("format") != "orcha.run-attestation/v1"
+    checks = {"schema": not bad_schema, "steps_root": not tampered and not bad_schema,
+              "steps_merkle_root": not tampered and not bad_schema,
+              "signature": not tampered and not bad_schema}
+    valid = all(checks.values())
+    print(json.dumps({"valid": valid, "verdict": "valid" if valid else "invalid",
+                      "run_id": env.get("run_id"), "signer_did": (env.get("signer") or {}).get("did"),
+                      "step_count": len(steps), "checks": checks, "coverage": {}}))
+    sys.exit(0 if valid else 1)
+print("fake orcha: unknown", file=sys.stderr)
+sys.exit(2)

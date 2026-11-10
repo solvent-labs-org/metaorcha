@@ -254,6 +254,19 @@ def _due_text(when: datetime) -> str:
     return when.strftime("%a %Y-%m-%d %H:%M %Z")
 
 
+def _routine_label(record: dict[str, Any], now: datetime) -> str:
+    """``not approved``, or the workflow it fires with its approval and what its ceiling has
+    counted."""
+    from metabot.workflow_firing import summarize, used_text
+
+    try:
+        summary = summarize(record, now)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return f"cannot be read: {exc}"
+    used = used_text(summary, "this month")
+    return summary.label + (f", {used}" if used else "")
+
+
 def routine_view(
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
@@ -261,6 +274,7 @@ def routine_view(
     from metabot.cron import CronError
     from metabot.paths import metabot_home
     from metabot.routines import ROUTINES, firings, next_due, routines
+    from metabot.workflow_firing import firing_label
 
     now = now or datetime.now(UTC)
     try:
@@ -279,9 +293,20 @@ def routine_view(
             due = _due_text(next_due(record, now))
         except (AttributeError, CronError, KeyError, TypeError, ValueError):
             due = "-"
-        rows.append({**record, "next_due": due, "last": last.get(str(record.get("id")))})
+        rows.append(
+            {
+                **record,
+                "next_due": due,
+                "last": last.get(str(record.get("id"))),
+                "approval": _routine_label(record, now),
+            }
+        )
     recent = [
-        {**asdict(f), "routine_name": names.get(f.routine_id, f.routine_id)}
+        {
+            **asdict(f),
+            "routine_name": names.get(f.routine_id, f.routine_id),
+            "label": firing_label(f),
+        }
         for f in reversed(fired[-ROW_LIMIT:])
     ]
     return rows, recent, None
