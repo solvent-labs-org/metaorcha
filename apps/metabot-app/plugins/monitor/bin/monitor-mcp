@@ -169,7 +169,7 @@ def t_show_text(args):
             subprocess.run(["notify-send", title, text[:200]], timeout=5, env=env(), check=False, capture_output=True)
             notes.append("notified")
         except (OSError, subprocess.SubprocessError):
-            pass
+            notes.append("notification failed")
     if shutil.which(BROWSER):
         subprocess.Popen([BROWSER, "--new-window", path], env=env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # noqa: S603
                          start_new_session=True)

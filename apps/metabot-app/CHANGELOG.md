@@ -31,6 +31,8 @@ the pairing payload, the capability block, the module manifest) is called out as
   scripts `tools/demo/` that install them, save the watchdog loop, add the workflows and run
   Cursor at a tier (`docs/DEMOS.md`).
 - The empty lane opens with "What should we get started with?".
+- The desktop shell for Linux (`desktop/`): a Tauri 2 window that finds or starts the app server
+  and opens its page; CI's `bundle-linux` job builds the `.deb` and AppImage (`docs/DESKTOP.md`).
 - Runs without tmux (T2/E3): on a host with no tmux, and on the phone, `POST /api/run` starts the
   core as the app's own child (the prompt on stdin, stdout and stderr into `STATE/runs/<name>.log`,
   the same scrubbed environment as a desk, one process group); the run links to its receipt, reports

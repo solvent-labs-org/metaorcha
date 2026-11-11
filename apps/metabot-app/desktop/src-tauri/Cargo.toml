@@ -1,0 +1,19 @@
+[package]
+name = "metabot-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "The MetaBot desktop shell: find or start the app server, open its page in a window"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "metabot-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+metabot-shell-core = { path = "../shell-core" }

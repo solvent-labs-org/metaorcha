@@ -61,6 +61,11 @@ class ClaimsTests(unittest.TestCase):
                         self.assertTrue(
                             (APP / "tests" / proof[len("ui:") :]).is_file(), proof
                         )
+                    elif proof.startswith("desktop:"):
+                        text = (APP / "desktop" / "shell-core" / "src" / "lib.rs").read_text(
+                            encoding="utf-8"
+                        )
+                        self.assertIn(f"fn {proof[len('desktop:') :]}()", text, proof)
                     else:
                         self.fail(f"unknown proof kind: {proof}")
 

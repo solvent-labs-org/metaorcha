@@ -165,6 +165,21 @@ pub fn plan(state: &Path, path_env: &str) -> Plan {
     }
 }
 
+/// Poll `state` until a live server record and its token exist, or `deadline` passes:
+/// the port and token to open, or None. `tick` is the pause between looks.
+pub fn wait_for_server(state: &Path, deadline: std::time::Duration, tick: std::time::Duration) -> Option<(u16, String)> {
+    let start = std::time::Instant::now();
+    loop {
+        if let (Some(rec), Some(token)) = (live_record(state), read_token(state)) {
+            return Some((rec.port, token));
+        }
+        if start.elapsed() >= deadline {
+            return None;
+        }
+        std::thread::sleep(tick);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +247,22 @@ mod tests {
         let me = std::process::id();
         std::fs::write(d.join("server.json"), format!("{{\"pid\": {me}, \"port\": 8461}}")).unwrap();
         assert_eq!(plan(&d, bin.to_str().unwrap()), Plan::Attach { port: 8461 });
+    }
+
+    #[test]
+    fn waiting_for_a_server_returns_its_port_and_token_once_both_exist_and_gives_up_on_time() {
+        let d = tmp("wait");
+        let t0 = std::time::Instant::now();
+        assert_eq!(wait_for_server(&d, std::time::Duration::from_millis(120), std::time::Duration::from_millis(20)), None);
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(120));
+        let d2 = d.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            std::fs::write(d2.join("server.json"), format!("{{\"pid\":{},\"port\":8123,\"build\":\"t\"}}", std::process::id())).unwrap();
+            std::fs::write(d2.join("token"), "tok-1\n").unwrap();
+        });
+        let got = wait_for_server(&d, std::time::Duration::from_secs(5), std::time::Duration::from_millis(10));
+        writer.join().unwrap();
+        assert_eq!(got, Some((8123, "tok-1".to_string())));
     }
 }

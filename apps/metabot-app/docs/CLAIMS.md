@@ -5,8 +5,8 @@ that would fail if the claim stopped being true. `tests/test_claims.py` reads th
 and checks that each proof exists. A claim with no row is not made. Proof kinds:
 `tests/<file>.py::<test>` (a unit test), `selftest:<journey>/<step>` (a self-test journey
 step, run on Linux in CI and on the tablet), `tablet-e2e:<step>` (the scripted tablet
-walk, `tools/tablet-e2e.sh`), `ui:<file>` (a page suite). Several proofs are separated
-by `;`.
+walk, `tools/tablet-e2e.sh`), `ui:<file>` (a page suite), `desktop:<test>` (a test of the desktop shell's Rust core). Several
+proofs are separated by `;`.
 
 | Claim | Proof |
 |---|---|
@@ -34,3 +34,4 @@ by `;`.
 | A wrong key fails fast, leaves a receipt that verifies, and the app says where to fix the key | `tests/test_run_report.py::test_a_refused_key_says_to_check_the_key`; `selftest:wrong_key/the run fails fast`; `selftest:wrong_key/the app says to check the key` |
 | What a run did is readable and checkable: every step row names its tool, time and verdict; the app verifies the receipt; a tampered copy is reported invalid | `selftest:receipt_view_clarity/every step row shows tool, time and verdict`; `selftest:receipt_view_clarity/the verify route says valid`; `selftest:receipt_view_clarity/a tampered copy is reported invalid` |
 | Nothing private ships in the tree: no names, no home paths, no keys | `tests/test_private_strings.py::test_no_private_string_in_the_shipped_tree` |
+| The desktop window opens the server already running, or starts one from PATH and waits for it, and never prints the token | `desktop:waiting_for_a_server_returns_its_port_and_token_once_both_exist_and_gives_up_on_time`; `desktop:the_state_folder_is_found_the_way_the_server_finds_it`; `tests/test_desktop_shell.py::test_the_smoke_mode_prints_the_port_and_never_the_token` |

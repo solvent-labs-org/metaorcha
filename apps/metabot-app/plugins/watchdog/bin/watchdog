@@ -131,10 +131,11 @@ class Watch:
             seen = d.get("seen") or d.get("created")
             parts.append(f"{d.get('name') or 'device'} seen {ago(seen, now)}")
             try:
-                if now - float(seen) > DEVICE_QUIET_S:
-                    self.findings.append(f"device {d.get('name') or '?'} not seen for {ago(seen, now)[:-4]}")
+                quiet = now - float(seen) > DEVICE_QUIET_S
             except (TypeError, ValueError):
-                pass
+                quiet = False   # no usable timestamp: said as "seen unknown" above, not a finding
+            if quiet:
+                self.findings.append(f"device {d.get('name') or '?'} not seen for {ago(seen, now)[:-4]}")
         return f"devices: {len(rows)} paired; " + "; ".join(parts)
 
     def desks(self, b):
@@ -214,7 +215,7 @@ class Watch:
                 if l1 > 2 * ncpu:
                     self.findings.append(f"load {l1:.1f} is high for {ncpu} cpus")
             except (OSError, AttributeError):
-                pass
+                parts.append("load unknown")
             return "machine: " + ", ".join(parts)
         self.local("machine", fn)
 
