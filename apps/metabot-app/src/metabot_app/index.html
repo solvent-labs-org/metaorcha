@@ -471,7 +471,8 @@
   .start .stx span { font-size:12px; color:var(--muted); }
   .wkeys { display:flex; gap:6px; flex-wrap:wrap; padding:0 6px 8px 34px; }
   .wline { flex:1 1 100%; min-width:0; font:12px/1.4 var(--mono); color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .wk { min-height:44px; min-width:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:500 14px/1 var(--sans); }
+  .wk { min-height:44px; min-width:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:500 14px/1 var(--sans); touch-action:manipulation; }
+  .wkeys input { flex:1 1 12em; min-width:12em; min-height:44px; padding:0 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:400 14px/1 var(--sans); }
   .wk:hover { background:var(--hover); }
   .sin .sinStep { font:500 16px/1.45 var(--sans); }
   .sinOk { display:flex; align-items:center; gap:8px; color:var(--ok); font:600 16px/1.3 var(--sans); }
@@ -1135,7 +1136,9 @@ function bubble(ev) {
     h('button', {class: 'cbtn run', type: 'button', title: 'type + Enter', onclick: e => { e.stopPropagation(); runCmd(c); }}, icon('enter'))));
   const claimed = ev.via === 'in' && ev.target && claimAt[ev.target] && ev.time <= claimAt[ev.target];
   /* the lane already says which desk: 'you' for yours, 'from → target' for desk → desk, the sender's name otherwise */
-  const who = ev.via === 'in' ? 'you' : ev.mirror ? disp(ev.from || '?') : ev.via === 'desk' ? disp(ev.from || '?') + ' → ' + disp(ev.target || '?') : '';   // a mirror: the desk's own Claude answering
+  const who = ev.via === 'in' ? 'you' : ev.mirror ? disp(ev.from || '?') : ev.via === 'desk'
+    ? (ev.from === ev.target ? disp(ev.from || '?') + ' → you' : disp(ev.from || '?') + ' → ' + disp(ev.target || '?'))
+    : '';   // a mirror: the desk's own Claude answering; from == target is a desk's note to the person (20:45), never "desk → desk"
   const state = (claimed ? ' · ✓ ' + disp(ev.target) : '') + (ev.failed ? ' · not sent' : ev.pending ? ' · sending' : '');
   if (ev.via === 'in') {
     const small = h('small', {}, chip ? h('span', {class: chip[0], text: chip[1]}) : null, chip ? ' ' : '', who + state);
@@ -2787,7 +2790,7 @@ const ASK_KEYS = {
   line: [['y', ['y', 'enter']], ['n', ['n', 'enter']]],
 };
 const SECRET_RE = /\[sudo\]|password|passphrase|api[ _-]?key|token\s*:|secret/i;
-const ASK_WORDS = ['signin', 'secret', 'yes', 'line', 'select'];   // the PC names the ask on waiting rows and desk rows
+const ASK_WORDS = ['signin', 'secret', 'yes', 'line', 'select', 'text'];   // the PC names the ask on waiting rows and desk rows
 function askKind(w, d) {   // what the ask takes: select | line | yes | secret | signin | '' (the terminal)
   const name = (d && d.name) || w.desk;
   const rec = TERMS[name];
@@ -2831,6 +2834,11 @@ function waitKeys(w, d) {   // the row under a waiting desk: its one-tap keys, o
   if (ASK_KEYS[kind]) ASK_KEYS[kind].forEach(([label, keys]) => row.appendChild(h('button', {type: 'button', class: 'wk', text: label, disabled: sent || null,
     title: sent ? 'sent: waiting for the desk' : 'sends ' + keys.join(' then '),
     onclick: ev => sendKeys(name, keys, ev && ev.currentTarget, line, fp)})));
+  else if (kind === 'text') {   /* 20:40: the desk asks for words, not a key */
+    const [inp, send] = askTextInput(name, fp);
+    if (sent) { inp.disabled = true; send.disabled = true; }   /* review 1.2 (RV-B): one ask takes one answer */
+    row.append(inp, send);
+  }
   else if (kind === 'signin') row.appendChild(h('button', {type: 'button', class: 'wk', text: 'Sign-in card', onclick: () => openSignin(name)}));
   else row.appendChild(h('button', {type: 'button', class: 'wk', text: 'Answer in the terminal', title: kind === 'yes' ? 'a destructive call takes the typed word yes' : kind === 'secret' ? 'a password or a secret is typed by you' : 'the ask is not one a key can answer',
     onclick: () => termAsk(name, kind)}));
@@ -2838,6 +2846,25 @@ function waitKeys(w, d) {   // the row under a waiting desk: its one-tap keys, o
 }
 const SENT_ASK = {};   // desk -> the ask (line + since) a key already answered: its keys stay off until the desk asks anew
 const askPrint = (w, d) => String((w && w.ask_line) || (d && d.ask_line) || '') + '|' + String((w && w.since) || (d && d.since) || '');
+async function sendAskText(name, value, btn, line, fp) {   /* 20:40 (1): the text ask — keys cannot answer it, the person's words go to the desk */
+  const v = String(value || '').trim();
+  if (!v) { toast('type what the desk should do instead', 2200); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const cid = Date.now().toString(36) + ':' + Math.random().toString(36).slice(2, 8);
+    const r = await api('/api/send', {text: v, target: name, cid});
+    if (!r.ok) { toast('⚠ ' + (r.error || ('HTTP ' + r.status)), 2600); return; }
+    if (fp != null) SENT_ASK[name] = fp;
+    if (line) line.value = '';
+    toast('sent to ' + disp(name));
+  } finally { if (btn) btn.disabled = false; }
+}
+const askTextInput = (name, fp) => {   /* one text line + one Send, on the waiting row and on the sheet alike */
+  const inp = h('input', {type: 'text', placeholder: 'tell the desk what to do instead', maxlength: '2000',
+    autocapitalize: 'sentences', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false'});
+  const send = h('button', {type: 'button', class: 'wk allow', text: 'Send', onclick: () => sendAskText(name, inp.value, send, inp, fp)});
+  return [inp, send];
+};
 async function sendKeys(name, keys, btn, askLine, fp) {
   if (fp != null && SENT_ASK[name] === fp) return false;
   const row = btn && btn.parentNode, all = row && row.querySelectorAll ? row.querySelectorAll('button') : [];
@@ -2879,6 +2906,7 @@ function openDeskSheet(name) {
     const idle = idleRunShell(name, w, d);
     const key = c + '|' + ask + '|' + (d && d.needs_you ? 1 : 0) + '|' + (idle ? 1 : 0);
     if (key === shown) return;   // unchanged: what is typed stays
+    const wasAsking = shown ? shown.split('|')[2] === '1' : false;   /* the sheet was showing an ask the desk has stopped asking */
     shown = key;
     cls.textContent = '';
     if (c) cls.append('class: ', h('b', {class: c, text: c}), ' — read from the prompt');
@@ -2888,6 +2916,13 @@ function openDeskSheet(name) {
       : 'the desk is asking — answer with the keys below';   // 21.6: the argv is a developer-mode line; an idle run shell never says "asking"
     if (idle) {
       keys.append(h('span', {class: 'small', text: 'the run ended; this is the shell prompt, not an ask'}), send('\x1b', 'Esc'), send('\x03', '^C'));
+    } else if (wasAsking && !(d && d.needs_you)) {   /* 20:45 (3): the ask was answered while the sheet was open */
+      cls.textContent = '';
+      $('sheetEquals').textContent = 'answered — the desk moved on';
+      keys.append(h('span', {class: 'small', text: 'answered — this desk stopped asking; close the sheet when ready'}));
+    } else if (ask === 'text') {   /* 20:40 (1): the desk asks for words, not a key */
+      const [inp, send2] = askTextInput(name, null);
+      keys.append(h('span', {class: 'small', text: 'the desk asks what to do instead — type it'}), inp, send2);
     } else if (ask === 'secret') {
       keys.append(h('span', {class: 'small', text: 'a password or a secret: tap the terminal above and type it'}), send('\x03', '^C'));
     } else if (c === 'destructive' || ask === 'yes') {   // a typed yes is the one way to allow
@@ -4952,11 +4987,12 @@ async function devicesList(host) {
   } catch (e) { host.appendChild(h('p', {class: 'muted', text: 'device list: ' + (e && e.message || e)})); }
 }
 function phoneSection(sect) {   /* the Phone section by scope and caps; the QR block lands with the vendored encoder */
-  const ph = META.phone || {};
   if (META.scope === 'phone')
     return sect('phone', 'Phone', h('p', {class: 'muted', text: 'This phone is paired as ' + ((META.device && META.device.name) || 'a device') + '.'}));
-  if (cap('on_device'))
-    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'Connect to another computer for its desks and receipts. Pairing lives on the computer page; this app holds its own.'}));
+  if (cap('on_device')) return null;   /* 17:50 E: on-device there is no Phone section at all */
+  if (META.caps && META.caps.phone_listener === false)   /* 17:50 E: the caps say no listener; one line in its place */
+    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'Phone pairing needs openssl on this computer.'}));
+  const ph = META.phone || {};
   if (!ph.fingerprint)
     return sect('phone', 'Phone', h('p', {class: 'muted', text: 'Phone pairing needs openssl on this computer.'}));
   if (!ph.on)
@@ -5001,7 +5037,8 @@ function renderSettings(body) {
   if (!(PROJECTS || []).length) folders.appendChild(h('p', {class: 'muted', text: PROJECTS && PROJECTS.failed ? 'projects: PC unreachable' : 'No project folders yet — the config key "projects" on the PC.'}));
   body.appendChild(sect('folders', 'Folders', folders, h('p', {class: 'small', text: 'Read-only in phase 1: the file on the PC is written by deploy/write-config.py.'})));
   if (!PROJECTS) loadProjects().then(() => { if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'settings') renderPage('settings'); });
-  body.appendChild(phoneSection(sect));
+  const ps = phoneSection(sect);
+  if (ps) body.appendChild(ps);
   const up = !!(META.display && META.display.vnc);
   body.appendChild(sect('desktop', 'Desktop',
     srowx('display :99', up ? 'up' : 'down'),

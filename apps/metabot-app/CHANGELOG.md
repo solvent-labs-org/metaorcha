@@ -86,6 +86,16 @@ the pairing payload, the capability block, the module manifest) is called out as
 - Set-up step 0: the doctor report — a failing row shows its fix, a blocker row is red and opens the
   set-up page by itself; the folder step picks a real folder (`POST /api/folders`) where the route exists.
 - Settings → Developer shows the self-test button, disabled until the on-device runner lands.
+- The prompt sheet and the waiting row take a `text` ask as words: a line and a Send that posts to
+  `/api/send` (keys alone cannot answer it).
+- A lane event from a desk to itself (`via: "desk"`, `target == from`) reads as the desk speaking
+  to you, never "desk → desk".
+- The prompt sheet says "answered — the desk moved on" the moment its desk stops asking, its keys
+  go with it, and a new ask brings them back.
+- On a phone app the Settings page has no Phone section; a desktop whose capability block says no
+  phone listener shows one line in its place.
+- The sheet's key buttons carry `touch-action: manipulation` (the 44 px target was already there);
+  the 11-13 tablet day checks them on hardware.
 
 ### Security
 - A wrong token or pairing code locks the address out briefly, per listener and per kind;

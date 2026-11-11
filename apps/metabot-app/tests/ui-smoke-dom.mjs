@@ -2012,7 +2012,11 @@ const scenario = `
     ok(ACTIVE && ACTIVE.id === 'settings' && $('page').textContent.includes('Pair a phone'), 'the set-up line opens Settings → Phone');
     META.caps = {on_device: true};
     openPage('settings'); await tick(10);
-    ok($('page').textContent.includes('Connect to another computer'), 'on_device: the phone section offers the other computer');
+    ok(!$('page').textContent.includes('Pair a phone') && !$('page').textContent.includes('This phone is paired'), 'amendment E: on_device hides the Phone section entirely');
+    ok($('page').textContent.includes('About'), 'the rest of Settings still renders');
+    META.caps = {phone_listener: false};
+    openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('Phone pairing needs openssl on this computer.') && !$('page').querySelectorAll('button').some(b => b.textContent === 'Pair a phone'), 'amendment E: phone_listener=false hides the section, the openssl line in its place');
     META.caps = null;
     PHONE_MODE.phone = null; await fetchMeta();
   }
@@ -2066,6 +2070,49 @@ const scenario = `
     openPage('setup'); await tick(10);
     ok(!$('page').querySelectorAll('.doc').length && $('page').textContent.includes('of 4'), 'no doctor route: no step 0, the four steps stand alone');
     DOCTOR_FIX = null; DOCTOR = null; DOCTOR_LOADED = false;
+  }
+  {   // 20:40 (1): the text ask — keys cannot answer it, the person's words go to the desk
+    const dtext = {name: 'desk-text', armed: true, armed_at: 0, n: 0, pane: true, reach: 'pane', cli: 'cursor', cwd: '/tmp/x', project: 'other', needs_you: true, ask: 'text', ask_line: 'Tell the agent what to do instead', cls: 'read', meta: {kind: 'cursor'}};
+    DESKS.push(dtext);
+    await fetchDesks(); await refreshTree(); await tick(10);
+    const wkTxt = waitKeys((TREE.waiting || []).find(x => x.desk === 'desk-text') || {desk: 'desk-text'}, dtext);
+    ok(wkTxt.querySelectorAll('input').length === 1 && wkTxt.querySelectorAll('button').some(b => b.textContent === 'Send'), 'the waiting row shows a line and Send, not keys');
+    ok(!['Allow', 'y', 'n', 'Enter'].some(t => wkTxt.querySelectorAll('button').some(b => b.textContent === t)), 'no one-tap keys for a text ask');
+    const nSend0 = LOG.posts.filter(q => q.path === '/api/send').length;
+    wkTxt.querySelectorAll('input')[0].value = 'use the other account';
+    wkTxt.querySelectorAll('button').find(b => b.textContent === 'Send').onclick(); await tick(10);
+    const sent0 = LOG.posts.filter(q => q.path === '/api/send');
+    ok(sent0.length === nSend0 + 1 && sent0.at(-1).body.target === 'desk-text' && sent0.at(-1).body.text === 'use the other account', 'Send posts to /api/send with the desk as target');
+    openDeskSheet('desk-text'); await tick(10);
+    ok($('sheetKeys').querySelectorAll('input').length === 1 && !$('sheetKeys').textContent.includes('Allow'), 'the prompt sheet takes the words, not one-tap keys');
+    $('sheetKeys').querySelectorAll('input')[0].value = 'try the other account';
+    const nSend1 = LOG.posts.filter(q => q.path === '/api/send').length;
+    $('sheetKeys').querySelectorAll('button').find(b => b.textContent === 'Send').onclick(); await tick(10);
+    ok(LOG.posts.filter(q => q.path === '/api/send').length === nSend1 + 1, 'the sheet line posts to /api/send too');
+    closeSheets();
+    DESKS.splice(DESKS.findIndex(x => x.name === 'desk-text'), 1); await fetchDesks(); await refreshTree();
+  }
+  {   // 20:45 (3): a desk's note to the person reads as the desk speaking to you, never desk → desk
+    const keepWS3 = WS; setWS('desk-a'); await tick(10);
+    add({via: 'desk', time: Date.now() / 1000 + 1, from: 'desk-a', target: 'desk-a', message: 'the mail went out', typed: false});
+    const noteEl = msgs().at(-1);
+    const whoTxt = noteEl.querySelector('.who') ? noteEl.querySelector('.who').textContent : '';
+    ok(whoTxt.includes('desk-a → you') && !whoTxt.includes('desk-a → desk-a'), 'from == target, via desk, reads as the desk speaking to you: ' + whoTxt);
+    setWS(keepWS3); await tick(10);
+  }
+  {   // 20:45 (4): the sheet says answered the moment its desk stops asking, and heals when it asks again
+    const dansk = {name: 'desk-ans', armed: true, armed_at: 0, n: 0, pane: true, reach: 'pane', cli: 'cursor', cwd: '/tmp/x', project: 'other', needs_you: true, ask: 'line', ask_line: 'allow?', cls: 'read', meta: {kind: 'cursor'}};
+    DESKS.push(dansk); TERMS['desk-ans'] = scr("  allow? type 'y' to allow:");
+    await fetchDesks(); openDeskSheet('desk-ans'); await tick(10);
+    ok($('sheetKeys').textContent.includes('Allow'), 'the sheet shows the ask keys while the desk asks');
+    dansk.needs_you = false; await fetchDesks(); await tick(1700);
+    ok($('sheetEquals').textContent.includes('answered'), 'the sheet swaps to answered when the desk stops asking: ' + $('sheetEquals').textContent);
+    ok(!$('sheetKeys').querySelectorAll('button').some(b => b.textContent === 'Allow'), 'no keys stay live after the ask was answered');
+    closeSheets();
+    dansk.needs_you = true; await fetchDesks(); openDeskSheet('desk-ans'); await tick(10);
+    ok($('sheetKeys').textContent.includes('Allow'), 'a new ask brings the keys back');
+    closeSheets();
+    DESKS.splice(DESKS.findIndex(x => x.name === 'desk-ans'), 1); delete TERMS['desk-ans']; await fetchDesks();
   }
   closeSheets(); setUMode('dev'); await tick(20);
   // every POST carried the CSRF headers
