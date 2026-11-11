@@ -1097,6 +1097,13 @@ const scenario = `
   if (curBtn) { await curBtn.onclick({currentTarget: curBtn}); await tick(20); }
   ok(JSON.stringify(spawns().at(-1).body) === JSON.stringify({kind: 'cursor', account: 'alt', signin: true}), 'U1: Accounts → Sign in on a Cursor folder posts {kind:"cursor", account, signin:true}');
   ok(sinA().length === 1 && sinA()[0].attrs.href.startsWith('https://cursor.com/') && !!sinBtn('Copy link') && $('dockBody').querySelectorAll('input').length === 0, 'U1 cursor link: Open sign-in page and Copy link, no code field');
+  {   // Bugbot 11-12 (D1 page half): a login the phone started finishes on the computer — no link to tap here
+    const curRow0 = FIX_DESKS.find(d => d.name === 'signin-cursor-alt');
+    if (curRow0) { curRow0.signin.where = 'pc'; await signinRefresh(); await tick(5); }
+    ok(sinA().length === 0 && $('dockBody').textContent.includes('Open this on the computer') && !!sinBtn('Copy link'), 'U1 where=pc: the card says to open it on the computer, no link to tap, Copy link stays');
+    if (curRow0) { curRow0.signin.where = 'here'; await signinRefresh(); await tick(5); }
+    ok(sinA().length === 1 && sinA()[0].textContent === 'Open sign-in page', 'U1 where=here: the link is back');
+  }
   const curRow = FIX_DESKS.find(d => d.name === 'signin-cursor-alt');
   if (curRow) { curRow.signin.step = 'success'; await signinRefresh(); await tick(5); }
   ok($('dockBody').textContent.includes('signed in') && !!sinBtn('Close the sign-in desk'), 'U1: a Cursor success reads signed in');
