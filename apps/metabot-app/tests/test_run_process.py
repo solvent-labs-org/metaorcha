@@ -163,6 +163,17 @@ class ProcessRunTests(unittest.TestCase):
         self.assertIsNone(mb.reg_read(server.MB, name))
         self.assertEqual(self.env.get(f"/api/mb/runlog/{name}")[0], 404)
 
+    def test_a_run_name_or_prompt_outside_their_folders_is_refused(self):
+        prompt = mb.write_prompt(server.MB, "count the files")
+        with self.assertRaises(ValueError):
+            mb.spawn_run_process(server.MB, "../escape", self.cwd, ["true"], prompt)
+        self.assertFalse((self.env.state / "escape.log").exists())
+        stray = self.env.state / "stray.txt"
+        stray.write_text("not a prompt")
+        with self.assertRaises(ValueError):
+            mb.spawn_run_process(server.MB, "run-ok", self.cwd, ["true"], stray)
+        self.assertFalse(self.log("run-ok").exists())
+
     def test_runlog_refuses_a_bad_name_and_an_unknown_one(self):
         self.assertEqual(self.env.get("/api/mb/runlog/..%2Fx")[0], 400)
         self.assertEqual(self.env.get("/api/mb/runlog/run-77")[0], 404)

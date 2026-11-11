@@ -492,6 +492,16 @@ def _proc_key(ctx, name):
     return (str(ctx.state), name)
 
 
+def _inside(folder, path):
+    """``path`` resolved; ValueError unless it sits inside ``folder`` (a run name or a
+    prompt file never reaches past its own folder)."""
+    base = os.path.realpath(folder)
+    real = os.path.realpath(path)
+    if not real.startswith(base + os.sep):
+        raise ValueError(f"not inside {base}: {path}")
+    return real
+
+
 def spawn_run_process(ctx, name, cwd, argv, prompt, extra_env=None, extra_unset=()):
     """Start ``argv`` as the app's own child. The prompt file is its stdin and is
     unlinked once the child holds the descriptor (as the desk script's ``exec 3<``
@@ -502,7 +512,8 @@ def spawn_run_process(ctx, name, cwd, argv, prompt, extra_env=None, extra_unset=
     env = {k: v for k, v in os.environ.items() if k not in drop}
     env["METABOT_HOME"] = ctx.metabot_home
     env.update(extra_env or {})
-    log = ctx.runs_dir() / f"{name}.log"
+    log = _inside(ctx.runs_dir(), ctx.runs_dir() / f"{name}.log")
+    prompt = _inside(ctx.prompts_dir(), prompt)
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as out, open(prompt, "rb") as stdin:
         p = subprocess.Popen(argv, cwd=cwd, stdin=stdin, stdout=out, stderr=subprocess.STDOUT,
