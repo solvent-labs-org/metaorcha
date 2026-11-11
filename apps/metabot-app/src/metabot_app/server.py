@@ -521,8 +521,57 @@ def local_event(message, target="", frm="", via="in", typed=True, **extra):
 
 HANDOFF_TPL = ("[HANDOFF from {frm} via metachat] You are taking this work over. "
                "Read it, then carry it forward in this session:\n{text}\n"
-               "When you have taken it, say so with: mc-send {reply} \"took handoff: <one line>\" "
-               "(mc-send tablet ... answers the person on the tablet)")
+               "When you have taken it, say so with: {reply_cmd} \"took handoff: <one line>\"")
+# the mailbox the person reads: mail sent there lands in the sender's lane (mail_to_lane_once)
+PERSON_BOX = "tablet"
+MAIL_BODY_MAX = 4000
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")   # a colour or cursor sequence in a note's body
+
+
+def reply_cmd(me, to):
+    """How the desk ``me`` answers ``to`` (a desk, or PERSON_BOX for the person).
+    With an inbox adapter its ``mc-send`` is on the desk's PATH; without one (every
+    plain install: 11-11, found on the tablet, the adapter's command was named to a
+    desk that had none) the core's mail is the channel every install has."""
+    if isinstance(INBOX, inbox_mod.NullInbox):
+        return f"metabot mail send {to} --from {me} -m"
+    return f"mc-send {to}"
+
+
+def mail_to_lane_once():
+    """One pass: every note in the person's mailbox (``<metabot home>/mail/tablet``,
+    Code Desks' desk-mail shape, written by ``metabot mail send tablet``) lands in
+    its sender's lane, untyped, and is moved to ``read/`` so it is read once.
+    Only regular ``*.md`` files, oldest first; a note that is not mail is left."""
+    home = MB.metabot_home if MB is not None else ""
+    if not home:
+        return
+    box = Path(home) / "mail" / PERSON_BOX
+    try:
+        names = sorted(n for n in os.listdir(box) if n.endswith(".md"))
+    except OSError:
+        return
+    for n in names:
+        path = box / n
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()[:MAIL_BODY_MAX + 4096].decode("utf-8", "replace")
+        except OSError:
+            continue
+        head, _, body = raw.partition("\n\n")
+        fields = dict(ln.split(":", 1) for ln in head.splitlines() if ":" in ln)
+        frm = re.sub(r"[^A-Za-z0-9_.-]", "", fields.get("from", "").strip())[:40]
+        if not frm or fields.get("to", "").strip() != PERSON_BOX:
+            continue
+        try:
+            (box / "read").mkdir(mode=0o700, exist_ok=True)
+            os.rename(path, box / "read" / n)
+        except OSError:
+            continue
+        text = CTRL_RE.sub("", ANSI_RE.sub("", body.replace("\r\n", "\n"))).strip()[:MAIL_BODY_MAX]
+        if text:
+            local_event(text, frm, frm, via="desk", typed=False)
 NO_CHAT_KINDS = {"run": "a run desk takes no chat — watch it in Runs",
                  "cli": "a command desk takes no chat — open its terminal"}
 SIGNIN_NO_CHAT = "a sign-in desk takes no chat — use its sign-in card"
@@ -548,9 +597,10 @@ def deliver(target, text, frm="", kind="message"):
     frm = frm or "the tablet"
     if kind == "handoff":
         # the reply address is a desk name mc-send can route: "tablet" for the person
-        body = HANDOFF_TPL.format(frm=frm, text=text, reply="tablet" if frm == "the tablet" else frm)
+        body = HANDOFF_TPL.format(frm=frm, text=text,
+                                  reply_cmd=reply_cmd(target, PERSON_BOX if frm == "the tablet" else frm))
     elif frm != "the tablet":   # desk -> desk: say who it is from and how to answer
-        body = f"[from {frm} via metachat] {text}\n(reply: mc-send {frm} \"...\")"
+        body = f"[from {frm} via metachat] {text}\n(reply: {reply_cmd(target, frm)} \"...\")"
     else:
         body = text
     if frm == "the tablet":
@@ -722,7 +772,7 @@ def waiting_refusal(name):
     """WAITING_ERR (with the ask line: links out, cut to 120 characters) when
     the desk's pane, read now, waits on an ask (mb.needs_info); else None."""
     info = mb.needs_info(MB, desk_slug(name), fresh=True)
-    if not info.get("needs"):
+    if not info.get("needs") or info.get("ask") == "text":   # a text ask is answered by the chat line
         return None
     line = CTRL_RE.sub("", LINK_RE.sub("(link)", info.get("ask_line") or "")).strip()[:120].rstrip()
     return f"{WAITING_ERR}: {line}" if line else WAITING_ERR
@@ -2629,6 +2679,11 @@ def mirror_loop():
             run_report_once()
         except Exception as exc:   # nor over a run report
             slog(f"run report: {type(exc).__name__}: {exc}"[:200])
+            time.sleep(10)
+        try:
+            mail_to_lane_once()
+        except Exception as exc:   # nor over the person's mailbox
+            slog(f"mail: {type(exc).__name__}: {exc}"[:200])
             time.sleep(10)
         time.sleep(MIRROR_EVERY)
 

@@ -7,6 +7,11 @@ the pairing payload, the capability block, the module manifest) is called out as
 ## [Unreleased]
 
 ### Added
+- Mail sent to the person (`metabot mail send tablet --from <desk> -m ...`) lands in that
+  desk's lane on the page, read once; the hand-off hint names this command when no inbox
+  adapter is configured (`mc-send` is the adapter's command, not part of the wheel).
+- Every desk the app spawns carries `METABOT_MAILBOX=<desk name>` in its environment, so a
+  per-home `metabot mail hook` (Claude or Cursor) brings that desk its mail without naming it.
 - The app server (`metabot-app serve`): the page, `/api/*`, the event stream and the
   terminal WebSocket, behind a per-device token.
 - First run: `metabot-app doctor [--json]` and `GET /api/doctor`; folders (`GET /api/dirs`,
@@ -52,8 +57,44 @@ the pairing payload, the capability block, the module manifest) is called out as
   their pinned dependencies downloaded as wheels only (never an sdist) for one platform, and a
   `requirements.lock` with a sha256 per file, so a desktop bundle installs offline.
 
+### Changed
+
+- Page polish: the activity rail's labels wrap onto two lines instead of cutting a word, and the
+  new-account name field keeps its width when the row reflows.
+- The run sheet's engine picker follows the capability block: it offers the engines this computer
+  has and defaults to the first of them, never a hard-coded engine.
+- A Cursor run picks its account in the run sheet (posted as `account`); an unknown account is a
+  plain "pick one from the list", never a run.
+- The run sheet's model chip offers the engine's own models as a datalist; cursor shows its four
+  tiers.
+- A run whose state is `interrupted` has its own glyph and word ("interrupted (no receipt)"), the
+  problem rides its rows, and its record says what happened instead of checking for receipt bytes
+  that are not there.
+- A run desk's shell prompt after its run has ended is an idle shell, not an ask: the waiting row
+  and the prompt sheet say the run ended, and no one-tap allow keys are offered for it.
+- An unapproved workflow row carries an Approve button that opens the approve desk.
+- Sign-in desks sit in their own "Signing in" group in the tree, never under a folder path.
+- The page gates its surfaces on the capability block (1.3): without tmux, no desk-starting card, no desk
+  set-up step, a spawn that explains, and a run record that opens its run log instead of a desk; cursor
+  is offered as unavailable without a sandbox; sign-in offers the cli engines this computer has; the
+  keep-running line names the host's service.
+- A phone the computer removed is told once, then the page hands itself to the APK's pairing screen
+  through `metabot://retry`.
+- Settings → Phone: pair a phone (code in groups of four, the four words, a countdown), the paired
+  devices with Remove; the phone scope shows its own name; on-device the section points at another
+  computer. The QR lands with the vendored encoder.
+- Set-up step 0: the doctor report — a failing row shows its fix, a blocker row is red and opens the
+  set-up page by itself; the folder step picks a real folder (`POST /api/folders`) where the route exists.
+- Settings → Developer shows the self-test button, disabled until the on-device runner lands.
+
 ### Security
 - A wrong token or pairing code locks the address out briefly, per listener and per kind;
   a successful pairing clears the lockout.
 - The page serves only what the host's capabilities allow; the key and login folders are
   never listed or chosen as a project.
+
+### Fixed
+- A free-text prompt in a desk (Cursor's "Tell the agent what to do instead") is the `text`
+  ask, and a chat message answers it instead of being refused as "the desk is waiting".
+- A finished run desk no longer reads as asking: between the run script's exit line and
+  the shell's first prompt the model's answer could quote an ask and open the prompt sheet.

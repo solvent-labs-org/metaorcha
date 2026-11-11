@@ -274,6 +274,11 @@ ok(/\.sbtn \{[^}]*min-height:28px;[^}]*min-width:44px/.test(css), 'the status-li
 for (const s of ['.hbtn', '.ibtn', '.dbtn', '.tbtn', '.cbtn', '.abtn', '.sbtn', '.sheetHead button', '.acts button', '#send', '#plusBtn', '.tab .tx', '#abMode', '#sheetKeys button', '#toast button', '.wk', '.sw'])
   ok(wide.has(s), '44 px tap target (width): ' + s);
 ok(/\.ab \{[^}]*width:64px;[^}]*min-height:56px/.test(css), 'activity items are 64 px wide and at least 56 px tall');
+ok(/\.ab span \{[^}]*-webkit-line-clamp:2/.test(css) && !/\.ab span \{[^}]*nowrap/.test(css), 'activity labels wrap onto two lines instead of cutting a word');
+ok(/\.acctForm input \{[^}]*min-width:14em/.test(css), 'the new-account name keeps 14 em so the typed name is not clipped');
+ok(/<datalist id="modelList">/.test(html), 'the model chip has a datalist to hang the engine models on');
+ok(/'grok-4\.7-low', 'grok-4\.7-medium', 'grok-4\.7-high', 'grok-4\.7-xhigh'/.test(html), 'the cursor tiers are the model chip suggestions when the engine lists none');
+ok(/<span id="chipAccountLabel">login<\/span>/.test(html), 'the account chip label is addressable for the cursor rename');
 ok(/\.sheet \.grip \{[^}]*min-height:24px/.test(css), 'the sheet grip is a 24 px handle');
 // the 22.5 frame
 ok(/#abar \{[^}]*width:64px/.test(css) && /#side \{[^}]*width:280px/.test(css) && /#side\.collapsed \{[^}]*width:0/.test(css), 'activity bar 64 px, side bar 280 px, collapsible');

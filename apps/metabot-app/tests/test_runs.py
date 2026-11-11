@@ -116,6 +116,29 @@ class RunsTests(unittest.TestCase):
         self.assertEqual(j["runs"], [])
         self.assertEqual(j["error"], "RuntimeError: boom")
 
+    def test_a_finished_run_desk_asks_nothing(self):
+        # 11-11 (found on the tablet): between the run script's exit line and the
+        # shell's first prompt the screen is the model's answer, which may quote an
+        # ask; needs_you read true for one tick and the page opened the prompt sheet
+        # over a finished run. An exit line among the last six lines with no command
+        # typed after it means nothing waits.
+        s, j = self.env.post("/api/spawn", {"kind": "claude", "label": "needs"})
+        self.assertEqual(s, 200, j)
+        head = "\n".join(["old line"] * 50) + "\n"
+        ended = ["Do you want to proceed with the second part?\n"
+                 "[metabot] receipt /x/r.json (valid, 4 steps)\n[metachat] exit 0\n",
+                 "Allow command?\n[metachat] exit 1\nTo run a command as administrator, use sudo.\n"
+                 "See man sudo_root for details.\n"]
+        for text in ended:
+            self.env.set_pane("fc-needs", head + text)
+            server.MB._needs.clear()
+            self.assertFalse(mb.needs_you(server.MB, "needs"), text)
+        # a command typed into the shell that follows the run asks again
+        self.env.set_pane("fc-needs", head + "[metachat] exit 0\nuser@host:~/proj$ sudo ls\n"
+                                             "[sudo] password for user:\n")
+        server.MB._needs.clear()
+        self.assertTrue(mb.needs_you(server.MB, "needs"))
+
     def test_needs_you_patterns_from_the_last_six_lines(self):
         # 21.4 / server-flows-5: each CLI's prompt on a registered desk; a shell
         # prompt as the last line means nothing waits

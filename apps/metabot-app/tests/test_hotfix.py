@@ -109,7 +109,8 @@ class DeliverTests(unittest.TestCase):
                                                "from": "worker-1"})
             self.assertEqual((s, j), (200, {"ok": True, "error": "", "via": "pane", "reach": "pane"}))
             buf = self.env.tmux_loaded()[-1][1].decode()
-            self.assertEqual(buf, '[from worker-1 via metachat] look at this\n(reply: mc-send worker-1 "...")')
+            self.assertEqual(buf, '[from worker-1 via metachat] look at this\n'
+                                  '(reply: metabot mail send worker-1 --from pane-two -m "...")')
             s, j = self.env.get("/api/history")
             ev = j["messages"][-1]
             self.assertEqual((ev["via"], ev["from"], ev["target"], ev["message"], ev["typed"]),
@@ -129,20 +130,64 @@ class DeliverTests(unittest.TestCase):
                                                "from": "worker-1", "kind": "handoff"})
             self.assertEqual((s, j["via"]), (200, "pane"))
             buf = self.env.tmux_loaded()[-1][1].decode()
-            self.assertEqual(buf, server.HANDOFF_TPL.format(frm="worker-1", reply="worker-1",
-                                                            text="HANDOFF: finish the report"))
+            self.assertEqual(buf, server.HANDOFF_TPL.format(frm="worker-1", text="HANDOFF: finish the report",
+                                                            reply_cmd=server.reply_cmd("pane-three", "worker-1")))
             self.assertTrue(buf.startswith("[HANDOFF from worker-1 via metachat]"))
-            self.assertIn('mc-send worker-1 "took handoff: <one line>"', buf)
+            # 11-11 (found on the tablet): mc-send is a repo script, not in the wheel; with no
+            # inbox adapter the reply hint names the core's mail, which every install has
+            self.assertIn('metabot mail send worker-1 --from pane-three -m "took handoff: <one line>"', buf)
+            self.assertNotIn("mc-send", buf)
             # from the tablet the sender is named "the tablet", and the reply address
             # is the routable "tablet", never a desk called "the" (review server-flows-3)
             s, j = self.env.post("/api/send", {"text": "carry on", "target": "pane-three", "kind": "handoff"})
             buf = self.env.tmux_loaded()[-1][1].decode()
             self.assertTrue(buf.startswith("[HANDOFF from the tablet via metachat]"))
-            self.assertIn('mc-send tablet "took handoff: <one line>"', buf)
-            self.assertNotIn("mc-send the tablet", buf)
+            self.assertIn('metabot mail send tablet --from pane-three -m "took handoff: <one line>"', buf)
+            self.assertNotIn("the tablet -m", buf)
             s, j = self.env.get("/api/history")
             ev = j["messages"][-1]
             self.assertEqual((ev["via"], ev["from"], ev["typed"]), ("in", "", True))
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_mail_to_the_tablet_lands_in_the_senders_lane(self):
+        # 11-11: a desk that answers the person with `metabot mail send tablet ...` must be
+        # heard: the app reads that mailbox once per mirror pass into the sender's lane
+        box = self.env.mbhome / "mail" / "tablet"
+        box.mkdir(parents=True)
+        (box / "20261111T201658-cu-b-a12f2adc.md").write_text(
+            "from: cu-b\nto: tablet\nat: 2026-11-11T20:16:58+05:00\n\ntook handoff: \x1b[31mpong\x07\n")
+        (box / "notes.txt").write_text("not mail\n")
+        server.mail_to_lane_once()
+        s, j = self.env.get("/api/history")
+        ev = j["messages"][-1]
+        self.assertEqual((ev["message"], ev["target"], ev["from"], ev["via"], ev["typed"]),
+                         ("took handoff: pong", "cu-b", "cu-b", "desk", False))
+        self.assertEqual(sorted(p.name for p in box.iterdir()), ["notes.txt", "read"])
+        self.assertTrue((box / "read" / "20261111T201658-cu-b-a12f2adc.md").exists())
+        n = len(j["messages"])
+        server.mail_to_lane_once()   # read once: a second pass adds nothing
+        s, j = self.env.get("/api/history")
+        self.assertEqual(len(j["messages"]), n)
+
+    def test_a_free_text_prompt_is_a_text_ask_that_chat_answers(self):
+        # 11-11 (found on the tablet): Cursor's "Tell the agent what to do instead" is a line
+        # the person types into; the page must be able to answer it, so it is the `text` ask
+        # and /api/send types the answer instead of refusing a waiting desk
+        proc = pane_desk(self.env, "pane-four", cmd="cursor-agent")
+        try:
+            self.env.set_pane("fc-pane-four", "\n".join(["old"] * 30) + "\n"
+                              "  → Tell the agent what to do instead (Enter to send, empty to skip, Esc to cancel)\n")
+            server.MB._needs.clear()
+            server.invalidate()
+            s, j = self.env.get("/api/desks")
+            row = next((d for d in j["desks"] if d["name"] == "pane-four"), None)
+            self.assertIsNotNone(row, [d["name"] for d in j["desks"]])
+            self.assertEqual((row["needs_you"], row["ask"]), (True, "text"))
+            s, j = self.env.post("/api/send", {"text": "use metabot mail instead", "target": "pane-four"})
+            self.assertEqual((s, j["ok"], j["via"]), (200, True, "pane"), j)
+            self.assertEqual(self.env.tmux_loaded()[-1][1].decode(), "use metabot mail instead")
         finally:
             proc.kill()
             proc.wait()

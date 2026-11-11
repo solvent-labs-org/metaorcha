@@ -127,7 +127,7 @@ class SignInSpawnTests(SignInBase):
         folder = self.env.state / "signin"
         self.assertEqual(self.new_sessions()[-1], [
             "new-session", "-d", "-s", "fc-signin-claude-work", "-c", str(folder),
-            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", f"CLAUDE_CONFIG_DIR={self.work}",
+            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", "METABOT_MAILBOX=signin-claude-work", "-e", f"CLAUDE_CONFIG_DIR={self.work}",
             "--", "env", *unset_pairs(), "bash", "-lc", mb.FIXED_SCRIPT, "metachat", "claude"])
         self.assertTrue(folder.is_dir())
         self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
@@ -170,7 +170,7 @@ class SignInSpawnTests(SignInBase):
         acc = self.env.state / "accounts" / "cursor" / "alt"
         self.assertEqual(self.new_sessions()[-1], [
             "new-session", "-d", "-s", "fc-signin-cursor-alt", "-c", str(self.env.state / "signin"),
-            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", f"XDG_CONFIG_HOME={acc}/config",
+            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", "METABOT_MAILBOX=signin-cursor-alt", "-e", f"XDG_CONFIG_HOME={acc}/config",
             "-e", f"GH_CONFIG_DIR={self.env.home}/.config/gh", "-e", f"CURSOR_CONFIG_DIR={self.env.home}/.cursor",
             "--", "env", *unset_pairs(mb.CURSOR_UNSET), "bash", "-lc", mb.FIXED_SCRIPT, "metachat",
             "cursor-agent", "login"])

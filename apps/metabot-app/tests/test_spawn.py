@@ -44,7 +44,7 @@ class SpawnTests(unittest.TestCase):
         sid = reg["session_id"]   # 11-09: the PC names the Claude session, so the desk can be resumed
         self.assertRegex(sid, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
         self.assertEqual(call, ["new-session", "-d", "-s", "fc-claude", "-c", self.alpha,
-                                "-e", f"METABOT_HOME={self.mbhome}", "--", "env", *unset_pairs(),
+                                "-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=claude", "--", "env", *unset_pairs(),
                                 "bash", "-lc", mb.FIXED_SCRIPT, "metachat", "claude", "--session-id", sid])
         self.assertIn("-u", call)
         self.assertIn("ANTHROPIC_API_KEY", call)
@@ -81,10 +81,21 @@ class SpawnTests(unittest.TestCase):
         s, j = self.env.post("/api/spawn", {"kind": "claude", "account": "work", "label": "w1"})
         self.assertEqual((s, j), (200, {"ok": True, "name": "w1"}))
         call = self.new_session_calls()[-1]
-        self.assertEqual(call[:11], ["new-session", "-d", "-s", "fc-w1", "-c", self.alpha,
-                                     "-e", f"METABOT_HOME={self.mbhome}", "-e", "CLAUDE_CONFIG_DIR=/acc/work", "--"])
+        self.assertEqual(call[:13], ["new-session", "-d", "-s", "fc-w1", "-c", self.alpha,
+                                     "-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=w1", "-e", "CLAUDE_CONFIG_DIR=/acc/work", "--"])
         s, j = self.env.post("/api/spawn", {"kind": "claude", "account": "nope"})
         self.assertEqual(s, 404)
+
+    def test_every_desk_knows_its_mailbox(self):
+        # 11-11: a per-home `metabot mail hook` must name the desk it runs in, so each
+        # desk's environment carries its mailbox name, right after METABOT_HOME, for
+        # every kind the app spawns (a run desk's core reads it the same way)
+        for kind, name in (("claude", "claude"), ("cursor", "cursor"), ("shell", "shell")):
+            s, j = self.env.post("/api/spawn", {"kind": kind})
+            self.assertEqual(s, 200, j)
+            call = self.new_session_calls()[-1]
+            i = call.index(f"METABOT_HOME={self.mbhome}")
+            self.assertEqual(call[i + 1:i + 3], ["-e", f"METABOT_MAILBOX={name}"], call[:12])
 
     def test_spawn_cursor_with_account(self):
         self.env.post("/api/accounts", {"engine": "cursor", "name": "alt"})
@@ -93,7 +104,7 @@ class SpawnTests(unittest.TestCase):
         call = self.new_session_calls()[-1]
         folder = str(self.env.state / "accounts/cursor/alt")
         self.assertEqual(call, ["new-session", "-d", "-s", "fc-cursor", "-c", self.alpha,
-                                "-e", f"METABOT_HOME={self.mbhome}",
+                                "-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=cursor",
                                 "-e", f"XDG_CONFIG_HOME={folder}/config",
                                 "-e", f"GH_CONFIG_DIR={self.home}/.config/gh",
                                 "-e", f"CURSOR_CONFIG_DIR={self.home}/.cursor",
@@ -198,7 +209,7 @@ class SpawnTests(unittest.TestCase):
         self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", call)
         sid = json.loads((self.env.state / "desks" / "claude.json").read_text())["session_id"]
         self.assertEqual(call, ["new-session", "-d", "-s", "fc-claude", "-c", self.alpha,
-                                "-e", f"METABOT_HOME={self.mbhome}", "--", "env", *unset_pairs(),
+                                "-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=claude", "--", "env", *unset_pairs(),
                                 "bash", "-lc", mb.FIXED_SCRIPT, "metachat", "claude", "--session-id", sid])
         env_calls = [c for c in self.env.calls("tmux") if c[:1] == ["show-environment"]]
         self.assertEqual(env_calls[-1], ["show-environment", "-g"])
@@ -283,7 +294,7 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual(j["argv"], argv)
         call = self.new_session_calls()[-1]
         self.assertEqual(call, ["new-session", "-d", "-s", "fc-run-1", "-c", cwd,
-                                "-e", f"METABOT_HOME={self.mbhome}", "--", "env", *unset_pairs(),
+                                "-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=run-1", "--", "env", *unset_pairs(),
                                 "bash", "-lc", mb.FIXED_RUN_SCRIPT, "metachat", str(pf), *argv])
         self.assertFalse((server.NAMES_DIR / "run-1").exists())   # runs are not inbox names
         reg = json.loads((self.env.state / "desks" / "run-1.json").read_text())
@@ -353,7 +364,7 @@ class SpawnTests(unittest.TestCase):
         self.assertNotIn("--login", j["argv"])
         call = self.new_session_calls()[-1]
         folder = str(self.env.state / "accounts/cursor/alt")
-        self.assertEqual(call[6:14], ["-e", f"METABOT_HOME={self.mbhome}",
+        self.assertEqual(call[6:16], ["-e", f"METABOT_HOME={self.mbhome}", "-e", "METABOT_MAILBOX=run-1",
                                       "-e", f"XDG_CONFIG_HOME={folder}/config",
                                       "-e", f"GH_CONFIG_DIR={self.home}/.config/gh",
                                       "-e", f"CURSOR_CONFIG_DIR={self.home}/.cursor"])

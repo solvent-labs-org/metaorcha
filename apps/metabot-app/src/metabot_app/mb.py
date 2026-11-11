@@ -207,6 +207,9 @@ WRITE_RE = re.compile(r"\b(write|edit|create|bash|run this command|allow command
 # cursor-agent menu.
 SECRET_RE = re.compile(r"\[sudo\] password|password(?: for [^:]*)?:|passphrase|enter pin", re.I)
 ASK_RES = (("secret", SECRET_RE),
+           # 11-11 (found on the tablet): a line the person types a sentence into (Cursor's
+           # "Tell the agent what to do instead"); chat answers it, see server.waiting_refusal
+           ("text", re.compile(r"enter to send|tell the agent what to do", re.I)),
            ("yes", re.compile(r"type 'yes'|type yes", re.I)),
            ("line", re.compile(r"\[y/n\]|\(y/n\)|allow\? type", re.I)),
            ("select", re.compile(r"esc to cancel|enter to confirm|do you want to proceed"
@@ -408,7 +411,8 @@ def spawn_argv(name, cwd, home, argv, extra_env=None, extra_unset=(), script=FIX
     fc-<name>`` (tmux 3.4 keeps a literal ``=`` in a new-session name; ``=``
     is target syntax and every later ``-t`` uses ``=fc-<name>``). ``names`` is
     the finished ``-u`` list; without it the rule runs over ``environ``."""
-    cmd = ["new-session", "-d", "-s", f"fc-{name}", "-c", str(cwd), "-e", f"METABOT_HOME={home}"]
+    cmd = ["new-session", "-d", "-s", f"fc-{name}", "-c", str(cwd), "-e", f"METABOT_HOME={home}",
+           "-e", f"METABOT_MAILBOX={name}"]   # 11-11: the desk's mailbox (metabot mail), for its hooks
     for k, v in (extra_env or {}).items():
         cmd += ["-e", f"{k}={v}"]
     cmd += ["--", "env"]
@@ -1828,6 +1832,22 @@ def signin_view(entry, lines):
             "url": None if step == "ended" else signin_url(lines), "exit": code}
 
 
+def after_run_exit(lines):
+    """11-11 (found on the tablet): the lines that can still ask once a desk's script
+    has printed its ``[metachat] exit N`` line (FIXED_RUN_SCRIPT, FIXED_SCRIPT). Between
+    that line and the shell's first prompt the screen is the model's answer, which may
+    quote an ask ("do you want to proceed"); nothing waits there. Lines after a command
+    typed into the shell that follows count again (a ``sudo`` there does wait)."""
+    for i in range(len(lines) - 1, -1, -1):
+        if RUN_EXIT_LINE_RE.match(lines[i].rstrip()):
+            rest = lines[i + 1:]
+            for j, ln in enumerate(rest):
+                if COMMAND_LINE_RE.match(ln):
+                    return rest[j:]
+            return []
+    return lines
+
+
 def needs_info(ctx, name, entry=None, fresh=False):
     """Section 7 / 21.4: does a prompt wait on one of the last NEEDS_LINES
     non-empty pane lines (see asking_lines)? A last line that is a shell
@@ -1861,6 +1881,8 @@ def needs_info(ctx, name, entry=None, fresh=False):
         rc, out, _ = tmux(ctx, "capture-pane", "-p", "-t", f"=fc-{name}:", timeout=2)
         tail = [ln for ln in out.splitlines()[-40:] if ln.strip()][-CLASS_LINES:] if rc == 0 else []
     lines = tail[-NEEDS_LINES:]
+    if not signin:   # a sign-in desk reads its own ended step (follow-up C)
+        lines = after_run_exit(lines)
     at_shell = not lines or bool(SHELL_PROMPT_RE.search(lines[-1].rstrip()))
     asks = [] if at_shell else asking_lines(lines)
     val, view, step_waits = bool(asks), None, False

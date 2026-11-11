@@ -249,6 +249,10 @@ const RUNS = { runs: [
 const ACCT = { claude: [{ name: 'work', home: '/s/accounts/claude/work', max_at_once: 3, ready: true, source: 'metabot' }],
   cursor: [{ name: 'alt', folder: '/s/accounts/cursor/alt', proven: false, ready: false }], defaults: { claude: { ready: true }, cursor: { ready: false } } };
 let META_INBOX = {name: 'test inbox', arm_hint: "this desk's Claude holds the test inbox", arm_command: '/test-arm {desk}'};   // B1: a configured inbox adapter
+let PHONE_MODE = { scope: 'desktop', device: null, phone: null, removed: false };   // the pairing contract on the fake PC: scope, device, phone caps, removal
+let PHONE_DEVICES = [{ id: 'd1', name: 'Pixel 9', scope: 'phone', created: '2026-11-10T10:00:00Z', seen: '2026-11-11T10:00:00Z' }];
+let DOCTOR_FIX = null;   // 21:50: null = the route is not there (an older PC); the tests set a report
+let DIRS_API = true;
 let META_DEFAULT_FOLDER = '/work/u/notes';   // 25.3 B4: a configured default folder outside every project
 let PC_MODE = 'valid';   // valid | invalid | unreadable | down
 let META_BUILD = 'b1';
@@ -258,6 +262,7 @@ const resp = (status, body, raw) => ({ ok: status < 300, status, json: async () 
 globalThis.fetch = async (url, opts) => {
   const u = new URL(url, 'http://h');
   if (u.searchParams.get('t') !== 'tok') LOG.errors.push('no token on ' + url);
+  if (PHONE_MODE.removed && !u.pathname.startsWith('/api/stream')) return resp(403, { ok: false, error: 'desktop only' });   // 19:45: a removed phone is 403 everywhere
   if (opts && opts.method === 'POST') {
     LOG.posts.push({ path: u.pathname, headers: opts.headers, body: JSON.parse(opts.body) });
     const b = JSON.parse(opts.body);
@@ -282,13 +287,33 @@ globalThis.fetch = async (url, opts) => {
         if (!d) return resp(404, { ok: false, error: 'no such desk' });
         if ('text' in b) return d.signin && d.signin.step === 'code' ? resp(200, { ok: true }) : resp(409, { ok: false, error: 'not at the code step' });
         const ks = Array.isArray(b.keys) ? b.keys : [];
-        if (!ks.length || ks.length > 4 || !ks.every(k => KEY_OK.includes(k))) return resp(400, { ok: false, error: 'bad keys' });
+        if (ks.length < 1 || ks.length > 4 || ks.some(k => !KEY_OK.includes(k))) return resp(400, { ok: false, error: 'bad keys' });
         return resp(200, { ok: true });
+      }
+      case '/api/pair/start':   // 19:35: the desktop starts a pairing; 503 when the listener is off
+        if (!(PHONE_MODE.phone && PHONE_MODE.phone.on)) return resp(503, { ok: false, error: 'phone listener off' });
+        return resp(200, { ok: true, code: 'ABCD1234', expires_in: 600, port: PHONE_MODE.phone.port || 8473,
+          addresses: ['192.0.2.10', '198.51.100.7'], fingerprint: 'ab12cd34', words: ['alpha', 'bravo', 'charlie', 'delta'],
+          payload: 'metabot-pair:1?a=192.0.2.10&p=8473&c=ABCD1234&f=ab12cd34' });
+      case '/api/devices/revoke': {   // confirm happened on the page; the server cuts the sockets (C5)
+        const i = PHONE_DEVICES.findIndex(d => d.id === b.id);
+        if (i < 0) return resp(404, { ok: false, error: 'unknown device' });
+        PHONE_DEVICES.splice(i, 1);
+        return resp(200, { ok: true });
+      }
+      case '/api/folders': {   // 22:10 B6: add a project root (or remove one); the home folder itself is refused
+        if (b.add) { if (!b.add || b.add === '' || b.add === '~') return resp(400, { ok: false, error: 'the home folder itself cannot be a project; pick a folder in it' }); return resp(200, { ok: true, project_roots: [b.add] }); }
+        if (b.remove) return resp(200, { ok: true, project_roots: [] });
+        return resp(400, { ok: false, error: 'add or remove' });
       }
       case '/api/modules/new':
         if (MODS_MADE.has(b.id)) return resp(409, { ok: false, error: 'module ' + b.id + ' exists' });
         MODS_MADE.add(b.id); return resp(200, { ok: true, file: '/s/modules/' + b.id + '.json', error: null });
-      case '/api/run': return resp(200, { ok: true, name: 'run-4', argv: ['/x/metabot', 'ask', '-e', b.engine, '-'], prompt_file: 'abc.txt', account_used: !!b.account });
+      case '/api/run': {   /* 16:10: an unknown account is a 404 on every engine */
+        const known = b.engine === 'cursor' ? (ACCT.cursor || []) : (ACCT.claude || []);
+        if (b.account && !known.some(a => a.name === b.account)) return resp(404, { ok: false, error: 'no such account' });
+        return resp(200, { ok: true, name: 'run-4', argv: ['/x/metabot', 'ask', '-e', b.engine, '-'], prompt_file: 'abc.txt', account_used: !!b.account });
+      }
       case '/api/mb/verify':
         if (PC_MODE === 'down') throw new TypeError('fetch failed');
         if (PC_MODE === 'unreadable') return resp(200, { ok: true, id: b.id, pc: null, pc_exit: 2, metabot: { receipt_state: 'unreadable' }, index_sha_ok: null, sha256: 'ab'.repeat(32) });
@@ -324,7 +349,16 @@ globalThis.fetch = async (url, opts) => {
   }
   LOG.gets.push(u.pathname + u.search);
   switch (true) {
-    case u.pathname === '/api/meta': return resp(200, { app: 'MetaBot', version: '0.1.0', build: META_BUILD, metabot: { bin: '/x/metabot', version: '0.3.0', ok: true }, orcha: { bin: '/x/orcha', version: '0.2.2', ok: true }, display: { vnc: false, unit: 'fc-gui' }, default_desk: 'desk-a', default_folder: META_DEFAULT_FOLDER, limits: { max_desks: 24, max_runs: 6 }, modules: 7, catalog: 4, inbox: META_INBOX });
+    case u.pathname === '/api/meta': return resp(200, { app: 'MetaBot', version: '0.1.0', build: META_BUILD, metabot: { bin: '/x/metabot', version: '0.3.0', ok: true }, orcha: { bin: '/x/orcha', version: '0.2.2', ok: true }, display: { vnc: false, unit: 'fc-gui' }, default_desk: 'desk-a', default_folder: META_DEFAULT_FOLDER, limits: { max_desks: 24, max_runs: 6 }, modules: 7, catalog: 4, inbox: META_INBOX, scope: PHONE_MODE.scope, device: PHONE_MODE.device, phone: PHONE_MODE.phone });
+    case u.pathname === '/api/devices': return resp(200, { devices: PHONE_DEVICES.slice() });   // 19:35: the paired devices
+    case u.pathname === '/api/doctor': return DOCTOR_FIX ? resp(200, DOCTOR_FIX) : resp(404, { ok: false, error: 'not found' });   // 21:50 B5
+    case u.pathname === '/api/dirs': {   // 22:10 B6: the folders a person may make a project; never keys or logins
+      if (!DIRS_API) return resp(404, { ok: false, error: 'not found' });
+      const under = u.searchParams.get('under') || '';
+      const table = { '': { parent: null, dirs: [{ name: 'work', path: '/work/u' }] },
+        '/work/u': { parent: '', dirs: [{ name: 'proj-one', path: '/work/u/proj-one' }, { name: 'notes', path: '/work/u/notes' }] } };
+      return resp(200, Object.assign({ ok: true, under }, table[under] || { parent: null, dirs: [] }));
+    }
     case u.pathname === '/api/tree': return resp(404, { ok: false, error: 'not found' });
     case u.pathname === '/api/desks': return resp(200, { desks: u.searchParams.get('scope') === 'metachat' ? DESKS.filter(d => d.meta.kind) : DESKS, streams: { 'in@lan': true, 'in@net': false } });
     case u.pathname === '/api/aliases': return resp(200, { aliases: ALIASES });
@@ -335,6 +369,7 @@ globalThis.fetch = async (url, opts) => {
     case u.pathname === '/api/modules': return resp(200, { modules: MODULES, errors: [{ file: 'user/broken.json', error: 'unknown catalog id x.y' }] });
     case u.pathname === '/api/catalog': return resp(200, CATALOG);
     case u.pathname === '/api/mb/runs': return resp(200, RUNS);
+    case u.pathname.startsWith('/api/mb/runlog/'): return resp(200, { ok: true, pid: 99, alive: false, exit: 0, log: 'hello from the log' });   // 00:55: the log of a run the app spawned itself
     case u.pathname === '/api/mb/run/run-9c2e-example': return resp(200, { ok: true, run: { run_id: 'run-9c2e-example', meta: { engine: 'claude', model: 'm', account: 'work', cost_musd: 12345, cost_source: 'engine', tokens: { in: 1, out: 2 }, prompt: '<script>p</script>', final: "answer 'x'" }, verdicts: [], caveat: '' }, receipt_state: 'valid', desk: null });
     case u.pathname === '/api/mb/receipt/run-9c2e-example': return resp(200, null, GOLDEN_TEXT);
     case u.pathname.startsWith('/api/mb/receipt/'): return resp(404, { ok: false, error: 'not found' });
@@ -347,7 +382,7 @@ const BOOT_DEV = process.env.MC_UI_BOOT === 'dev';   // second run from ui-smoke
 const ES_LIST = [];
 class FakeES { constructor(u) { this.url = u; this.readyState = 0; this.listeners = {}; ES_LIST.push(this); } addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); } close() { this.readyState = 2; } }
 Object.assign(globalThis, {
-  window: globalThis, document, localStorage: BOOT_DEV ? { fcMode: 'dev' } : {}, navigator: { vibrate(v) { LOG.vib.push(v); } },
+  window: globalThis, document, localStorage: BOOT_DEV ? { fcMode: 'dev' } : {},
   location: { search: '?t=tok', protocol: 'http:', host: '127.0.0.1:1', reload() { LOG.reloaded = true; } },
   innerWidth: 1400, innerHeight: 876, addEventListener() {}, removeEventListener() {},
   requestAnimationFrame: f => setTimeout(f, 0),
@@ -358,6 +393,10 @@ Object.assign(globalThis, {
   Event: class { constructor(t) { this.type = t; } },
   confirm: () => true, prompt: () => PROMPT_ANSWER, alert() {},
 });
+// Node >= 21 ships a getter-only navigator on globalThis, so a plain assignment in the
+// map above throws before a single check runs (CI pins Node 20; a desktop may run newer).
+// defineProperty replaces it on every Node; the haptic stub must stay (tests assert it).
+Object.defineProperty(globalThis, 'navigator', { value: { vibrate(v) { LOG.vib.push(v); } }, configurable: true, writable: true });
 const tick = (ms = 5) => new Promise(r => setTimeout(r, ms));
 const until = async (cond, ms = 2000) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await tick(5); return cond(); };
 const STATS = { p: 0, f: 0 };
@@ -925,7 +964,13 @@ const scenario = `
   ok($('chipEngine').options[0].textContent === 'claude' && $('chipEngine').options[2].textContent === 'openai · local · works offline' && $('chipEngine').options[3].textContent === 'echo · bridge · local · works offline', 'U5: local engines are marked local · works offline: ' + [...$('chipEngine').options].map(o => o.textContent).join(' | '));
   ok([...$('chipAccount').options].map(o => o.value).join(',') === ',work', 'login chip lists MetaBot logins');
   ok([...$('chipProject').options].some(o => o.value === '/work/u/proj-one'), 'folder chip lists project paths');
-  $('chipEngine').value = 'cursor'; accountChipVisibility(); ok($('chipAccount').classList.contains('hidden'), 'login chip hidden for cursor');
+  $('chipEngine').value = 'cursor'; accountChipVisibility(); renderRunPill();
+  ok(!$('chipAccount').classList.contains('hidden') && $('chipAccountLabel').textContent === 'account', '16:05: cursor shows the account chip, labelled account');
+  ok(runAccountOptions().map(o => o[0]).join(',') === ',alt', 'cursor runs pick from the cursor accounts: ' + JSON.stringify(runAccountOptions().map(o => o[1])));
+  ok($('chipModel').getAttribute('list') === 'modelList' && [...$('modelList').children].map(o => o.value).join(',') === 'grok-4.7-low,grok-4.7-medium,grok-4.7-high,grok-4.7-xhigh', '03:50 ask: the model chip offers the four cursor tiers as a datalist');
+  ok($('runPill').textContent.includes('default account'), 'the pill reads default account for cursor: ' + $('runPill').textContent);
+  $('chipEngine').value = 'codex'; accountChipVisibility(); ok(!$('chipAccount').classList.contains('hidden'), 'codex still shows the login chip (it takes logins)');
+  $('chipEngine').value = 'openai'; accountChipVisibility(); ok($('chipAccount').classList.contains('hidden') && $('chipModel').getAttribute('list') === 'modelList' && [...$('modelList').children].map(o => o.value).join(',') === 'qwen2.5-coder:3b', 'no account chip for openai, and its own models fill the datalist');
   $('chipEngine').value = 'claude'; accountChipVisibility(); $('chipAccount').value = 'work'; $('chipProject').value = '/work/u/proj-one'; $('chipCost').value = '1.50';
   renderRunPill(); ok($('runEquals').textContent.startsWith('equals metabot ask -e claude --login work'), 'the run sheet shows what it equals: ' + $('runEquals').textContent);
   text.value = 'summarise the repo'; const e1 = $('f').onsubmit({ preventDefault() {} }); const e2 = $('f').onsubmit({ preventDefault() {} }); await e1; await e2; await tick(20);
@@ -1790,6 +1835,238 @@ const scenario = `
     const plain = bubble({via: 'desk', time: 1730000203, message: 'hi', target: 'desk-a', from: 'desk-a', typed: false, mirror: true});
     ok(!plain.querySelector('.runline'), 'run report: a plain reply has no receipt line');
   }
+  // ---- the 16:05/16:10 asks, the tablet findings and the 01:35 run state (Cursor desk, 11-11) ----
+  {   // 22:30 tablet finding + 1.3: caps.engines decides the picker; the default is the first engine on this computer
+    META.caps = {engines: {openai: 'http', echo: 'cli'}};
+    ENGINES = null; ENGINE_INFO = {}; await loadRunChips();
+    ok([...$('chipEngine').options].map(o => o.value).join(',') === 'openai,echo' && $('chipEngine').value === 'openai', 'caps.engines filters the picker and the default is the first of them: ' + [...$('chipEngine').options].map(o => o.value).join(','));
+    META.caps = null; ENGINES = null; ENGINE_INFO = {}; await loadRunChips(); $('chipEngine').value = 'claude'; accountChipVisibility();
+  }
+  {   // 16:05: a cursor run carries its account; 16:10: an unknown account is a plain toast, never a run
+    setMode('run'); await tick(30);
+    $('chipEngine').value = 'cursor'; accountChipVisibility(); $('chipAccount').value = 'alt'; $('chipProject').value = '/work/u/proj-one'; $('chipCost').value = ''; $('chipModel').value = ''; renderRunPill();
+    const nAcct = LOG.posts.filter(q => q.path === '/api/run').length;
+    text.value = 'ship the release'; await $('f').onsubmit({ preventDefault() {} }); await tick(20);
+    const postedAcct = LOG.posts.filter(q => q.path === '/api/run');
+    ok(postedAcct.length === nAcct + 1 && postedAcct.at(-1).body.engine === 'cursor' && postedAcct.at(-1).body.account === 'alt', '16:05: a cursor run posts body.account: ' + JSON.stringify(postedAcct.at(-1).body.account));
+    $('chipAccount').value = 'ghost'; text.value = 'ship the release'; await $('f').onsubmit({ preventDefault() {} }); await tick(20);
+    ok($('toast').textContent.includes('not on this computer'), '16:10: an unknown account is a plain toast: ' + $('toast').textContent);
+    ok(!msgs().some(m => /run refused/.test(m.message || '')), 'the account 404 is not a run-refused alert');
+    $('chipEngine').value = 'claude'; accountChipVisibility(); $('chipAccount').value = 'work'; renderRunPill();
+    setMode('msg'); await tick(10);
+  }
+  {   // 01:35: an interrupted run is its own state, never "invalid"; its record says what happened
+    RUNS.push({run_id: 'gone-9', state: 'interrupted', problem: 'the app was stopped mid-run', desk: 'run-3', project: 'other', started: '2026-08-07T11:00:00Z', engine: 'cursor'});
+    await pollRuns();
+    const gone = ALL_RUNS.find(r => r.run_id === 'gone-9');
+    ok(runGlyph(gone).join('|') === 'x|interrupted (no receipt)', 'the interrupted glyph and word: ' + runGlyph(gone).join('|'));
+    ok(runState(gone)[0] === 'interrupted (no receipt)' && runState(gone)[1] === 'bad', 'its row state is interrupted, never invalid');
+    openRunRecord('gone-9', gone); await tick(10);
+    ok($('dockBody').textContent.includes('interrupted (no receipt)') && $('dockBody').textContent.includes('the app was stopped mid-run'), 'its record shows the problem');
+    ok(!$('dockBody').textContent.includes('checking'), 'its record never starts a receipt check');
+    closePanel();
+    RUNS.pop(); await pollRuns();
+  }
+  {   // the 11-10 tablet finding: a run desk's shell prompt after its run ended is an idle shell, never an ask
+    const runDesk3 = {name: 'run-3', armed: true, armed_at: 0, n: 0, pane: true, reach: 'pane', cli: 'metabot', cwd: '/tmp/x', project: 'other', needs_you: true, ask: '', cls: '', meta: {kind: 'run', engine: 'cursor'}};
+    DESKS.push(runDesk3);
+    const keepR3 = RUNS.slice(); RUNS.length = 0;
+    RUNS.push({run_id: 'mb-r3', state: 'done', receipt_state: 'valid', desk: 'run-3', project: 'other', started: '2026-08-07T10:00:00Z', engine: 'cursor'});
+    TERMS['run-3'] = scr('$ ');
+    await pollRuns(); await fetchDesks(); await refreshTree(); await tick(10);
+    openDeskSheet('run-3'); await tick(10);
+    ok($('sheetEquals').textContent.includes('nothing is asking'), 'the sheet never says an idle run shell is asking: ' + $('sheetEquals').textContent);
+    ok(!$('sheetKeys').textContent.includes('Allow'), 'no one-tap allow keys for an idle shell: ' + $('sheetKeys').textContent);
+    closeSheets();
+    const wk3 = waitKeys((TREE.waiting || []).find(x => x.desk === 'run-3') || {desk: 'run-3'}, runDesk3);
+    ok(wk3.textContent.includes('its run ended — the shell is idle'), 'the waiting row says the run ended, not that the desk is asking: ' + wk3.textContent);
+    RUNS[0].state = 'live'; delete RUNS[0].receipt_state; await pollRuns(); await tick(10);
+    openDeskSheet('run-3'); await tick(10);
+    ok($('sheetEquals').textContent.includes('the desk is asking'), 'a live run desk still presents its prompt: ' + $('sheetEquals').textContent);
+    closeSheets();
+    RUNS.length = 0; keepR3.forEach(r => RUNS.push(r)); await pollRuns();
+    delete TERMS['run-3']; DESKS.splice(DESKS.findIndex(x => x.name === 'run-3'), 1); await fetchDesks(); await refreshTree();
+  }
+  {   // 03:50 ask: an unapproved workflow row carries the Approve desk
+    openPage('workflows'); await tick(30);
+    const wfRowEl = ref => [...$('page').querySelectorAll('.rrow')].find(r => r.querySelector('.rid') && r.querySelector('.rid').textContent === ref);
+    ok(wfRowEl('wf-one') && ![...wfRowEl('wf-one').querySelectorAll('button')].some(b => b.textContent === 'Approve'), 'an approved workflow row has no Approve button');
+    ok(wfRowEl('wf-two') && [...wfRowEl('wf-two').querySelectorAll('button')].some(b => b.textContent === 'Approve'), 'an unapproved workflow row carries Approve');
+    const nAp = LOG.posts.filter(q => q.path === '/api/cli/desk' && q.body.id === 'workflow.approve').length;
+    [...wfRowEl('wf-two').querySelectorAll('button')].find(b => b.textContent === 'Approve').onclick(); await tick(10);
+    const apPosts = LOG.posts.filter(q => q.path === '/api/cli/desk' && q.body.id === 'workflow.approve');
+    ok(apPosts.length === nAp + 1 && apPosts.at(-1).body.params.ref === 'wf-two', 'Approve opens the workflow.approve desk for that row: ' + JSON.stringify(apPosts.at(-1).body.params));
+    closeSheets();
+  }
+  {   // the 22:35 tablet finding: a sign-in desk never sits under a folder path
+    DESKS.push({name: 'signin-cursor-alt', armed: false, armed_at: 0, n: 0, pane: true, reach: 'pane', cli: 'cursor', cwd: '/s/signin', project: 'other', needs_you: false, meta: {kind: 'cursor', account: 'alt', signin: true}, signin: {engine: 'cursor', account: 'alt', step: 'link', url: null}});
+    await fetchDesks(); await refreshTree(); await tick(10);
+    ok(TREE.signin && TREE.signin.some(d => d.name === 'signin-cursor-alt'), 'the sign-in desk is pulled into its own group');
+    ok(!(TREE.other || []).some(f => (f.desks || []).some(d => d.name === 'signin-cursor-alt')), 'it no longer sits under Other folders');
+    ok(!$('sideBody').textContent.includes('/s/signin'), 'the raw state path never shows in the tree');
+    ok($('sideBody').textContent.includes('Signing in'), 'the tree shows the Signing in group');
+    DESKS.splice(DESKS.findIndex(x => x.name === 'signin-cursor-alt'), 1); await fetchDesks(); await refreshTree();
+  }
+  {   // 19:45: a phone the computer removed is 403 everywhere — one banner, then metabot://retry
+    PHONE_MODE.scope = 'phone'; await fetchMeta();
+    ok(META.scope === 'phone', 'the phone scope is read from /api/meta');
+    PHONE_MODE.removed = true; PHONE_GONE = false;
+    await fetchMeta().catch(() => {});
+    ok($('banner').textContent.includes('removed from the computer'), 'the removal banner: ' + $('banner').textContent.slice(0, 60));
+    ok(location.href === 'metabot://retry', 'the page hands itself to the APK pairing screen: ' + String(location.href));
+    await api('/api/meta', {}); ok(PHONE_GONE === true, 'a second 403 stays quiet (one banner, one navigation)');
+    PHONE_MODE.removed = false; PHONE_MODE.scope = 'desktop'; PHONE_GONE = false; location.href = ''; $('banner').textContent = '';
+    await fetchMeta();
+    ok(location.href === '' && !$('banner').textContent, 'the desktop scope keeps the older behaviour');
+  }
+  {   // 1.3 (B8): the page gates its surfaces on META.caps, never on the OS
+    const keepWS = WS;
+    const startList = () => { setWS('zz-empty'); renderLog(); return [...$('log').querySelectorAll('.start')].map(b => (b.querySelectorAll('b')[0] || {}).textContent || ''); };
+    ok(startList().length === 5, 'no caps block: every start shows (an older PC means everything on)');
+    META.caps = {desks: false};
+    ok(!startList().includes('Desks side by side') && startList().length === 4, 'desks=false hides the Desks side by side start: ' + startList().join(','));
+    openSpawnSheet();
+    ok($('toast').textContent.includes('Terminals need tmux on this computer.'), 'the spawn flow explains instead of opening: ' + $('toast').textContent);
+    openPage('setup'); await tick(10);
+    ok(!$('page').textContent.includes('A desk') && $('page').textContent.includes('of 3'), 'desks=false drops the desk step and never counts it');
+    closeSheets();
+    META.caps = {on_device: true};
+    openPage('setup'); await tick(10);
+    ok($('page').textContent.includes('add an API key or a model server address') && $('page').textContent.includes('of 4'), 'on_device: the sign-in step names the key or model server; four steps still');
+    META.caps = {sandbox: false, engines: {claude: 'cli', cursor: 'cli', openai: 'http'}};
+    ENGINES = null; ENGINE_INFO = {}; await loadRunChips();
+    const curOpt = [...$('chipEngine').options].find(o => o.value === 'cursor');
+    ok(curOpt && curOpt.disabled === true && curOpt.textContent.includes('needs bwrap'), 'sandbox=false marks cursor unavailable: ' + (curOpt && curOpt.textContent));
+    ok($('chipEngine').value === 'claude', 'the default never lands on a refused engine: ' + $('chipEngine').value);
+    META.caps = {engines: {claude: 'cli', openai: 'http'}};
+    ENGINES = null; ENGINE_INFO = {}; await loadRunChips();
+    openPage('accounts'); await tick(10); if ($('acctNew')) $('acctNew').onclick(); await tick(5);
+    const acctSel = $('acctForm') ? $('acctForm').querySelectorAll('select')[0] : null;
+    ok(acctSel && acctSel.options.map(o => o.value).join(',') === 'claude', 'sign-in offers the cli engines the computer has: ' + (acctSel ? acctSel.options.map(o => o.value).join(',') : 'no form'));
+    META.caps = {service: 'systemd'};
+    openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('the systemd user service'), 'the keep-running line names the host service');
+    META.caps = {service: 'none'};
+    openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('no service manager here'), 'service=none says so');
+    META.caps = null;
+    openPage('settings'); await tick(10);
+    ok(!$('page').textContent.includes('keep running'), 'an older PC shows no keep-running line');
+    setUMode('dev'); openPage('settings'); await tick(10);
+    const stBtn = [...$('page').querySelectorAll('button')].find(b => b.textContent === 'Run self-test');
+    ok(stBtn && stBtn.getAttribute('disabled') !== null && $('page').textContent.includes('docs/SELFTEST.md'), 'the self-test button waits for the on-device runner');
+    setUMode('user');
+    // desks=false: a run the app spawned itself is read through its log, not a desk
+    META.caps = {desks: false};
+    const doneRow = RUNS.find(x => x.run_id === 'run-9c2e-example');
+    const keepDesk = doneRow.desk; doneRow.desk = 'run-3';
+    await pollRuns();
+    openRunRecord('run-9c2e-example', ALL_RUNS.find(x => x.run_id === 'run-9c2e-example')); await tick(20);
+    const logBtn = [...$('dockBody').querySelectorAll('button')].find(b => b.textContent === 'Open the run log');
+    ok(!!logBtn, 'desks=false: the run record offers the run log');
+    logBtn.onclick(); await tick(10);
+    ok($('dockBody').textContent.includes('hello from the log'), 'the run log shows in the record');
+    closePanel();
+    doneRow.desk = keepDesk;
+    META.caps = null; ENGINES = null; ENGINE_INFO = {}; await loadRunChips(); $('chipEngine').value = 'claude'; accountChipVisibility();
+    setWS(keepWS); renderLog();
+  }
+  {   // 19:35: the Phone section — pair a phone, the four words, the devices; the scopes and caps gate it
+    PHONE_MODE.phone = { on: true, port: 8473, fingerprint: 'ab12cd34', devices: 1, pairing: false };
+    await fetchMeta();
+    openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('Pixel 9'), 'the paired device lists');
+    const pairBtn = [...$('page').querySelectorAll('button')].find(b => b.textContent === 'Pair a phone');
+    ok(!!pairBtn, 'the Phone section offers pairing');
+    pairBtn.onclick(); await tick(10);
+    ok($('page').textContent.includes('ABCD 1234'), 'the code shows in groups of four');
+    ok($('page').textContent.includes('alpha · bravo · charlie · delta'), 'the four words show');
+    ok($('page').textContent.includes('192.0.2.10:8473') && $('page').textContent.includes('198.51.100.7'), 'the typed alternative: first address and port, the others small');
+    ok($('page').textContent.includes('say Yes there when they match'), 'the match warning');
+    ok($('pairLeft') && /[0-9]+ s/.test($('pairLeft').textContent), 'the countdown runs: ' + ($('pairLeft') ? $('pairLeft').textContent : ''));
+    PHONE_MODE.phone = { on: true, port: 8473, fingerprint: 'ab12cd34', devices: 2, pairing: false };
+    await tick(2200); await tick(60);
+    ok($('toast').textContent.includes('Paired'), 'a claimed code says Paired');
+    ok(!$('page').textContent.includes('ABCD 1234'), 'the code is gone once claimed');
+    const c0 = globalThis.confirm; globalThis.confirm = () => true;
+    const rm = [...$('page').querySelectorAll('button')].find(b => b.textContent === 'Remove');
+    rm.onclick(); await tick(10);
+    ok(PHONE_DEVICES.length === 0 && $('page').textContent.includes('No phones paired yet'), 'Remove revokes the device after a confirm');
+    globalThis.confirm = c0;
+    PHONE_DEVICES.push({ id: 'd1', name: 'Pixel 9', scope: 'phone', created: '2026-11-10T10:00:00Z', seen: '2026-11-11T10:00:00Z' });
+    PHONE_MODE.phone = null; await fetchMeta(); openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('Phone pairing needs openssl on this computer.'), 'no certificate: the openssl line');
+    ok(!$('page').querySelectorAll('button').some(b => b.textContent === 'Pair a phone'), 'no pair button without openssl');
+    PHONE_MODE.phone = { on: false, port: 8473, fingerprint: 'ab12cd34', devices: 1, pairing: false };
+    await fetchMeta(); openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('The phone listener is off on this computer.'), 'a certificate but no listener says so, no button');
+    ok(!$('page').querySelectorAll('button').some(b => b.textContent === 'Pair a phone'), 'no pair button while the listener is off');
+    PHONE_MODE.scope = 'phone'; PHONE_MODE.device = { id: 'd2', name: 'Pixel 9' }; PHONE_MODE.phone = { on: true, port: 8473, fingerprint: 'ab12cd34', devices: 1, pairing: false };
+    await fetchMeta(); openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('This phone is paired as Pixel 9') && !$('page').querySelectorAll('button').some(b => b.textContent === 'Pair a phone'), 'the phone scope shows its own name, never the pairing part');
+    PHONE_MODE.scope = 'desktop'; PHONE_MODE.device = null; await fetchMeta();
+    openPage('setup'); await tick(10);
+    ok($('page').textContent.includes('Pair a phone') && $('page').textContent.includes('of 4'), 'set-up offers Pair a phone without counting it');
+    const setUpBtn = [...$('page').querySelectorAll('button')].find(b => b.textContent === 'Pair a phone');
+    setUpBtn.onclick(); await tick(10);
+    ok(ACTIVE && ACTIVE.id === 'settings' && $('page').textContent.includes('Pair a phone'), 'the set-up line opens Settings → Phone');
+    META.caps = {on_device: true};
+    openPage('settings'); await tick(10);
+    ok($('page').textContent.includes('Connect to another computer'), 'on_device: the phone section offers the other computer');
+    META.caps = null;
+    PHONE_MODE.phone = null; await fetchMeta();
+  }
+  {   // 21:50/22:10: set-up step 0 (the doctor) and the folder picker
+    DOCTOR_FIX = { ok: false, items: [
+      { id: 'python', ok: true, blocker: false, what: 'Python 3.11+', fix: '' },
+      { id: 'core', ok: true, blocker: false, what: 'the metabot core', fix: '' },
+      { id: 'key', ok: true, blocker: false, what: 'a signing key', fix: '' },
+      { id: 'tmux', ok: true, blocker: false, what: 'tmux 3.2+', fix: '' },
+      { id: 'engine.claude', ok: true, blocker: false, what: 'claude', fix: '' },
+      { id: 'engine.codex', ok: false, blocker: false, what: 'codex', fix: 'optional: install codex to run its engine here' },
+      { id: 'engine.cursor', ok: false, blocker: true, what: 'cursor', fix: 'install cursor-agent to run cursor here' },
+      { id: 'engine.local', ok: false, blocker: false, what: 'a local model', fix: 'optional: a local model works offline' },
+      { id: 'sandbox', ok: true, blocker: false, what: 'the sandbox', fix: '' },
+      { id: 'folder', ok: false, blocker: true, what: 'a project folder', fix: 'choose a folder in the set-up steps' },
+    ] };
+    DOCTOR = null; DOCTOR_LOADED = false;
+    openPage('setup'); await tick(10);
+    const docRows = () => [...$('page').querySelectorAll('.doc')];
+    ok(docRows().length === 10, 'step 0 lists every doctor finding: ' + docRows().length);
+    ok($('page').textContent.includes('install cursor-agent to run cursor here'), 'a failing row shows its fix');
+    ok(docRows().some(r => r.classList.contains('block')), 'a blocker row is red');
+    ok(docRows().some(r => r.classList.contains('note')), 'a note row is grey');
+    ok($('page').textContent.includes('of 4'), 'the doctor never counts in the four steps');
+    ok($('page').textContent.includes('a finding needs attention'), 'the step 0 line says a finding needs attention');
+    const keepSetup = localStorage.fcSetup;
+    localStorage.fcSetup = ''; openPage('accounts'); await tick(5);
+    await doctorAutoOpen();
+    ok(ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup', 'a blocker opens the set-up page by itself');
+    localStorage.fcSetup = '1'; openPage('accounts'); await tick(5);
+    await doctorAutoOpen();
+    ok(ACTIVE && ACTIVE.id === 'accounts', 'a dismissed set-up never opens by itself again');
+    localStorage.fcSetup = keepSetup;
+    openPage('setup'); await tick(10);
+    const fstep = () => [...$('page').querySelectorAll('.step')].find(s => s.textContent.includes('A project folder'));
+    fstep().querySelectorAll('button')[0].onclick(); await tick(10);
+    ok(DOCK.id === 'fspick' && $('dockBody').textContent.includes('the home folder'), 'the folder step opens the picker at the home folder');
+    ok($('dockBody').textContent.includes('work'), 'the home folder lists its folders');
+    [...$('dockBody').querySelectorAll('button')].find(b => b.textContent === 'work').onclick(); await tick(10);
+    ok($('dockBody').textContent.includes('proj-one') && $('dockBody').textContent.includes('notes'), 'a folder opens its own folders');
+    const nPick = LOG.posts.filter(q => q.path === '/api/folders').length;
+    [...$('dockBody').querySelectorAll('button')].find(b => b.textContent === 'Choose this folder').onclick(); await tick(10);
+    ok(LOG.posts.filter(q => q.path === '/api/folders').length === nPick + 1 && LOG.posts.filter(q => q.path === '/api/folders').at(-1).body.add === '/work/u', 'choosing calls POST /api/folders with the path');
+    ok($('toast').textContent.includes('folder added as a project'), 'the folder works at once');
+    DIRS_API = false; FOLDERS_API = null;
+    openPage('setup'); await tick(10);
+    fstep().querySelectorAll('button')[0].onclick(); await tick(10);
+    ok(ACTIVE && ACTIVE.id === 'settings', 'an older PC without the route falls back to Settings → Folders');
+    DIRS_API = true; FOLDERS_API = null;
+    const keepDoc = DOCTOR_FIX; DOCTOR_FIX = null; DOCTOR = null; DOCTOR_LOADED = false;
+    openPage('setup'); await tick(10);
+    ok(!$('page').querySelectorAll('.doc').length && $('page').textContent.includes('of 4'), 'no doctor route: no step 0, the four steps stand alone');
+    DOCTOR_FIX = null; DOCTOR = null; DOCTOR_LOADED = false;
+  }
   closeSheets(); setUMode('dev'); await tick(20);
   // every POST carried the CSRF headers
   ok(LOG.posts.length > 8 && LOG.posts.every(q => q.headers['X-MetaChat'] === '1' && q.headers['Content-Type'] === 'application/json'), LOG.posts.length + ' POSTs, every one with X-MetaChat: 1 and Content-Type: application/json');
@@ -1799,10 +2076,13 @@ const scenario = `
   process.exit(STATS.f ? 1 : 0);
 })().catch(e => { console.log('FAIL scenario threw: ' + (e && e.stack || e)); process.exit(1); });
 `;
-Object.assign(globalThis, { tick, until, ok, all, LOG, MODULES, RUNS: RUNS.runs, STATS, DESKS, isResize, docFire, ES_LIST, Buffer, XT, ACCT, FIX_DESKS: DESKS, WF_ROWS });
+Object.assign(globalThis, { tick, until, ok, all, LOG, MODULES, RUNS: RUNS.runs, STATS, DESKS, isResize, docFire, ES_LIST, Buffer, XT, ACCT, FIX_DESKS: DESKS, WF_ROWS, PHONE_DEVICES });
 Object.defineProperty(globalThis, 'XT_DOWN', { get() { return XT_DOWN; }, set(v) { XT_DOWN = v; } });
 Object.defineProperty(globalThis, 'META_DEFAULT_FOLDER', { get() { return META_DEFAULT_FOLDER; }, set(v) { META_DEFAULT_FOLDER = v; } });
 Object.defineProperty(globalThis, 'PC_MODE', { get() { return PC_MODE; }, set(v) { PC_MODE = v; } });
+Object.defineProperty(globalThis, 'PHONE_MODE', { get() { return PHONE_MODE; }, set(v) { PHONE_MODE = v; } });
+Object.defineProperty(globalThis, 'DOCTOR_FIX', { get() { return DOCTOR_FIX; }, set(v) { DOCTOR_FIX = v; } });
+Object.defineProperty(globalThis, 'DIRS_API', { get() { return DIRS_API; }, set(v) { DIRS_API = v; } });
 Object.defineProperty(globalThis, 'PROMPT_ANSWER', { get() { return PROMPT_ANSWER; }, set(v) { PROMPT_ANSWER = v; } });
 Object.defineProperty(globalThis, 'META_BUILD', { get() { return META_BUILD; }, set(v) { META_BUILD = v; } });
 Object.defineProperty(globalThis, 'DISPOSED', { get() { return DISPOSED; } });
