@@ -169,7 +169,7 @@ jobs:
       - name: Build the wheels and download the locked set
         run: |
           python3 apps/metabot-app/packaging/wheelhouse.py --platform linux-x86_64 --python 3.12 --out "$RUNNER_TEMP/wheels"
-          ls "$RUNNER_TEMP/wheels"/orcha_sdk-*.whl "$RUNNER_TEMP/wheels"/orcha_metabot-*.whl "$RUNNER_TEMP/wheels"/metaorcha_app-*.whl
+          ls "$RUNNER_TEMP/wheels"/orcha_sdk-*.whl "$RUNNER_TEMP/wheels"/metaorcha-*.whl "$RUNNER_TEMP/wheels"/metaorcha_app-*.whl
           wc -l "$RUNNER_TEMP/wheels/requirements.lock"
 
       - name: Install from the folder alone, hashes required

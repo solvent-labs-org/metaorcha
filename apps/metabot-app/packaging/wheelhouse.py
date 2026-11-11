@@ -84,7 +84,7 @@ def build_argvs(root: Path, out: Path) -> list[list[str]]:
 
 
 def export_argv(root: Path, requirements: Path) -> list[str]:
-    return ["uv", "export", "--frozen", "--package", "orcha-metabot", "--no-emit-project",
+    return ["uv", "export", "--frozen", "--package", "metaorcha", "--no-emit-project",
             "--no-emit-workspace", "--no-hashes", "--no-dev", "-o", str(requirements), "--directory", str(root)]
 
 
