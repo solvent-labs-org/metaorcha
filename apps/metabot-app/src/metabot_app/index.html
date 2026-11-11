@@ -4655,7 +4655,7 @@ async function signinRefresh() {
   const d = deskInfo(SIGNIN.name);
   if (signinKey(d) !== SIGNIN.key) drawSignin($('dockBody'));   // a new step redraws; what is typed stays otherwise
 }
-const signinWhere = d => (d && d.signin && d.signin.where === 'pc') ? 'pc' : 'here';   /* 11-12 D1: a login the phone started finishes on the computer */
+const signinWhere = d => (d && d.signin && d.signin.where === 'pc' && signinStep(d) !== 'code') ? 'pc' : 'here';   /* 11-12 D1: a link-only login the phone started finishes on the computer; a code step is finished here (open, approve, paste the code) */
 const signinKey = d => signinStep(d) + '|' + (d ? signinUrl(d.signin) : '') + '|' + signinWhere(d);
 function drawSignin(body) {
   const name = SIGNIN.name, d = deskInfo(name), step = signinStep(d), url = d ? signinUrl(d.signin) : '', onPc = signinWhere(d) === 'pc';

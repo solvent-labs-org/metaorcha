@@ -1058,6 +1058,11 @@ const scenario = `
   sinRow.signin.step = 'code'; sinRow.signin.url = 'https://claude.ai/oauth/authorize?code=true&client_id=c1&state=s1'; await signinRefresh(); await tick(5);
   ok(sinA().length === 1 && sinA()[0].attrs.href === sinRow.signin.url && sinA()[0].attrs.target === '_blank' && sinA()[0].attrs.rel === 'noopener noreferrer' && sinA()[0].textContent === 'Open sign-in page', 'U1 code: Open sign-in page is a link the browser opens (target=_blank, rel=noopener noreferrer)');
   ok($('dockBody').textContent.includes('Open the sign-in page, approve, paste the code it shows') && !!sinBtn('Copy link') && !!sinBtn('Send code') && $('dockBody').querySelectorAll('input').length === 1, 'U1 code: the line, Copy link, the code field and Send code');
+  {   // Bugbot 11-12 (5th pass): Claude's code step is finished on this device (open, approve, paste the code here), so where=pc keeps its link
+    sinRow.signin.where = 'pc'; await signinRefresh(); await tick(5);
+    ok(sinA().length === 1 && sinA()[0].textContent === 'Open sign-in page' && !$('dockBody').textContent.includes('Open this on the computer'), 'U1 code + where=pc: the link stays, the code is pasted here');
+    sinRow.signin.where = 'here'; await signinRefresh(); await tick(5);
+  }
   if (sinBtn('Copy link')) sinBtn('Copy link').onclick();
   ok($('toast').textContent.startsWith('copied: https://claude.ai/'), 'U1: Copy link copies the server link: ' + $('toast').textContent);
   const nKeys1 = keyPosts().length;
