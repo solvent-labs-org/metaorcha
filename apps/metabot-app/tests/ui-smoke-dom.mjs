@@ -262,7 +262,8 @@ const resp = (status, body, raw) => ({ ok: status < 300, status, json: async () 
 globalThis.fetch = async (url, opts) => {
   const u = new URL(url, 'http://h');
   if (u.searchParams.get('t') !== 'tok') LOG.errors.push('no token on ' + url);
-  if (PHONE_MODE.removed && !u.pathname.startsWith('/api/stream')) return resp(403, { ok: false, error: 'desktop only' });   // 19:45: a removed phone is 403 everywhere
+  if (PHONE_MODE.removed && !u.pathname.startsWith('/api/stream')) return resp(403, { ok: false, error: 'bad token' });   // 19:45: a removed phone is 403 everywhere (its token is gone)
+  if (u.pathname === '/api/refuse403') return resp(403, { ok: false, error: 'default desk' });   // Bugbot 11-11 (1): an ordinary refusal, not a removal
   if (opts && opts.method === 'POST') {
     LOG.posts.push({ path: u.pathname, headers: opts.headers, body: JSON.parse(opts.body) });
     const b = JSON.parse(opts.body);
@@ -339,7 +340,7 @@ globalThis.fetch = async (url, opts) => {
       case '/api/accounts': return resp(200, { ok: true, engine: b.engine, name: b.name, folder: '/s/accounts/' + b.engine + '/' + b.name });
       case '/api/kill': { const i = DESKS.findIndex(d => d.name === b.name && d.signin); if (i >= 0) DESKS.splice(i, 1); return resp(200, { ok: true }); }
       case '/api/send': if (b.target === 'old-chat') { const d = DESKS.find(x => x.name === 'old-chat'); return d && d.reach === 'pane' ? resp(200, { ok: true, via: 'pane', reach: 'pane' }) : resp(409, { ok: false, error: 'not armed', reach: 'none', via: '' }); }
-        return b.text === 'fail-me' ? resp(409, { ok: false, error: 'not armed', reach: 'none', via: '' }) : resp(200, { ok: true, via: b.target === 'desk-a' ? 'inbox' : 'pane', reach: b.target === 'desk-a' ? 'inbox' : 'pane' });
+        return b.text === 'refuse-403' ? resp(403, { ok: false, error: 'default desk' }) : b.text === 'fail-me' ? resp(409, { ok: false, error: 'not armed', reach: 'none', via: '' }) : resp(200, { ok: true, via: b.target === 'desk-a' ? 'inbox' : 'pane', reach: b.target === 'desk-a' ? 'inbox' : 'pane' });
       case '/api/alias': if (b.name === 'refuse-me') return resp(409, { ok: false, error: 'no such desk' }); if (b.alias) ALIASES[b.name] = b.alias; else delete ALIASES[b.name]; return resp(200, { ok: true });
       case '/api/pane': if (b.action === 'resume') { const d = DESKS.find(x => x.name === b.target); if (!d || !d.resume) return resp(409, { ok: false, error: 'no saved Claude session under this name' }); Object.assign(d, { reach: 'pane', resume: false, pane: true }); return resp(200, { ok: true, error: '', name: d.name }); }
         return resp(200, { ok: true });
@@ -2113,6 +2114,63 @@ const scenario = `
     ok($('sheetKeys').textContent.includes('Allow'), 'a new ask brings the keys back');
     closeSheets();
     DESKS.splice(DESKS.findIndex(x => x.name === 'desk-ans'), 1); delete TERMS['desk-ans']; await fetchDesks();
+  }
+  {   // Bugbot 11-11 (1): on the phone only a 403 "bad token" means the computer removed this device; every other 403 is a refusal
+    PHONE_MODE.scope = 'phone'; await fetchMeta(); PHONE_GONE = false; location.href = ''; $('banner').textContent = '';
+    const refused = await api('/api/send', {text: 'refuse-403', target: 'desk-a'});
+    ok(refused.status === 403 && PHONE_GONE === false && location.href === '' && !$('banner').textContent, 'a 403 "default desk" on the phone is a refusal: no banner, no pairing screen');
+    await getJ('/api/refuse403').catch(() => null);
+    ok(PHONE_GONE === false && location.href === '', 'the same on a GET');
+    PHONE_MODE.scope = 'desktop'; await fetchMeta();
+  }
+  {   // Bugbot 11-11 (2, 3, 4): set-up without desks asks for a first run, on-device the sign-in step is the engine the doctor sees, All set counts the visible steps
+    const stepEls = () => [...$('page').querySelectorAll('.step')].filter(e => !e.classList.contains('doc'));
+    const stepNamed = t => stepEls().find(e => e.textContent.includes(t));
+    const footer = () => [...$('page').querySelectorAll('button')].find(b => b.textContent === 'All set' || b.textContent === 'Skip for now');
+    const keepA = ACCOUNTS, keepDoc = DOCTOR_FIX, keepRuns = ALL_RUNS;
+    META.caps = {desks: false};
+    openPage('setup'); await tick(10);
+    ok(stepNamed('A run') && !stepNamed('A message'), 'no desks: the last step is a run, never a message no desk can take');
+    ok(stepNamed('A run').classList.contains('done') === (ALL_RUNS.length > 0), 'a run row ticks it (' + ALL_RUNS.length + ' rows)');
+    ALL_RUNS = [];
+    openPage('setup'); await tick(10);
+    ok(!stepNamed('A run').classList.contains('done'), 'no run yet: the step waits');
+    stepNamed('A run').querySelector('button').onclick(); await tick(5);
+    ok(!$('runSheet').classList.contains('hidden'), 'its button opens the run sheet');
+    closeSheets(); ALL_RUNS = keepRuns;
+    openPage('setup'); await tick(10);
+    const doneN = stepEls().filter(e => e.classList.contains('done')).length;
+    ok(doneN === stepEls().length && footer().textContent === 'All set', 'every visible step done reads All set, not Skip for now: ' + doneN + '/' + stepEls().length + ' ' + footer().textContent);
+    closeTab('page', 'setup');
+    META.caps = {on_device: true, desks: false};
+    ACCOUNTS = {claude: [], cursor: [], defaults: {}};
+    DOCTOR_FIX = {ok: true, items: [{id: 'engine.local', ok: true, blocker: false, what: 'a local model server answers with 1 model', fix: ''}]}; DOCTOR = null; DOCTOR_LOADED = false;
+    openPage('setup'); await tick(20);
+    ok(stepNamed('Sign in') && stepNamed('Sign in').classList.contains('done'), 'on-device: a model server the doctor sees ticks Sign in with no CLI login');
+    DOCTOR_FIX = {ok: false, items: [{id: 'engine.local', ok: false, blocker: false, what: 'no local model server is answering', fix: 'start a local model server, add an API key, or sign in to a CLI engine'}]}; DOCTOR = null; DOCTOR_LOADED = false;
+    openPage('setup'); await tick(20);
+    ok(stepNamed('Sign in') && !stepNamed('Sign in').classList.contains('done'), 'no engine answers: the step waits');
+    closeTab('page', 'setup');
+    ACCOUNTS = keepA; DOCTOR_FIX = keepDoc; DOCTOR = null; DOCTOR_LOADED = false; META.caps = null;
+  }
+  {   // Bugbot 11-11 (5): an interrupted run without desks opens its log, like a live or finished one
+    META.caps = {desks: false};
+    RUNS.push({run_id: 'gone-10', state: 'interrupted', problem: 'the app was stopped mid-run', desk: 'run-3', project: 'other', started: '2026-08-07T11:00:00Z', engine: 'cursor'});
+    await pollRuns();
+    openRunRecord('gone-10', ALL_RUNS.find(r => r.run_id === 'gone-10')); await tick(10);
+    const b5 = [...$('dockBody').querySelectorAll('button')].find(b => b.textContent === 'Open the run log' || b.textContent === 'Open desk');
+    ok(b5 && b5.textContent === 'Open the run log' && $('dockBody').textContent.includes('Its log may say why'), 'no desks: the interrupted record offers the run log: ' + (b5 && b5.textContent));
+    closePanel(); RUNS.pop(); await pollRuns(); META.caps = null;
+  }
+  {   // Bugbot 11-11 (6): a text answer that landed keeps Send off until the desk asks anew; a refused one stays live
+    const dA = DESKS.find(d => d.name === 'desk-a');
+    const row6 = waitKeys({desk: 'desk-a', cls: 'read', ask: 'text', ask_line: 'Enter to send', since: 7}, dA);
+    const inp6 = row6.querySelector('input'), send6 = [...row6.querySelectorAll('button')].find(b => b.textContent === 'Send');
+    inp6.value = 'fail-me'; await send6.onclick(); await tick(5);
+    ok(send6.disabled === false && inp6.disabled !== true, 'a refused text answer leaves Send live to try again');
+    inp6.value = 'do the other thing'; await send6.onclick(); await tick(5);
+    ok(send6.disabled === true && inp6.disabled === true, 'a sent text answer disables Send and the line until the desk asks anew');
+    delete SENT_ASK['desk-a'];
   }
   closeSheets(); setUMode('dev'); await tick(20);
   // every POST carried the CSRF headers

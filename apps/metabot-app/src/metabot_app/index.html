@@ -856,8 +856,7 @@ async function api(path, body, opts) {
     if (!j || typeof j !== 'object') j = {ok: false, error: 'bad reply'};
     if (!('ok' in j)) j.ok = r.ok;
     j.status = r.status;
-    if (r.status === 403 && META.scope === 'phone') phoneRemoved();
-    else if (r.status === 403 && j.error === 'bad token') badToken();
+    if (r.status === 403 && j.error === 'bad token') META.scope === 'phone' ? phoneRemoved() : badToken();   /* Bugbot 11-11: a 403 "default desk", "armed", "csrf"… is a refusal, never a removal */
     pcUp();
     return j;
   } catch (e) { pcDown(); return {ok: false, error: e && e.name === 'AbortError' ? 'PC not answering' : 'network', status: 0}; }
@@ -873,8 +872,7 @@ function getJ(path, opts) {
       const r = await fetch(tok(path), {signal: a.signal});
       if (r.status === 403) {
         let j = null; try { j = await r.json(); } catch (e) {}
-        if (META.scope === 'phone') phoneRemoved();
-        else if (j && j.error === 'bad token') badToken();
+        if (j && j.error === 'bad token') META.scope === 'phone' ? phoneRemoved() : badToken();   /* only the token says the device is gone */
       }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
@@ -2855,9 +2853,9 @@ async function sendAskText(name, value, btn, line, fp) {   /* 20:40 (1): the tex
     const r = await api('/api/send', {text: v, target: name, cid});
     if (!r.ok) { toast('⚠ ' + (r.error || ('HTTP ' + r.status)), 2600); return; }
     if (fp != null) SENT_ASK[name] = fp;
-    if (line) line.value = '';
+    if (line) { line.value = ''; line.disabled = true; }   /* Bugbot 11-11 (6): one ask takes one answer, from this tap on */
     toast('sent to ' + disp(name));
-  } finally { if (btn) btn.disabled = false; }
+  } finally { if (btn && !(fp != null && SENT_ASK[name] === fp)) btn.disabled = false; }
 }
 const askTextInput = (name, fp) => {   /* one text line + one Send, on the waiting row and on the sheet alike */
   const inp = h('input', {type: 'text', placeholder: 'tell the desk what to do instead', maxlength: '2000',
@@ -3805,9 +3803,10 @@ async function showReceipt(v, id, r) {
   if (r && r.state === 'interrupted') {   /* 01:35: no receipt to check — say what happened, never fetch bytes that are not there */
     v.appendChild(h('div', {class: 'dbar'}, h('span', {class: 'chip bad', text: 'interrupted (no receipt)'}), h('b', {class: 'num', text: id})));
     v.appendChild(card('The run was interrupted', (r.problem || 'its process is gone and it sealed no receipt') +
-      (r.desk ? '\nThe desk may still hold its terminal.' : '\nNo desk was attached to this run.'),
+      (r.desk ? (cap('desks') ? '\nThe desk may still hold its terminal.' : '\nIts log may say why.') : '\nNo desk was attached to this run.'),
       h('div', {class: 'dbar'},
-        h('button', {type: 'button', class: 'abtn', text: 'Open desk', disabled: !r.desk, onclick: () => revealDesk(r.desk)}),
+        h('button', {type: 'button', class: 'abtn', text: cap('desks') ? 'Open desk' : 'Open the run log', disabled: !r.desk,
+          onclick: () => { if (r.desk) cap('desks') ? revealDesk(r.desk) : showRunLog(v, r.desk); }}),
         h('button', {type: 'button', class: 'abtn', title: 'Refresh', 'aria-label': 'Refresh', onclick: () => pollRuns().then(() => openRunRecord(id))}, icon('refresh')))));
     return;
   }
@@ -5146,10 +5145,13 @@ function renderSetup(body) {
   const A = ACCOUNTS || {}, D = A.defaults || {};
   const unready = [].concat(claudeLogins(A).filter(x => !x.ready).map(x => ['claude', x.name]), (A.cursor || []).filter(x => x.ready === false).map(x => ['cursor', x.name]))[0];
   const have = {
-    account: !!(ACCOUNTS && ((D.claude && D.claude.ready) || (D.cursor && D.cursor.ready) || claudeLogins(A).some(x => x.ready) || (A.cursor || []).some(x => x.ready))),
+    account: cap('on_device')
+      ? !!(DOCTOR && (DOCTOR.items || []).some(it => it && it.id === 'engine.local' && it.ok))   /* Bugbot 11-11 (3): on the phone the engine is a model server or a key the doctor sees, not a CLI login */
+      : !!(ACCOUNTS && ((D.claude && D.claude.ready) || (D.cursor && D.cursor.ready) || claudeLogins(A).some(x => x.ready) || (A.cursor || []).some(x => x.ready))),
     folder: !!(PROJECTS && PROJECTS.some(p => (p.paths || []).length)),
     desk: (window.DESKS || []).some(d => d.meta && d.meta.kind && !d.meta.signin),   // RV-J: a sign-in desk is not a working desk
     message: MSGS.some(ev => ev.via === 'in'),
+    run: ALL_RUNS.length > 0,   /* Bugbot 11-11 (2): without desks the proof is a run, not a message */
   };
   if ((!ACCOUNTS || !PROJECTS) && !SETUP_LOADING) {
     SETUP_LOADING = true;
@@ -5157,10 +5159,12 @@ function renderSetup(body) {
   }
   if (!DOCTOR_LOADED) { DOCTOR_LOADED = true; loadDoctor().then(() => { if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup'); }); }
   const steps = [
-    ['Sign in', cap('on_device') ? 'add an API key or a model server address' : 'a Claude or Cursor account, on this PC', have.account, () => unready ? signInDesk(unready[0], unready[1]) : openPage('accounts')],
+    ['Sign in', cap('on_device') ? 'add an API key or a model server address — the doctor (step 0) checks it' : 'a Claude or Cursor account, on this PC', have.account,
+      () => cap('on_device') ? toast('step 0 above says what the engine needs: a model server that answers, or an API key', 3200) : unready ? signInDesk(unready[0], unready[1]) : openPage('accounts')],
     ['A project folder', 'the config key "projects" — Settings → Folders', have.folder, async () => { (await foldersApi()) ? openFolderPicker('') : openSettingsAt('folders'); }],
     ['A desk', 'Claude, Cursor or Shell', have.desk, () => openSpawnSheet()],
-    ['A message', 'type below; it lands in the desk', have.message, () => { backToChat(); text.focus(); }],
+    cap('desks') ? ['A message', 'type below; it lands in the desk', have.message, () => { backToChat(); text.focus(); }]
+                 : ['A run', 'start it here; the receipt is the proof', have.run, () => { setMode('run'); openSheet('runSheet'); loadRunChips(); }],
   ].filter(([lbl]) => !(lbl === 'A desk' && !cap('desks')));   /* 1.3: no tmux, no desk step — and the count never includes a hidden step */
   const done = steps.filter(s => s[2]).length;
   body.appendChild(h('p', {class: 'muted', text: 'MetaBot · on Metaorcha. ' + steps.length + ' steps, then it runs.'}));
@@ -5176,7 +5180,7 @@ function renderSetup(body) {
     body.appendChild(h('div', {class: 'dbar'},
       h('button', {type: 'button', class: 'abtn', text: 'Pair a phone', title: 'optional — not one of the counted steps', onclick: () => openSettingsAt('phone')})));
   body.appendChild(h('div', {class: 'dbar'},
-    h('button', {type: 'button', class: 'abtn', text: done === 4 ? 'All set' : 'Skip for now', onclick: () => { localStorage.fcSetup = '1'; closeTab('page', 'setup'); }}),
+    h('button', {type: 'button', class: 'abtn', text: done === steps.length ? 'All set' : 'Skip for now', onclick: () => { localStorage.fcSetup = '1'; closeTab('page', 'setup'); }}),
     h('button', {type: 'button', class: 'abtn', text: 'Developer view', onclick: () => { localStorage.fcSetup = '1'; setUMode('dev'); }})));
 }
 
