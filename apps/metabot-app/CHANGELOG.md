@@ -7,6 +7,9 @@ the pairing payload, the capability block, the module manifest) is called out as
 ## [Unreleased]
 
 ### Added
+- App API: every `GET /api/doctor` item carries `configured` (a hosted model server the
+  doctor never probes reads `ok: false, configured: true`); the on-device set-up step
+  counts it.
 - Mail sent to the person (`metabot mail send tablet --from <desk> -m ...`) lands in that
   desk's lane on the page, read once; the hand-off hint names this command when no inbox
   adapter is configured (`mc-send` is the adapter's command, not part of the wheel).

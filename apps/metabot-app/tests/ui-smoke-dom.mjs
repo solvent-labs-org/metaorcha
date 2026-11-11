@@ -2153,6 +2153,26 @@ const scenario = `
     closeTab('page', 'setup');
     ACCOUNTS = keepA; DOCTOR_FIX = keepDoc; DOCTOR = null; DOCTOR_LOADED = false; META.caps = null;
   }
+  {   // Bugbot 11-12 (7): the set-up page redraws when a run lands; (8) a configured hosted engine ticks on-device Sign in
+    const stepEls = () => [...$('page').querySelectorAll('.step')].filter(e => !e.classList.contains('doc'));
+    const stepNamed = t => stepEls().find(e => e.textContent.includes(t));
+    const R = Array.isArray(RUNS) ? RUNS : RUNS.runs;
+    const keepRows = R.splice(0, R.length); await pollRuns();
+    META.caps = {desks: false};
+    openPage('setup'); await tick(10);
+    ok(stepNamed('A run') && !stepNamed('A run').classList.contains('done'), 'no run yet: A run waits');
+    keepRows.forEach(r => R.push(r)); await pollRuns(); await tick(10);
+    ok(stepNamed('A run') && stepNamed('A run').classList.contains('done'), 'a run landing redraws the open set-up page: A run is done without reopening it');
+    closeTab('page', 'setup');
+    const keepA = ACCOUNTS, keepDoc = DOCTOR_FIX;
+    META.caps = {on_device: true, desks: false};
+    ACCOUNTS = {claude: [], cursor: [], defaults: {}};
+    DOCTOR_FIX = {ok: false, items: [{id: 'engine.local', ok: false, blocker: false, configured: true, what: 'a model server off this machine is configured (not probed)', fix: 'doctor only probes a local model server; the first run will show whether it answers'}]}; DOCTOR = null; DOCTOR_LOADED = false;
+    openPage('setup'); await tick(20);
+    ok(stepNamed('Sign in') && stepNamed('Sign in').classList.contains('done'), 'on-device: a hosted model server that is configured ticks Sign in');
+    closeTab('page', 'setup');
+    ACCOUNTS = keepA; DOCTOR_FIX = keepDoc; DOCTOR = null; DOCTOR_LOADED = false; META.caps = null;
+  }
   {   // Bugbot 11-11 (5): an interrupted run without desks opens its log, like a live or finished one
     META.caps = {desks: false};
     RUNS.push({run_id: 'gone-10', state: 'interrupted', problem: 'the app was stopped mid-run', desk: 'run-3', project: 'other', started: '2026-08-07T11:00:00Z', engine: 'cursor'});

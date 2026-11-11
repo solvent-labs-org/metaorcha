@@ -1813,12 +1813,16 @@ function noteBuild(b) {   // the update hint (21.2): compared on boot and on eve
     location.reload();
   }});
 }
-let LIVE_RUNS = [];
+let LIVE_RUNS = [], SETUP_HAD_RUN = false;
 async function pollRuns() {
   try {
     const j = await getJ('/api/mb/runs?limit=50');
     ALL_RUNS = j.runs || [];
     LIVE_RUNS = ALL_RUNS.filter(r => r.state === 'live');
+    if ((ALL_RUNS.length > 0) !== SETUP_HAD_RUN) {   /* Bugbot 11-12: the set-up page's "A run" step reads this list, so it redraws when it turns */
+      SETUP_HAD_RUN = ALL_RUNS.length > 0;
+      if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup');
+    }
     const sr = $('sbRuns'); sr.textContent = '';
     sr.append('runs ', h('b', {text: String(LIVE_RUNS.length)}), ' live');
     fillRunIds(ALL_RUNS);
@@ -5146,7 +5150,7 @@ function renderSetup(body) {
   const unready = [].concat(claudeLogins(A).filter(x => !x.ready).map(x => ['claude', x.name]), (A.cursor || []).filter(x => x.ready === false).map(x => ['cursor', x.name]))[0];
   const have = {
     account: cap('on_device')
-      ? !!(DOCTOR && (DOCTOR.items || []).some(it => it && it.id === 'engine.local' && it.ok))   /* Bugbot 11-11 (3): on the phone the engine is a model server or a key the doctor sees, not a CLI login */
+      ? !!(DOCTOR && (DOCTOR.items || []).some(it => it && it.id === 'engine.local' && (it.ok || it.configured)))   /* Bugbot 11-11 (3) + 11-12: on the phone the engine is a model server the doctor sees or a hosted one it has configured, not a CLI login */
       : !!(ACCOUNTS && ((D.claude && D.claude.ready) || (D.cursor && D.cursor.ready) || claudeLogins(A).some(x => x.ready) || (A.cursor || []).some(x => x.ready))),
     folder: !!(PROJECTS && PROJECTS.some(p => (p.paths || []).length)),
     desk: (window.DESKS || []).some(d => d.meta && d.meta.kind && !d.meta.signin),   // RV-J: a sign-in desk is not a working desk
