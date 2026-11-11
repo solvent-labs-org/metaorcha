@@ -270,7 +270,7 @@ class SpawnTests(unittest.TestCase):
         cwd = str(self.env.projects / "alpha")
         task = "Summarise\tthis\n\x1b[31mred\x07 bell"
         s, j = self.env.post("/api/run", {"task": task, "engine": "cursor", "cwd": cwd,
-                                          "max_cost": "0.50", "account": "ignored"})
+                                          "max_cost": "0.50"})   # 11-11: a cursor account named here is applied (see below), an unknown one is 404
         self.assertEqual(s, 200, j)
         self.assertEqual(j["name"], "run-1")
         self.assertIs(j["account_used"], False)
@@ -341,6 +341,32 @@ class SpawnTests(unittest.TestCase):
             s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "model": bad})
             self.assertEqual((s, j), (400, {"ok": False, "error": "bad model"}), bad)
         self.assertEqual(len(self.new_session_calls()), 2)
+
+    def test_run_cursor_with_account_applies_its_config_home(self):
+        """A Cursor account is a folder, not a core login: the run gets the same
+        environment a Cursor desk gets (11-11: runs from the phone pick the account)."""
+        self.env.post("/api/accounts", {"engine": "cursor", "name": "alt"})
+        cwd = str(self.env.projects / "alpha")
+        s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "account": "alt"})
+        self.assertEqual(s, 200, j)
+        self.assertTrue(j["account_used"])
+        self.assertNotIn("--login", j["argv"])
+        call = self.new_session_calls()[-1]
+        folder = str(self.env.state / "accounts/cursor/alt")
+        self.assertEqual(call[6:14], ["-e", f"METABOT_HOME={self.mbhome}",
+                                      "-e", f"XDG_CONFIG_HOME={folder}/config",
+                                      "-e", f"GH_CONFIG_DIR={self.home}/.config/gh",
+                                      "-e", f"CURSOR_CONFIG_DIR={self.home}/.cursor"])
+        self.assertIn("CURSOR_API_KEY", call)
+        self.assertIn("CURSOR_AUTH_TOKEN", call)
+        reg = json.loads((self.env.state / "desks" / "run-1.json").read_text())
+        self.assertEqual(reg["account"], "alt")
+        s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd, "account": "nope"})
+        self.assertEqual((s, j), (404, {"ok": False, "error": "no such account"}))
+        s, j = self.env.post("/api/run", {"task": "x", "engine": "cursor", "cwd": cwd})
+        self.assertEqual(s, 200, j)   # no account: the server's own Cursor sign-in, as before
+        self.assertFalse(j["account_used"])
+        self.assertNotIn("XDG_CONFIG_HOME", " ".join(self.new_session_calls()[-1]))
 
     def test_run_cap(self):
         with Env({"max_runs": 1}) as env:

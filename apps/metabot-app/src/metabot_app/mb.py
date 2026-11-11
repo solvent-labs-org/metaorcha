@@ -478,14 +478,16 @@ def _proc_key(ctx, name):
     return (str(ctx.state), name)
 
 
-def spawn_run_process(ctx, name, cwd, argv, prompt):
+def spawn_run_process(ctx, name, cwd, argv, prompt, extra_env=None, extra_unset=()):
     """Start ``argv`` as the app's own child. The prompt file is its stdin and is
     unlinked once the child holds the descriptor (as the desk script's ``exec 3<``
-    then ``rm`` does); stdout and stderr go to the run's log (0600). Returns the
+    then ``rm`` does); stdout and stderr go to the run's log (0600). ``extra_env``
+    and ``extra_unset`` are an account's additions, as for a desk. Returns the
     Popen; raises OSError when it cannot start."""
-    drop = set(unset_list(ctx))
+    drop = set(unset_list(ctx, extra_unset))
     env = {k: v for k, v in os.environ.items() if k not in drop}
     env["METABOT_HOME"] = ctx.metabot_home
+    env.update(extra_env or {})
     log = ctx.runs_dir() / f"{name}.log"
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as out, open(prompt, "rb") as stdin:
@@ -1123,6 +1125,7 @@ def start_run(ctx, body):
         return 400, {"ok": False, "error": "bad label"}
     account = body.get("account") or None
     account_used = False
+    run_env, run_unset = {}, ()
     if account is not None:
         if not isinstance(account, str) or not ACCOUNT_RE.fullmatch(account):
             return 400, {"ok": False, "error": "bad account"}
@@ -1132,10 +1135,17 @@ def start_run(ctx, body):
             if not known:
                 return 404, {"ok": False, "error": "no such account"}
             account_used = True
+        elif engine == "cursor":
+            # 11-11: a Cursor account is a folder, not a core login; the run gets the
+            # environment a Cursor desk gets, so a run from the phone picks its account
+            run_env, run_unset, _, err = account_env(ctx, "cursor", account)
+            if err:
+                return err[0], {"ok": False, "error": err[1]}
+            account_used = True
         else:
             account = None
     argv = [ctx.metabot, "ask", "-e", engine]
-    if account_used:
+    if account_used and engine != "cursor":   # the core has logins for claude and codex alone
         argv += ["--login", account]
     argv += ["--cwd", cwd]
     if mode == "read-only":
@@ -1157,7 +1167,7 @@ def start_run(ctx, body):
         own = {}
         if run_in_process(ctx):
             try:
-                p = spawn_run_process(ctx, name, cwd, argv, prompt)
+                p = spawn_run_process(ctx, name, cwd, argv, prompt, extra_env=run_env, extra_unset=run_unset)
                 ok, err = True, ""
                 own = {"pid": p.pid, "log": f"{name}.log"}
             except OSError as exc:
@@ -1167,7 +1177,8 @@ def start_run(ctx, body):
             except OSError:
                 pass
         else:
-            ok, err = create_session(ctx, name, cwd, [str(prompt), *argv], script=FIXED_RUN_SCRIPT)
+            ok, err = create_session(ctx, name, cwd, [str(prompt), *argv], extra_env=run_env or None,
+                                     extra_unset=run_unset, script=FIXED_RUN_SCRIPT)
             if not ok:
                 try:
                     prompt.unlink()

@@ -87,6 +87,12 @@ class ProcessRunTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: "key: unset" in self.log(name).read_text()))
         self.assertIn(f"home: {self.env.mbhome}", self.log(name).read_text())
 
+    def test_a_cursor_account_reaches_the_child_process(self):
+        self.env.post("/api/accounts", {"engine": "cursor", "name": "alt"})
+        name = self.start(engine="cursor", account="alt")
+        folder = self.env.state / "accounts/cursor/alt"
+        self.assertTrue(wait_for(lambda: f"xdg: {folder}/config" in self.log(name).read_text()))
+
     def test_a_live_process_run_links_to_its_desk(self):
         os.environ["FAKE_SLEEP"] = "3"
         try:

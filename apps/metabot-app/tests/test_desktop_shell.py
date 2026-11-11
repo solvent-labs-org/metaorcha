@@ -53,6 +53,8 @@ class DesktopShellTests(unittest.TestCase):
         self.assertEqual(sorted(Path(i).name for i in conf["bundle"]["icon"]), sorted(sizes))
         for rel in conf["bundle"]["icon"]:
             self.assertEqual(png_size(TAURI / rel), (sizes[Path(rel).name],) * 2, rel)
+            # Tauri's context macro refuses any icon that is not RGBA (IHDR colour type 6)
+            self.assertEqual((TAURI / rel).read_bytes()[25], 6, f"{rel} is not RGBA")
 
     def test_the_window_opens_the_page_url_or_the_missing_page_and_detaches_a_started_server(self):
         main = (TAURI / "src" / "main.rs").read_text()

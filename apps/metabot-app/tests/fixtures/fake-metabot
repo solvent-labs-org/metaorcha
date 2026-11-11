@@ -86,7 +86,8 @@ if argv[:1] == ["ask"] and argv[-1:] == ["-"]:
     task = "" if sys.stdin.isatty() else sys.stdin.read()
     print("prompt: " + task.strip())
     print("home: " + os.environ.get("METABOT_HOME", "") + " key: "
-          + ("set" if os.environ.get("ANTHROPIC_API_KEY") else "unset"))
+          + ("set" if os.environ.get("ANTHROPIC_API_KEY") else "unset")
+          + " xdg: " + os.environ.get("XDG_CONFIG_HOME", "unset"))
     if os.environ.get("FAKE_ASK_RECEIPT"):
         import hashlib
         home = os.environ.get("METABOT_HOME", "")
