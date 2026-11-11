@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -122,11 +123,18 @@ class _WithFakeApp(unittest.TestCase):
         p.write_text(json.dumps(job))
         return str(p)
 
-    def watchdog(self, sd, prompt="watch"):
+    def watchdog(self, sd, prompt="watch", load_per_cpu="1000"):
+        # a busy CI host must not turn a healthy app into a finding: the load ceiling is
+        # per cpu and settable, so the tests pin it high and one test pins it below zero
         r = _run([sys.executable, str(PLUGINS / "watchdog" / "bin" / "watchdog"), self.job(prompt)],
-                 _env(METACHAT_STATE=str(sd), HOME=str(self.tmp)))
+                 _env(METACHAT_STATE=str(sd), HOME=str(self.tmp), WATCHDOG_LOAD_PER_CPU=load_per_cpu))
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout, _events(r.stdout)
+
+    def test_the_load_ceiling_is_per_cpu_and_settable(self):
+        out, _ = self.watchdog(self.state(), load_per_cpu="-1")
+        self.assertIn("WATCHDOG ATTENTION (1)", out)
+        self.assertRegex(out, r"- load [0-9.]+ is high for [0-9]+ cpus")
 
 
 class MarketplaceTests(unittest.TestCase):
@@ -239,6 +247,16 @@ class MonitorTests(unittest.TestCase):
             p.chmod(0o755)
         (self.tmp / "tmp").mkdir()
 
+    def wait_log(self, needle, seconds=5.0):
+        # the monitor starts browsers and tools detached; on a slow host their log line
+        # lands after the tool's answer, so the tests wait for it instead of reading at once
+        deadline = time.monotonic() + seconds
+        while True:
+            log = self.log.read_text() if self.log.exists() else ""
+            if needle in log or time.monotonic() > deadline:
+                return log
+            time.sleep(0.05)
+
     def talk(self, messages, with_xdotool=False):
         if with_xdotool:
             p = self.fake / "xdotool"
@@ -296,7 +314,7 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(rep[2]["result"]["isError"])
         self.assertFalse(rep[3]["result"]["isError"])
         self.assertTrue(rep[4]["result"]["isError"])
-        log = self.log.read_text()
+        log = self.wait_log(f"google-chrome --new-window {page}")
         self.assertIn("google-chrome --new-window https://example.com/x", log)
         self.assertIn(f"google-chrome --new-window {page}", log)
         self.assertNotIn("javascript:", log)
@@ -310,7 +328,7 @@ class MonitorTests(unittest.TestCase):
         html = card.read_text()
         self.assertIn("Hi &lt;b&gt;", html)
         self.assertIn("a &amp; b\nline 2", html)
-        self.assertIn("notify-send Hi <b> a & b", self.log.read_text())
+        self.assertIn("notify-send Hi <b> a & b", self.wait_log("notify-send"))
 
     def test_typing_and_clicking_need_xdotool_and_say_so_without_it(self):
         rep = self.talk([("tools/call", {"name": "type_text", "arguments": {"text": "hello"}}),
@@ -329,7 +347,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(rep[3]["result"]["content"][0]["text"], "pressed ctrl+l")
         self.assertTrue(rep[4]["result"]["isError"])
         self.assertTrue(rep[5]["result"]["isError"])
-        log = self.log.read_text()
+        log = self.wait_log("xdotool mousemove")
         self.assertIn("xdotool type --delay 20 -- hello", log)
         self.assertIn("xdotool mousemove 10 20 click 3", log)
 
@@ -341,8 +359,9 @@ class MonitorTests(unittest.TestCase):
                          ("resources/list", {})])
         self.assertFalse(rep[1]["result"]["isError"])
         self.assertFalse(rep[2]["result"]["isError"])
-        self.assertIn("wmctrl -a Editor", self.log.read_text())
-        self.assertIn("wmctrl -c Browser", self.log.read_text())
+        log = self.wait_log("wmctrl -c Browser")
+        self.assertIn("wmctrl -a Editor", log)
+        self.assertIn("wmctrl -c Browser", log)
         self.assertEqual(rep[3]["error"]["code"], -32602)
         self.assertEqual(rep[4]["result"], {})
         self.assertEqual(rep[5]["error"]["code"], -32601)

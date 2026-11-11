@@ -17,6 +17,6 @@ metabot serve    # or Start serve in the app
 
 It finds the app through `METACHAT_STATE`, else the `state_dir` of
 `METACHAT_CONFIG` or `~/.config/metachat/config.json`. The token is read from
-that folder and never printed. `WATCHDOG_DISK_FLOOR_GB` (4) and
-`WATCHDOG_DEVICE_QUIET_S` (21600) tune two findings. "json" in the prompt gets
+that folder and never printed. `WATCHDOG_DISK_FLOOR_GB` (4),
+`WATCHDOG_DEVICE_QUIET_S` (21600) and `WATCHDOG_LOAD_PER_CPU` (2) tune three findings. "json" in the prompt gets
 the report as JSON.
