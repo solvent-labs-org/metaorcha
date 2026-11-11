@@ -177,6 +177,20 @@ class DeliverTests(unittest.TestCase):
         # and /api/send types the answer instead of refusing a waiting desk
         proc = pane_desk(self.env, "pane-four", cmd="cursor-agent")
         try:
+            # the menu that offers the line is still a menu (found on the tablet 22:00: the
+            # option text matched, the page offered a text line, the typed words plus Enter
+            # chose "Run (once)" and ran the command the person had declined)
+            self.env.set_pane("fc-pane-four", "\n".join(["old"] * 30) + "\n"
+                              " Run this command?\n Not in allowlist: false\n  → Run (once) (y)\n"
+                              "    Add Shell(false) to allowlist? (tab)\n    Run Everything (shift+tab)\n"
+                              "    Skip & tell the agent what to do instead (esc or n)\n")
+            server.MB._needs.clear()
+            server.invalidate()
+            s, j = self.env.get("/api/desks")
+            row = next((d for d in j["desks"] if d["name"] == "pane-four"), None)
+            self.assertEqual((row["needs_you"], row["ask"]), (True, "select"))
+            s, j = self.env.post("/api/send", {"text": "say done instead", "target": "pane-four"})
+            self.assertEqual((s, j["ok"]), (409, False), j)
             self.env.set_pane("fc-pane-four", "\n".join(["old"] * 30) + "\n"
                               "  → Tell the agent what to do instead (Enter to send, empty to skip, Esc to cancel)\n")
             server.MB._needs.clear()

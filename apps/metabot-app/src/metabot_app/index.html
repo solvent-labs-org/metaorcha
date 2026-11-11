@@ -94,7 +94,7 @@
   @keyframes eyeblink { 0%, 88%, 100% { transform:scaleY(1); } 94% { transform:scaleY(.1); } }
 
   /* ---- frame (22.5): activity bar · side bar · tabs + canvas · right panel; terminal drawer; one status line ---- */
-  #app { display:flex; flex-direction:column; height:100dvh; }
+  #app { display:flex; flex-direction:column; height:100dvh; padding-top:env(safe-area-inset-top); }
   #main { display:flex; flex:1; min-height:0; }
   #abar { width:64px; flex:none; display:flex; flex-direction:column; background:var(--side); border-right:1px solid var(--line); padding:4px 0; overflow:hidden; }
   .ab { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; width:64px; min-height:56px;
@@ -3394,7 +3394,7 @@ function sideDesktop(body) {
     h('div', {class: 'dbar'}, h('button', {type: 'button', class: 'abtn primary', text: 'Open', onclick: () => openDesk()}),
       h('button', {type: 'button', class: 'abtn', text: 'Settings', onclick: () => openSettingsAt('desktop')}))));
 }
-const SETTINGS_SECTIONS = [['mode', 'Mode'], ['look', 'Appearance'], ['accounts', 'Accounts'], ['folders', 'Folders'], ['desktop', 'Desktop'], ['about', 'About']];
+const SETTINGS_SECTIONS = [['mode', 'Mode'], ['look', 'Appearance'], ['accounts', 'Accounts'], ['folders', 'Folders'], ['phone', 'Phone'], ['desktop', 'Desktop'], ['about', 'About']];
 function openSettingsAt(key) {
   openPage('settings');
   const el = $('set-' + key);

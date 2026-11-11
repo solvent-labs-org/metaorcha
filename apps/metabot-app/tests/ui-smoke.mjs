@@ -279,6 +279,8 @@ ok(/\.acctForm input \{[^}]*min-width:14em/.test(css), 'the new-account name kee
 ok(/<datalist id="modelList">/.test(html), 'the model chip has a datalist to hang the engine models on');
 ok(/'grok-4\.7-low', 'grok-4\.7-medium', 'grok-4\.7-high', 'grok-4\.7-xhigh'/.test(html), 'the cursor tiers are the model chip suggestions when the engine lists none');
 ok(/<span id="chipAccountLabel">login<\/span>/.test(html), 'the account chip label is addressable for the cursor rename');
+ok(/#app \{[^}]*padding-top:env\(safe-area-inset-top\)/.test(css), 'the page clears the status bar (safe area at the top)');
+ok(/'phone', 'Phone'/.test(js), 'Settings lists Phone beside the other sections');
 ok(/\.sheet \.grip \{[^}]*min-height:24px/.test(css), 'the sheet grip is a 24 px handle');
 // the 22.5 frame
 ok(/#abar \{[^}]*width:64px/.test(css) && /#side \{[^}]*width:280px/.test(css) && /#side\.collapsed \{[^}]*width:0/.test(css), 'activity bar 64 px, side bar 280 px, collapsible');

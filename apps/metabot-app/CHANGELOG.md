@@ -96,6 +96,7 @@ the pairing payload, the capability block, the module manifest) is called out as
   phone listener shows one line in its place.
 - The sheet's key buttons carry `touch-action: manipulation` (the 44 px target was already there);
   the 11-13 tablet day checks them on hardware.
+- The page pads itself below the status bar, and Settings lists Phone with the other sections.
 
 ### Security
 - A wrong token or pairing code locks the address out briefly, per listener and per kind;

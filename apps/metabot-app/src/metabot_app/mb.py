@@ -208,8 +208,10 @@ WRITE_RE = re.compile(r"\b(write|edit|create|bash|run this command|allow command
 SECRET_RE = re.compile(r"\[sudo\] password|password(?: for [^:]*)?:|passphrase|enter pin", re.I)
 ASK_RES = (("secret", SECRET_RE),
            # 11-11 (found on the tablet): a line the person types a sentence into (Cursor's
-           # "Tell the agent what to do instead"); chat answers it, see server.waiting_refusal
-           ("text", re.compile(r"enter to send|tell the agent what to do", re.I)),
+           # "Tell the agent what to do instead (Enter to send ...)"); chat answers it, see
+           # server.waiting_refusal. Only the entry line: the menu that offers it ("Skip & tell
+           # the agent what to do instead") is still a menu, and typed words there pick an option.
+           ("text", re.compile(r"enter to send", re.I)),
            ("yes", re.compile(r"type 'yes'|type yes", re.I)),
            ("line", re.compile(r"\[y/n\]|\(y/n\)|allow\? type", re.I)),
            ("select", re.compile(r"esc to cancel|enter to confirm|do you want to proceed"
