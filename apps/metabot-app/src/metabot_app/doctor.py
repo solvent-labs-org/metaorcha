@@ -147,7 +147,7 @@ def report(ctx, on_device: bool | None = None) -> dict:
              _core(ctx), _key(), _tmux(on_device)]
     engines = [_cli(i) for i in ("engine.claude", "engine.codex", "engine.cursor")]
     local = _local(getattr(ctx, "metabot_home", ""))
-    if not local["ok"] and not any(e["ok"] for e in engines):
+    if not local["ok"] and not local["configured"] and not any(e["ok"] for e in engines):   # a hosted server, unprobed, is still an engine
         local = _item("engine.local", False, local["what"],
                       "sign in to Claude Code, Codex or Cursor, add an API key, or start a local model server",
                       blocker=True)

@@ -1,5 +1,6 @@
 """Section 13: the evening hotfixes phase 1 keeps — deliver() with from / kind,
-local events in /api/history and /api/stream, aliases, bin/mc-send."""
+local events in /api/history and /api/stream, aliases, bin/mc-send,
+metabot-app send."""
 import json
 import os
 import socket
@@ -10,7 +11,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from harness import Env, ROOT, server  # noqa: E402
+from harness import ECHO_INBOX, Env, ROOT, server  # noqa: E402
 
 MC_SEND = ROOT.parents[1] / "bin" / "mc-send"
 
@@ -320,6 +321,90 @@ class McSendTests(unittest.TestCase):
         self.assertTrue(MC_SEND.read_text().count("X-MetaChat: 1"))
         self.assertNotIn("floor" + "-chat", MC_SEND.read_text())
         self.assertNotIn("floor" + " inbox", MC_SEND.read_text())
+
+
+class SendSubcommandTests(unittest.TestCase):
+    """11-12 (D2): the wheel ships the desk's reply command as `metabot-app send`
+    (bin/mc-send is a repo script and never leaves it). The subcommand reads
+    METACHAT_URL / METACHAT_STATE from the desk env that spawn_argv adds, and
+    names the sender from its METABOT_MAILBOX."""
+
+    def setUp(self):
+        self.env = Env().start()
+
+    def tearDown(self):
+        self.env.stop()
+
+    def run_send(self, *args, mailbox="worker-2"):
+        env = dict(os.environ, METACHAT_URL=f"http://127.0.0.1:{self.env.port}",
+                   METACHAT_STATE=str(self.env.state), PYTHONPATH=str(ROOT.parent))
+        if mailbox is None:
+            env.pop("METABOT_MAILBOX", None)
+        else:
+            env["METABOT_MAILBOX"] = mailbox
+        return subprocess.run([sys.executable, "-m", "metabot_app", "send", *args],
+                              capture_output=True, text=True, timeout=30, env=env)
+
+    def test_send_to_a_pane_desk_and_to_the_tablet(self):
+        proc = pane_desk(self.env, "pane-six")
+        try:
+            r = self.run_send("pane-six", "-m", "hello from a desk")
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "sent to pane-six via pane"), r.stderr)
+            buf = self.env.tmux_loaded()[-1][1].decode()
+            self.assertTrue(buf.startswith("[from worker-2 via metachat] hello from a desk"), buf)
+            r = self.run_send("tablet", "-m", "all done")
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "sent to tablet via lane"), r.stderr)
+            r = self.run_send("worker-2", "-m", "to myself")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("not sent", r.stdout)
+            self.assertNotIn(self.env.token, r.stdout + r.stderr)
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_send_without_a_mailbox_names_the_shell(self):
+        # outside a desk (no METABOT_MAILBOX): the sender is the host's shell,
+        # as mc-send spelled it
+        r = self.run_send("tablet", "-m", "hi", mailbox=None)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "sent to tablet via lane"), r.stderr)
+        s, j = self.env.get("/api/history")
+        frm = j["messages"][-1]["from"]
+        self.assertTrue(frm.endswith("-shell"), frm)
+
+    def test_send_needs_a_running_server(self):
+        env = dict(os.environ, METACHAT_URL="http://127.0.0.1:1",
+                   METACHAT_STATE=str(self.env.state), PYTHONPATH=str(ROOT.parent))
+        r = subprocess.run([sys.executable, "-m", "metabot_app", "send", "tablet", "-m", "x"],
+                           capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not running", r.stderr)
+        self.assertNotIn(self.env.token, r.stdout + r.stderr)
+
+
+class ReplyCmdAdapterTests(unittest.TestCase):
+    """11-12 (D2): with an inbox adapter armed, reply_cmd() names the shipped
+    subcommand — a desk answering a message runs `metabot-app send`, which every
+    install of the wheel has on PATH (the 11-11 tablet finding was mc-send, a
+    repo script, named to a desk that had none)."""
+
+    def setUp(self):
+        self.env = Env({"inbox_module": str(ECHO_INBOX)}).start()
+
+    def tearDown(self):
+        self.env.stop()
+
+    def test_reply_cmd_names_metabot_app_send(self):
+        self.assertEqual(server.reply_cmd("pane-seven", "worker-1"), "metabot-app send worker-1 -m")
+        self.assertEqual(server.reply_cmd("pane-seven", "tablet"), "metabot-app send tablet -m")
+
+    def test_a_delivered_message_carries_the_shipped_reply_command(self):
+        server.INBOX.inner.set_armed(["pane-seven"])
+        s, j = self.env.post("/api/send", {"text": "look at this", "target": "pane-seven",
+                                           "from": "worker-1"})
+        self.assertEqual((s, j["via"]), (200, "inbox"))
+        text = server.INBOX.inner.sent()[-1]["text"]
+        self.assertIn('(reply: metabot-app send worker-1 -m "...")', text)
+        self.assertNotIn("mc-send", text)
 
 
 if __name__ == "__main__":

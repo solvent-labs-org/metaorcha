@@ -530,12 +530,14 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")   # a colour or cursor sequen
 
 def reply_cmd(me, to):
     """How the desk ``me`` answers ``to`` (a desk, or PERSON_BOX for the person).
-    With an inbox adapter its ``mc-send`` is on the desk's PATH; without one (every
-    plain install: 11-11, found on the tablet, the adapter's command was named to a
-    desk that had none) the core's mail is the channel every install has."""
+    With an inbox adapter the answer is the app's own send subcommand (11-12:
+    the wheel ships it and the desk env carries its METACHAT_URL/METACHAT_STATE;
+    bin/mc-send is a repo script — the 11-11 tablet finding named it to a desk
+    that had none). Without an adapter (every plain install) the core's mail is
+    the channel every install has."""
     if isinstance(INBOX, inbox_mod.NullInbox):
         return f"metabot mail send {to} --from {me} -m"
-    return f"mc-send {to}"
+    return f"metabot-app send {to} -m"
 
 
 def mail_to_lane_once():
@@ -1087,13 +1089,21 @@ def snapshot(fresh=False):
         return data
 
 
-def desks(scope=None, fresh=False):
+def desks(scope=None, fresh=False, viewer="desktop"):
     """Orchestrator view: one row per named session (desk), armed = the desk
     holds the inbox adapter (INBOX.armed()). Phase 1
     adds the registry entry (meta), project, cwd and needs_you. Served from the
-    shared snapshot; rows are copies."""
+    shared snapshot; rows are copies. ``viewer`` is the requester's scope: a
+    sign-in row's ``where`` says where its link opens — "here" in this machine's
+    own browser, "pc" for a phone (11-12 D1: the login's callback lands on this
+    machine, so on the phone that started it the link opens nowhere). The field
+    is per-request, never in the shared snapshot."""
     snap = snapshot(fresh)
     rows = [dict(d) for d in snap["rows"]]
+    where = "pc" if viewer == "phone" else "here"
+    for d in rows:
+        if d.get("signin") is not None:
+            d["signin"] = {**d["signin"], "where": where}
     if scope == "metachat":
         rows = [d for d in rows if d["name"] in snap["reg"]]
     return {"desks": rows, "streams": dict(snap["streams"])}
@@ -1946,7 +1956,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/sessions":
             self._json({"sessions": sessions()})
         elif path == "/api/desks":
-            self._json(desks(qs.get("scope", [""])[0] or None))
+            self._json(desks(qs.get("scope", [""])[0] or None, viewer=self.server.scope))
         elif path == "/api/aliases":
             self._json({"aliases": load_aliases()})
         elif path == "/api/history":
@@ -2368,6 +2378,14 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True   # SSE/WS handler threads never block shutdown
     allow_reuse_address = True
     scope = "desktop"       # the desktop token opens it; loopback by default
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        if self.scope == "desktop":
+            # 11-12 (D2): the desks it spawns reach it here — `metabot-app send`
+            # reads METACHAT_URL from the desk env (create_session). The bound
+            # port, never the config's wish (A6 takes a free one when it must)
+            os.environ["METACHAT_URL"] = f"http://127.0.0.1:{self.server_address[1]}"
 
 
 class TLSServer(Server):

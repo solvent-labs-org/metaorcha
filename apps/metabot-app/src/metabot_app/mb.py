@@ -426,7 +426,14 @@ def spawn_argv(name, cwd, home, argv, extra_env=None, extra_unset=(), script=FIX
 
 
 def create_session(ctx, name, cwd, argv, extra_env=None, extra_unset=(), script=FIXED_SCRIPT):
-    rc, _, err = tmux(ctx, *spawn_argv(name, cwd, ctx.metabot_home, argv, extra_env,
+    # 11-12 (D2): every desk can answer with `metabot-app send` — the wheel's
+    # subcommand reads the server's URL and state dir from the desk's environment
+    # (the server names its bound URL in METACHAT_URL; the config's port is the fallback)
+    desk_env = {"METACHAT_URL": os.environ.get("METACHAT_URL")
+                or f"http://127.0.0.1:{int(ctx.cfg.get('port') or 8460)}",
+                "METACHAT_STATE": str(ctx.state)}
+    desk_env.update(extra_env or {})
+    rc, _, err = tmux(ctx, *spawn_argv(name, cwd, ctx.metabot_home, argv, desk_env,
                                        extra_unset, script, names=unset_list(ctx, extra_unset)),
                       timeout=15)
     if rc != 0:
