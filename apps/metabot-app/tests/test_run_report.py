@@ -134,7 +134,7 @@ class RunReportTests(unittest.TestCase):
         self.assertEqual(ev[0]["run"]["status"], "error")
 
     def test_a_refused_key_says_to_check_the_key(self):
-        name = self.start_run(engine="openai")
+        self.start_run(engine="openai")
         child = self.live("mbkey")
         self.tick()
         self.end(child, "mbkey")

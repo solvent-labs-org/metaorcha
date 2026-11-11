@@ -29,6 +29,7 @@ hex of the receipt text as written, which is the file's bytes.
 """
 import base64
 import binascii
+import contextlib
 import hashlib
 import json
 import os
@@ -520,11 +521,9 @@ def _log_tail(ctx, entry, limit=RUNLOG_READ):
 
 
 def _log_append(ctx, entry, text):
-    try:
+    with contextlib.suppress(OSError):   # a log that cannot be written loses the line, never the run
         with open(_log_path(ctx, entry), "ab") as f:
             f.write(text.encode("utf-8"))
-    except OSError:
-        pass
 
 
 def run_proc_end(ctx, name, entry):
@@ -600,6 +599,8 @@ def kill_run_process(ctx, name, entry, grace=1.5):
         except ProcessLookupError:
             break
         except OSError:
+            # EPERM or a group already gone: the liveness check below decides
+            # whether to escalate to SIGKILL or report "did not stop"
             pass
         end = time.time() + grace
         while time.time() < end and pid_alive(pid):
@@ -609,10 +610,8 @@ def kill_run_process(ctx, name, entry, grace=1.5):
     with _PROCS_LOCK:
         p = _PROCS.pop(_proc_key(ctx, name), None)
     if p is not None:
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):   # reaped or still dying: both are reported by pid_alive
             p.wait(timeout=1)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
     reg_delete(ctx, name)
     return not pid_alive(pid), "" if not pid_alive(pid) else "the run did not stop"
 
@@ -1178,18 +1177,14 @@ def start_run(ctx, body):
                 own = {"pid": p.pid, "log": f"{name}.log"}
             except OSError as exc:
                 ok, err = False, f"spawn failed: {type(exc).__name__}"
-            try:
-                prompt.unlink()   # the child holds the descriptor; nothing else reads it
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):   # the child holds the descriptor; nothing else reads it
+                prompt.unlink()
         else:
             ok, err = create_session(ctx, name, cwd, [str(prompt), *argv], extra_env=run_env or None,
                                      extra_unset=run_unset, script=FIXED_RUN_SCRIPT)
             if not ok:
-                try:
+                with contextlib.suppress(OSError):   # a prompt nobody will read; already gone is fine
                     prompt.unlink()
-                except OSError:
-                    pass
         if not ok:
             return 502, {"ok": False, "error": err}
         note_spawn(ctx)
@@ -1325,10 +1320,8 @@ def forget_desk(ctx, name, names_dir=None, entry=None):
     if is_process_run(entry) and entry.get("log"):
         with _PROCS_LOCK:
             _PROCS.pop(_proc_key(ctx, name), None)
-        try:
+        with contextlib.suppress(OSError):   # a log already removed by a crash or a sweep
             _log_path(ctx, entry).unlink()
-        except OSError:
-            pass
     if (names_dir is not None and isinstance(entry, dict) and entry.get("kind") in NAMED_KINDS
             and not is_signin(entry)):   # a sign-in desk never wrote one (25.3 B1)
         try:

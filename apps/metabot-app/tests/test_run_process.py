@@ -3,14 +3,15 @@ spawns ``metabot ask`` itself: the prompt on stdin, stdout and stderr into a log
 the state folder, the environment scrubbed as a desk's is, in its own session so one
 kill ends the whole tree. A journey's assertions stay index-based; only "a terminal
 exists" is conditional on ``caps.desks``."""
+import contextlib
 import json
 import os
 import signal
 import sys
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from harness import Env, server  # noqa: E402
@@ -28,7 +29,7 @@ def wait_for(pred, timeout=6.0):
 
 class ProcessRunTests(unittest.TestCase):
     def setUp(self):
-        self.flag = mock.patch.dict(os.environ, {"METABOT_ON_DEVICE": "1"})
+        self.flag = unittest.mock.patch.dict(os.environ, {"METABOT_ON_DEVICE": "1"})
         self.flag.start()
         self.env = Env(config=self.config()).start()
         self.cwd = str(self.env.projects / "alpha")
@@ -41,10 +42,8 @@ class ProcessRunTests(unittest.TestCase):
     def tearDown(self):
         for e in mb.registry(server.MB).values():
             if isinstance(e.get("pid"), int):
-                try:
+                with contextlib.suppress(OSError):   # already gone
                     os.killpg(e["pid"], signal.SIGKILL)
-                except OSError:
-                    pass
         self.env.stop()
         self.flag.stop()
 
@@ -202,7 +201,7 @@ class NoTmuxOnLinuxTests(unittest.TestCase):
     def test_no_tmux_means_a_process_run(self):
         env = Env().start()
         try:
-            with mock.patch.object(tmuxcmd, "found", return_value=None):
+            with unittest.mock.patch.object(tmuxcmd, "found", return_value=None):
                 s, j = env.post("/api/run", {"task": "x", "engine": "openai", "cwd": str(env.projects / "alpha")})
             self.assertEqual(s, 200, j)
             e = mb.reg_read(server.MB, j["name"])

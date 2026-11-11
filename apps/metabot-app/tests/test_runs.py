@@ -126,9 +126,9 @@ class RunsTests(unittest.TestCase):
         self.assertEqual(s, 200, j)
         head = "\n".join(["old line"] * 50) + "\n"
         ended = ["Do you want to proceed with the second part?\n"
-                 "[metabot] receipt /x/r.json (valid, 4 steps)\n[metachat] exit 0\n",
+                 + "[metabot] receipt /x/r.json (valid, 4 steps)\n[metachat] exit 0\n",
                  "Allow command?\n[metachat] exit 1\nTo run a command as administrator, use sudo.\n"
-                 "See man sudo_root for details.\n"]
+                 + "See man sudo_root for details.\n"]
         for text in ended:
             self.env.set_pane("fc-needs", head + text)
             server.MB._needs.clear()

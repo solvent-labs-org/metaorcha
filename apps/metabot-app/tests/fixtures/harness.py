@@ -2,6 +2,7 @@
 temp state dir, temp config, scratch METABOT_HOME and the fake binaries on
 PATH. Nothing here touches the real state dir, the real MetaBot home, real
 tmux or the network."""
+import contextlib
 import http.client
 import json
 import re
@@ -111,14 +112,10 @@ class Env:
     def stop(self):
         for key, p in list(mb._PROCS.items()):   # runs the app spawned itself: end and reap them
             if key[0] == str(self.state):
-                try:
+                with contextlib.suppress(OSError):   # already gone
                     os.killpg(p.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired, OSError):   # reaped elsewhere or still dying
                     p.wait(timeout=2)
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
                 mb._PROCS.pop(key, None)
         if self.tls is not None:
             self.tls.shutdown()

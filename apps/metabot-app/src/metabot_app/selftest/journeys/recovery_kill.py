@@ -2,6 +2,7 @@
 shutdown, the whole app at once). The app comes back; the run is listed as interrupted
 in Runs & Receipts (never shown live or done, never dropped, no receipt for it); the
 run's own log says why; the next run works and its receipt verifies."""
+import contextlib
 import json
 import os
 import signal
@@ -66,10 +67,8 @@ def run(s):
 
     def killed():
         s.kill_server()                                   # SIGKILL, no shutdown
-        try:
-            os.kill(box["pid"], signal.SIGKILL)           # the run dies with the app
-        except ProcessLookupError:
-            pass
+        with contextlib.suppress(ProcessLookupError):   # the run dies with the app, or already did
+            os.kill(box["pid"], signal.SIGKILL)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not pid_gone(box["pid"]):
             time.sleep(0.05)
