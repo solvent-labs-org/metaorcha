@@ -1,0 +1,9 @@
+{
+  "name": "metabot-demos",
+  "plugins": [
+    {"name": "watchdog", "source": "./watchdog", "description": "a model-free bridge that reads the app server's state and reports: devices, desks, runs, accounts, doctor, disk, load"},
+    {"name": "monitor", "source": "./monitor", "description": "an MCP server for this PC's screen: look, list windows, show a page or a card, focus, close, type and click"},
+    {"name": "local-harness", "source": "./local-harness", "description": "a custom sub-harness: a local OpenAI-compatible model with its own tool loop, run as a MetaBot engine"},
+    {"name": "browser", "source": "./browser", "description": "how to drive the browser connection (Playwright MCP, isolated Chromium) and a script that adds it"}
+  ]
+}

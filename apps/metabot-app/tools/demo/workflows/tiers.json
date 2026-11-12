@@ -1,0 +1,14 @@
+{
+  "format": "metabot.workflow/1",
+  "name": "tiers",
+  "about": "The same question at three Cursor model tiers, so the receipts show the model each step ran on and what each cost.",
+  "cwd": "__CWD__",
+  "steps": [
+    {"name": "low", "kind": "ask", "engine": "cursor", "model": "grok-4.7-low", "read_only": true,
+     "prompt": "In one line: say which model tier you are, then describe this folder from its README."},
+    {"name": "medium", "kind": "ask", "engine": "cursor", "model": "grok-4.7-medium", "read_only": true,
+     "prompt": "In one line: say which model tier you are, then describe this folder from its README."},
+    {"name": "high", "kind": "ask", "engine": "cursor", "model": "grok-4.7-high", "read_only": true,
+     "prompt": "In one line: say which model tier you are, then describe this folder from its README."}
+  ]
+}

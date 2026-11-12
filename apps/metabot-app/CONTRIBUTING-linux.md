@@ -78,6 +78,21 @@ A passing unit run ends with a line that starts `clean:`.
 The fresh-user harness, which installs and starts the app in an empty home folder, and
 the desktop bundle are coming in the first preview.
 
+## The desktop shell
+
+`desktop/` is the Linux window (Tauri 2): `shell-core` is a standard-library Rust crate
+that finds or starts the app server and builds the page URL, and `src-tauri` is the
+window around it. The core's tests need only `cargo`:
+
+```sh
+make -C apps/metabot-app desktop-test
+```
+
+CI's `bundle-linux` job runs exactly `make -C apps/metabot-app desktop-test`, then builds the
+`.deb` and the AppImage with `cargo tauri build` and smokes the binary under a virtual
+display (`tools/desktop-smoke.sh`). It runs on dispatch or with the `bundle-ci` label, because
+Tauri's build takes minutes; the bundles are the job's artifacts. See `docs/DESKTOP.md`.
+
 ## Known issues
 
 - **Blank or flickering desktop window (WebKitGTK).** On some GPU drivers, WebKitGTK's

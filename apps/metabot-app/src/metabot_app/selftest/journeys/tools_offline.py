@@ -7,7 +7,7 @@ import json
 from .. import fake_engine as fe
 
 AXIS = "real work"
-NEEDS = ("desks",)
+NEEDS = ()                  # the app runs the core itself where no desk exists (no tmux, the phone)
 BUDGET = {"cli run with writes": 15_000, "app read-only run": 10_000}
 SCENARIOS = {
     "tools_offline": [fe.call("write_file", {"path": "a.txt", "content": "hello from the scenario\n"}),

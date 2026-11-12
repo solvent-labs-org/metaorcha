@@ -490,7 +490,12 @@ class OrphanTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(proc_alive(pid), f"sleep {pid} outlived the timed-out read")
         src = (ROOT / "mb.py").read_text()
-        self.assertEqual(src.count("start_new_session=True"), 1)
+        # two sites may start a session of their own: run_captured (so a timed-out read's
+        # group dies with it) and spawn_run_process (a run the app holds without tmux, ended
+        # by one killpg); every other subprocess goes through run_captured
+        self.assertEqual(src.count("start_new_session=True"), 2)
+        for fn in ("def run_captured(", "def spawn_run_process("):
+            self.assertIn("start_new_session=True", src.split(fn)[1].split("\ndef ")[0], fn)
         for fn in ("def cli_read", "def mbq_once(", "def add_account", "def _orcha_verify"):
             body = src.split(fn)[1].split("\ndef ")[0]
             self.assertIn("run_captured(", body, fn)

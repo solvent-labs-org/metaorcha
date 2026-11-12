@@ -19,6 +19,32 @@ class RunsTests(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
 
+    def test_a_run_whose_process_died_is_listed_as_interrupted(self):
+        # the app (and the run with it) was killed mid-run: the core left a live file for a
+        # pid that is gone and never sealed a receipt. Runs & Receipts says so; it is not
+        # shown as live, not as done, and never silently dropped.
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        live = self.env.mbhome / "live"
+        live.mkdir()
+        (live / "mb-dead-1.json").write_text(json.dumps({"format": "metabot.live/1", "kind": "run",
+                                                         "id": "mb-dead-1", "pid": gone.pid,
+                                                         "proc_start": 1, "engine": "openai",
+                                                         "started": "2026-01-01T00:00:00Z"}))
+        s, j = self.env.get("/api/mb/runs")
+        self.assertEqual(s, 200)
+        rows = [r for r in j["runs"] if r["run_id"] == "mb-dead-1"]
+        self.assertEqual(len(rows), 1, j["runs"])
+        r = rows[0]
+        self.assertEqual(r["state"], "interrupted")
+        self.assertEqual(r["engine"], "openai")
+        self.assertEqual(r["started"], "2026-01-01T00:00:00Z")
+        self.assertIn("no receipt", r["problem"])
+        self.assertNotIn("receipt_state", r)
+        s, j = self.env.get("/api/tree")
+        self.assertEqual(s, 200)
+        self.assertIn('"state": "interrupted"', json.dumps(j))
+
     def test_live_run_resolves_desk_and_needs_you(self):
         cwd = str(self.env.projects / "alpha")
         os.environ["FAKE_PANE_PID"] = str(os.getpid())   # the test process is the "pane"
@@ -64,7 +90,11 @@ class RunsTests(unittest.TestCase):
             child.kill()
             child.wait()
         s, j = self.env.get("/api/mb/runs")
-        self.assertEqual(j["runs"], [])   # the process is gone: the entry is stale
+        # the process is gone and sealed nothing: the entry is stale, so the run is not live;
+        # it is listed as interrupted (never dropped). Its desk cannot be walked from a dead
+        # pid, so a tmux run's desk is unknown here; a run the app spawned itself keeps it.
+        self.assertEqual([(r["state"], r["run_id"], r["desk"]) for r in j["runs"]],
+                         [("interrupted", "live-1", None)])
 
     def test_runs_limit_and_error(self):
         for i in range(5):
@@ -85,6 +115,29 @@ class RunsTests(unittest.TestCase):
         self.assertEqual(s, 200)
         self.assertEqual(j["runs"], [])
         self.assertEqual(j["error"], "RuntimeError: boom")
+
+    def test_a_finished_run_desk_asks_nothing(self):
+        # 11-11 (found on the tablet): between the run script's exit line and the
+        # shell's first prompt the screen is the model's answer, which may quote an
+        # ask; needs_you read true for one tick and the page opened the prompt sheet
+        # over a finished run. An exit line among the last six lines with no command
+        # typed after it means nothing waits.
+        s, j = self.env.post("/api/spawn", {"kind": "claude", "label": "needs"})
+        self.assertEqual(s, 200, j)
+        head = "\n".join(["old line"] * 50) + "\n"
+        ended = ["Do you want to proceed with the second part?\n"
+                 + "[metabot] receipt /x/r.json (valid, 4 steps)\n[metachat] exit 0\n",
+                 "Allow command?\n[metachat] exit 1\nTo run a command as administrator, use sudo.\n"
+                 + "See man sudo_root for details.\n"]
+        for text in ended:
+            self.env.set_pane("fc-needs", head + text)
+            server.MB._needs.clear()
+            self.assertFalse(mb.needs_you(server.MB, "needs"), text)
+        # a command typed into the shell that follows the run asks again
+        self.env.set_pane("fc-needs", head + "[metachat] exit 0\nuser@host:~/proj$ sudo ls\n"
+                                             "[sudo] password for user:\n")
+        server.MB._needs.clear()
+        self.assertTrue(mb.needs_you(server.MB, "needs"))
 
     def test_needs_you_patterns_from_the_last_six_lines(self):
         # 21.4 / server-flows-5: each CLI's prompt on a registered desk; a shell

@@ -97,7 +97,10 @@ class Session:
                "orcha_bin": self.orcha_bin, "metabot_home": str(self.home),
                "projects": [{"name": "selftest", "paths": [str(self.job)]}],
                "project_roots": [str(self.job)], "default_folder": str(self.job),
-               "max_desks": 8, "max_runs": 3, "spawn_per_minute": 30,
+               # a run desk stays registered after its run (its shell is kept open to read), so
+               # the whole journey set needs more desk slots than runs at once: the run cap is
+               # what the journeys test, the desk cap must not be what they hit
+               "max_desks": 32, "max_runs": 3, "spawn_per_minute": 30,
                "phone_listener": False, "tmux_socket": f"mb-{self.id}"}
         self.config.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
@@ -252,21 +255,26 @@ class Session:
 
     # ── the app API ─────────────────────────────────────────────────────────
 
-    def api(self, method: str, path: str, body: dict | None = None):
+    def api_raw(self, method: str, path: str, body: dict | None = None) -> tuple[int, bytes]:
+        """(status, body bytes) of one app API call; status 0 when the server did not answer."""
         url = f"http://127.0.0.1:{self.port}{path}{'&' if '?' in path else '?'}t={self.token}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method, headers={
             "Host": f"127.0.0.1:{self.port}", "Content-Type": "application/json", "X-MetaChat": "1"})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                return r.status, json.loads(r.read() or b"{}")
+                return r.status, r.read()
         except urllib.error.HTTPError as e:
-            try:
-                return e.code, json.loads(e.read() or b"{}")
-            except ValueError:
-                return e.code, {}
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            return 0, {"error": str(e)}
+            return e.code, e.read()
+        except (urllib.error.URLError, OSError) as e:
+            return 0, json.dumps({"error": str(e)}).encode()
+
+    def api(self, method: str, path: str, body: dict | None = None):
+        status, raw = self.api_raw(method, path, body)
+        try:
+            return status, json.loads(raw or b"{}")
+        except ValueError:
+            return status, {}
 
     def wait_run(self, desk: str, deadline_s: float = RUN_WAIT_S, every_s: float = 0.25) -> dict:
         """The run index row for ``desk`` once it is done (wait on state, never events)."""

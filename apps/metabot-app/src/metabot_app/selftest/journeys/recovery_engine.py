@@ -6,7 +6,7 @@ import json
 from .. import fake_engine as fe
 
 AXIS = "recovery"
-NEEDS = ("desks",)
+NEEDS = ()                  # the app runs the core itself where no desk exists (no tmux, the phone)
 BUDGET = {"slow": 10_000}
 SCENARIOS = {"error_500": [fe.error(500)], "truncate": [fe.truncated()],
              "refuse": [fe.refused("wrong key")], "slow": [fe.answer("late", delay_ms=2000)]}

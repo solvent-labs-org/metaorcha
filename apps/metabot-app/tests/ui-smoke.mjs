@@ -274,6 +274,13 @@ ok(/\.sbtn \{[^}]*min-height:28px;[^}]*min-width:44px/.test(css), 'the status-li
 for (const s of ['.hbtn', '.ibtn', '.dbtn', '.tbtn', '.cbtn', '.abtn', '.sbtn', '.sheetHead button', '.acts button', '#send', '#plusBtn', '.tab .tx', '#abMode', '#sheetKeys button', '#toast button', '.wk', '.sw'])
   ok(wide.has(s), '44 px tap target (width): ' + s);
 ok(/\.ab \{[^}]*width:64px;[^}]*min-height:56px/.test(css), 'activity items are 64 px wide and at least 56 px tall');
+ok(/\.ab span \{[^}]*-webkit-line-clamp:2/.test(css) && !/\.ab span \{[^}]*nowrap/.test(css), 'activity labels wrap onto two lines instead of cutting a word');
+ok(/\.acctForm input \{[^}]*min-width:14em/.test(css), 'the new-account name keeps 14 em so the typed name is not clipped');
+ok(/<datalist id="modelList">/.test(html), 'the model chip has a datalist to hang the engine models on');
+ok(/'grok-4\.7-low', 'grok-4\.7-medium', 'grok-4\.7-high', 'grok-4\.7-xhigh'/.test(html), 'the cursor tiers are the model chip suggestions when the engine lists none');
+ok(/<span id="chipAccountLabel">login<\/span>/.test(html), 'the account chip label is addressable for the cursor rename');
+ok(/#app \{[^}]*padding-top:env\(safe-area-inset-top\)/.test(css), 'the page clears the status bar (safe area at the top)');
+ok(/'phone', 'Phone'/.test(js), 'Settings lists Phone beside the other sections');
 ok(/\.sheet \.grip \{[^}]*min-height:24px/.test(css), 'the sheet grip is a 24 px handle');
 // the 22.5 frame
 ok(/#abar \{[^}]*width:64px/.test(css) && /#side \{[^}]*width:280px/.test(css) && /#side\.collapsed \{[^}]*width:0/.test(css), 'activity bar 64 px, side bar 280 px, collapsible');
@@ -306,7 +313,7 @@ ok(/<header>[\s\S]*?<svg class="mark" id="hmark"[\s\S]*?mark-eye[\s\S]*?<\/svg>[
 ok(/\.mark-rim \{ fill:var\(--mark-rim\)/.test(css) && /\.mark-plate \{ fill:var\(--mark-plate\)/.test(css) && /\.mark-eye \{ fill:var\(--eye\)/.test(css), 'mark classes are coloured by tokens');
 ok(/--mark-plate:#050404/.test(css) && /--mark-rim:#302f2f/.test(css) && /--mark-plate:#141210/.test(css) && /--mark-rim:#3c3b39/.test(css), 'mark tokens from vendor/brand/tokens.json (light and dark)');
 ok(/\.working \.mark-eye \{ animation:eyeblink 1s/.test(css) && /@keyframes eyeblink/.test(css), 'eyes blink once per second on a working desk');
-ok(js.includes("'It does the work. You keep the record.'"), 'the empty lane line is the one the vision allows');
+ok(js.includes("'What should we get started with?'") && !js.includes("'It does the work. You keep the record.'"), 'the empty lane opens with a question, not the website slogan');
 ok(/const STARTS = \[/.test(js) && ['Sign in an account', 'Desks side by side', 'Run with a receipt', 'Make a workflow', 'Extend'].every(t => js.includes("['" + t + "', ")), 'the empty canvas offers the five starts of 25.4 U7 (they replace the three pills)');
 ok(!/class: 'pill', text: 'Check a receipt'/.test(js), 'the three empty-canvas pills are gone');
 // 23: the app is MetaBot where shown; machine keys unchanged

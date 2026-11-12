@@ -52,7 +52,11 @@ exits 0 clean, 1 a failed step, 2 a budget miss, 3 incomplete.
 | `ask_receipt` | clarity | a run through the app, verified by the app's route and by the core |
 | `tools_offline` | real work | write, read and shell through the core's gate; the receipt names every tool; a read-only run through the app |
 | `workflow_chain` | real work | a four-step `metabot.workflow/1` (two asks, a ladder, an ask) across two providers (the OpenAI-compatible fake and a `metabot.bridge/1` bridge) and two accounts (the ladder's first rung, account alpha, answers 500; the second, account beta, answers); approved at a terminal, refused when piped; every receipt names its engine, endpoint and rung; the exported bundle verifies offline as one chain; a rewritten rung is caught; a missing account stops the chain and still leaves receipts that verify |
+| `concurrency` | real work | three runs at once through the app (`max_runs` 3), a fourth refused with 409 at the cap, overlap proven from the receipts' start and finish times, every receipt verifies, the slot comes back |
+| `recovery_kill` | recovery | the app is killed mid-run and the run with it (no shutdown, as a phone's OS does); it comes back, lists the run as interrupted with no receipt, the run's own log says why (where the app ran the core itself), and the next run works and verifies |
 | `recovery_engine` | recovery | a failing, refusing, truncating or slow model server: every run ends, says why, and its receipt verifies and records the failure |
+| `wrong_key` | setup | the model server refuses the key (401): the first run fails inside 5 s, its receipt verifies and records the failure, and the lane message names the 401 and says to check the engine's key in Settings → Accounts |
+| `receipt_view_clarity` | clarity | a two-tool read-only run through the app: every step row of the run view names its tool, its time and a pass verdict, the signed start and finish show, the verify route says valid and the index digest matches, the served receipt is the file on disk, and a copy with one step's output edited is reported invalid |
 
 A run whose model server fails still gets a signed receipt that verifies, with
 `ok` false and the error in it; that is the clarity the journey checks for.
@@ -68,3 +72,10 @@ MB_STATE=/path/to/state MB_CONFIG=/path/to/config.json tools/tablet-e2e.sh remot
 Steps, each a line in the same `report.jsonl` shape as the Linux runner: install (a build signed with another key is uninstalled first; only this test package), the reverse tunnel, a pairing code from `metabot-app pair`, the words the tablet logged compared with the computer's, the page open over TLS, the device listed, revoke from the CLI, the pairing screen back, and a second pairing. Screenshots and `report.md` sit beside the report under `TABLET_OUT` (default `/var/tmp/metabot-app/tablet/<timestamp>/`).
 
 The hook the script uses exists only in a debuggable build: the launcher activity forwards the intent extras `address`, `code` and `confirm` to the pairing screen, which types them once the page has loaded and logs the four words. A release build ignores the extras, and the pairing screen itself is never exported.
+
+## Two passes on Linux
+
+`make selftest-linux` runs every journey twice: once with tmux on PATH (`caps.desks` true,
+a run is a desk) and once under `METABOT_ON_DEVICE=1` (no desks, no sandbox, the app runs the
+core as its own child, as the phone does). Each pass writes its own session folder under
+`SELFTEST_OUT/desks` and `SELFTEST_OUT/on-device`; CI archives both reports.
