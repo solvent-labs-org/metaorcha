@@ -1881,6 +1881,7 @@ function stream() {   // one EventSource, a liveness watchdog and backoff (contr
     try { ev = JSON.parse(e.data); } catch (err) { return; }   // an old page must shrug at a shape it does not know (finding ui-network-5)
     if (!ev || typeof ev !== 'object' || typeof ev.message !== 'string') return;
     try { add(ev); } catch (err) { fail('event: ' + (err && err.message || err)); }
+    desksSoon();   // chat activity often precedes or answers a prompt: the desks row follows within a second
     if (ev.via === 'alert') { navigator.vibrate && navigator.vibrate(90); }
   };
   if (es.addEventListener) {
@@ -3197,7 +3198,7 @@ window.addEventListener('resize', () => {
   log.scrollTop = log.scrollHeight;
 });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) { fitCur(); fetchDesks(); if (es && es.readyState === 2) stream(); else refill(); recoverLoaders(); }
+  if (!document.hidden) { fitCur(); fetchDesks(); desksTick(); if (es && es.readyState === 2) stream(); else refill(); recoverLoaders(); }
 });
 
 /* ---------- modules (section 18) + the activity bar (22.5) ---------- */
@@ -5246,7 +5247,20 @@ async function boot() {
   doctorAutoOpen();
 }
 boot(); stream();
-setInterval(fetchDesks, 20000);
+/* a prompt armed off-page (tmux, a CLI) is invisible until the next fetchDesks — 20 s of taps
+   at a row that is not there yet (the missed sheet-key taps). Seconds while the page is
+   visible, backed off hidden; stream activity re-reads desks within a second. */
+const DESKS_TICK_ON = 3000, DESKS_TICK_OFF = 20000;
+let DESKS_TIMER = 0, DESKS_SOON = 0;
+function desksTick() {
+  clearTimeout(DESKS_TIMER);
+  DESKS_TIMER = setTimeout(async () => { await fetchDesks(); desksTick(); }, document.hidden ? DESKS_TICK_OFF : DESKS_TICK_ON);
+}
+function desksSoon() {   // one pending re-read at a time: a busy lane stays at one extra fetch a second
+  if (DESKS_SOON) return;
+  DESKS_SOON = setTimeout(() => { DESKS_SOON = 0; fetchDesks(); }, 1000);
+}
+desksTick();
 setInterval(pollRuns, 20000);
 setInterval(streamWatchdog, 10000);
 </script>
