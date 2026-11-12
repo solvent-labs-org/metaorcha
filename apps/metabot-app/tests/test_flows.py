@@ -426,3 +426,25 @@ class TreeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MalformedProjectsTests(unittest.TestCase):
+    """A hand-written config with a project as a bare string (or paths as one string)
+    once crashed /api/tree and every run placement (AttributeError in project_of)."""
+
+    def test_bad_project_entries_are_dropped_and_the_tree_still_answers(self):
+        with Env() as env:
+            alpha = str(env.projects / "alpha")
+            cfg = json.loads(env.config.read_text())
+            cfg["projects"] = ["alpha", {"name": "flat", "paths": alpha}, 7,
+                               {"name": "alpha", "paths": [alpha, 5, ""]}, {"paths": [alpha]}]
+            env.config.write_text(json.dumps(cfg))
+            server.configure()
+            self.assertEqual(server.CFG["projects"], [{"name": "alpha", "paths": [alpha]},
+                                                      {"name": "other", "paths": [alpha]}])
+            server.invalidate()
+            s, j = env.get("/api/tree")
+            self.assertEqual(s, 200, j)
+            self.assertEqual([p["name"] for p in j["projects"]], ["alpha", "other"])
+            s, j = env.post("/api/run", {"task": "x", "engine": "claude", "cwd": alpha})
+            self.assertEqual(s, 200, j)
