@@ -1,0 +1,9 @@
+[package]
+name = "metabot-shell-core"
+version = "0.1.0"
+edition = "2021"
+description = "The desktop shell's logic with no window: find or start the app server, read its port and token, build the page URL. Standard library only, so its tests run anywhere cargo does."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]

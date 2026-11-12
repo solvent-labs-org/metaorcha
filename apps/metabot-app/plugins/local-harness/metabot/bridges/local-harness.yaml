@@ -1,0 +1,7 @@
+# local-harness: a developer's own harness run as a MetaBot engine (metabot.bridge/1).
+# It talks to a local OpenAI-compatible server (Ollama by default) and runs its own
+# tool loop; each call is reported, so the receipt shows the steps.
+command: [bin/local-harness]
+models: ["qwen2.5:3b", "qwen2.5-coder:7b", "llama3.2:1b"]
+tools: own
+read_only: honored

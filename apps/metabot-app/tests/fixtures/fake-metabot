@@ -81,5 +81,32 @@ if argv[:2] == ["status", "--json"]:
 if argv[:2] == ["plugin", "show"] and argv[2:3] == ["missing"]:
     print("no such plugin: missing", file=sys.stderr)
     sys.exit(1)
+if argv[:1] == ["ask"] and argv[-1:] == ["-"]:
+    # the app's own run path (no tmux): the prompt arrives on stdin, the environment is scrubbed
+    task = "" if sys.stdin.isatty() else sys.stdin.read()
+    print("prompt: " + task.strip())
+    print("home: " + os.environ.get("METABOT_HOME", "") + " key: "
+          + ("set" if os.environ.get("ANTHROPIC_API_KEY") else "unset")
+          + " xdg: " + os.environ.get("XDG_CONFIG_HOME", "unset"))
+    if os.environ.get("FAKE_ASK_RECEIPT"):
+        import hashlib
+        home = os.environ.get("METABOT_HOME", "")
+        golden = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden.json")
+        with open(golden) as f:
+            body = json.load(f)["valid"]
+        run_id = "ask-" + hashlib.sha256(str(time.time()).encode()).hexdigest()[:8]
+        text = json.dumps(body, indent=2) + "\n"
+        os.makedirs(os.path.join(home, "receipts"), exist_ok=True)
+        path = os.path.join(home, "receipts", run_id + ".json")
+        with open(path, "w") as f:
+            f.write(text)
+        row = {"run_id": run_id, "cwd": os.getcwd(), "engine": argv[2], "model": "small", "status": "ok",
+               "final": "There are three files.", "steps": 1, "tool_calls": 1, "tokens": 12,
+               "cost_musd": 0, "cost_source": "local", "error": None, "login": None,
+               "receipt": path, "receipt_sha256": hashlib.sha256(text.encode()).hexdigest()}
+        with open(os.path.join(home, "runs.jsonl"), "a") as f:
+            f.write(json.dumps(row) + "\n")
+        print(f"[metabot] receipt {path} (valid)")
+    sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 print("fake metabot: " + " ".join(argv) + "\x1b[0m\x07")
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))

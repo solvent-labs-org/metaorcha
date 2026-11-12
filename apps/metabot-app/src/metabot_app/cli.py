@@ -4,6 +4,8 @@ metabot-app serve                 start the server
 metabot-app pair [--port N]       show a pairing code for a phone (the server must be running)
 metabot-app devices [--remove ID] list paired phones, or remove one
 metabot-app doctor [--json]       what this machine has for a first run; exit 1 on a blocker
+metabot-app send <to> -m <text>   message a desk (or 'tablet' for the person); a desk's
+                                  own env (METACHAT_URL/METACHAT_STATE) names the server
 metabot-app service install|remove|status [--kind systemd|launchd]
                                   keep the server running across logins (no root)
 metabot-app --version
@@ -44,6 +46,15 @@ def _parser() -> argparse.ArgumentParser:
     doc.add_argument(
         "--json", action="store_true", help="the report as one JSON object"
     )
+    snd = sub.add_parser("send", help="message a desk (or 'tablet' for the person)")
+    snd.add_argument("to", help="the desk's name, or 'tablet' for the person")
+    snd.add_argument("-m", "--message", required=True, help="the message text")
+    snd.add_argument(
+        "--from",
+        dest="frm",
+        default=None,
+        help="the sender's name (default: this desk's mailbox, else the shell's)",
+    )
     svc = sub.add_parser("service", help="keep the server running across logins")
     svc.add_argument("action", choices=("install", "remove", "status"))
     svc.add_argument(
@@ -64,23 +75,29 @@ class _Api:
         cfg = server.load_config()
         import os
         from pathlib import Path
+        from urllib.parse import urlsplit
 
         state = Path(os.environ.get("METACHAT_STATE") or cfg["state_dir"]).expanduser()
         self.port = port or int(cfg["port"])
+        # 11-12 (D2): a desk's env names its server (spawn_argv sets METACHAT_URL);
+        # an explicit --port wins over it; else the config's loopback port
+        env_url = os.environ.get("METACHAT_URL")
+        self.base = env_url if (env_url and not port) else f"http://127.0.0.1:{self.port}"
+        self.host = urlsplit(self.base).netloc
         try:
             self.token = (state / "token").read_text().strip()
         except OSError:
             self.token = ""
 
     def call(self, method, path, body=None):
-        url = f"http://127.0.0.1:{self.port}{path}?t={self.token}"
+        url = f"{self.base}{path}?t={self.token}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             url,
             data=data,
             method=method,
             headers={
-                "Host": f"127.0.0.1:{self.port}",
+                "Host": self.host,
                 "Content-Type": "application/json",
                 "X-MetaChat": "1",
             },
@@ -95,7 +112,7 @@ class _Api:
                 return e.code, {}
         except (urllib.error.URLError, OSError, ValueError) as e:
             print(
-                f"metabot-app: the server is not running on 127.0.0.1:{self.port} ({e.reason if hasattr(e, 'reason') else e})",
+                f"metabot-app: the server is not running on {self.host} ({e.reason if hasattr(e, 'reason') else e})",
                 file=sys.stderr,
             )
             return None, None
@@ -173,6 +190,30 @@ def _doctor(as_json: bool) -> int:
     return 0 if rep["ok"] else 1
 
 
+def _send(to: str, message: str, frm: str | None) -> int:
+    """``metabot-app send <to> -m <text>``: the reply command a desk is told to use
+    (server.reply_cmd). The wheel ships it, so every install has it on PATH — the
+    repo's bin/mc-send was named to desks that had none (11-11, the tablet)."""
+    import os
+    import socket
+
+    frm = (
+        frm
+        or os.environ.get("METABOT_MAILBOX")
+        or os.environ.get("METACHAT_DESK")
+        or f"{socket.gethostname().split('.')[0]}-shell"
+    )
+    api = _Api(None)
+    status, reply = api.call("POST", "/api/send", {"target": to, "text": message, "from": frm})
+    if status is None:
+        return 1
+    if status == 200 and reply.get("ok"):
+        print(f"sent to {to} via {reply.get('via')}")
+        return 0
+    print(f"not sent: {reply.get('error', status)}")
+    return 1
+
+
 def _service(action: str, kind: str) -> int:
     from . import service
 
@@ -227,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         return _devices(args.port, args.remove)
     if args.cmd == "doctor":
         return _doctor(args.json)
+    if args.cmd == "send":
+        return _send(args.to, args.message, args.frm)
     if args.cmd == "service":
         return _service(args.action, args.kind)
     return 2

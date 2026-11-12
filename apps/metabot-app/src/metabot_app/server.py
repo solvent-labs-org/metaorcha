@@ -118,7 +118,7 @@ def phone_cert():
 
 def on_device():
     """The server runs inside the phone app (stream E): the runtime says so, or Python does."""
-    return os.environ.get("METABOT_ON_DEVICE") == "1" or hasattr(sys, "getandroidapilevel")
+    return mb.on_device()
 
 
 def invalidate_caps():
@@ -521,8 +521,59 @@ def local_event(message, target="", frm="", via="in", typed=True, **extra):
 
 HANDOFF_TPL = ("[HANDOFF from {frm} via metachat] You are taking this work over. "
                "Read it, then carry it forward in this session:\n{text}\n"
-               "When you have taken it, say so with: mc-send {reply} \"took handoff: <one line>\" "
-               "(mc-send tablet ... answers the person on the tablet)")
+               "When you have taken it, say so with: {reply_cmd} \"took handoff: <one line>\"")
+# the mailbox the person reads: mail sent there lands in the sender's lane (mail_to_lane_once)
+PERSON_BOX = "tablet"
+MAIL_BODY_MAX = 4000
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")   # a colour or cursor sequence in a note's body
+
+
+def reply_cmd(me, to):
+    """How the desk ``me`` answers ``to`` (a desk, or PERSON_BOX for the person).
+    With an inbox adapter the answer is the app's own send subcommand (11-12:
+    the wheel ships it and the desk env carries its METACHAT_URL/METACHAT_STATE;
+    bin/mc-send is a repo script — the 11-11 tablet finding named it to a desk
+    that had none). Without an adapter (every plain install) the core's mail is
+    the channel every install has."""
+    if isinstance(INBOX, inbox_mod.NullInbox):
+        return f"metabot mail send {to} --from {me} -m"
+    return f"metabot-app send {to} -m"
+
+
+def mail_to_lane_once():
+    """One pass: every note in the person's mailbox (``<metabot home>/mail/tablet``,
+    Code Desks' desk-mail shape, written by ``metabot mail send tablet``) lands in
+    its sender's lane, untyped, and is moved to ``read/`` so it is read once.
+    Only regular ``*.md`` files, oldest first; a note that is not mail is left."""
+    home = MB.metabot_home if MB is not None else ""
+    if not home:
+        return
+    box = Path(home) / "mail" / PERSON_BOX
+    try:
+        names = sorted(n for n in os.listdir(box) if n.endswith(".md"))
+    except OSError:
+        return
+    for n in names:
+        path = box / n
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()[:MAIL_BODY_MAX + 4096].decode("utf-8", "replace")
+        except OSError:
+            continue
+        head, _, body = raw.partition("\n\n")
+        fields = dict(ln.split(":", 1) for ln in head.splitlines() if ":" in ln)
+        frm = re.sub(r"[^A-Za-z0-9_.-]", "", fields.get("from", "").strip())[:40]
+        if not frm or fields.get("to", "").strip() != PERSON_BOX:
+            continue
+        try:
+            (box / "read").mkdir(mode=0o700, exist_ok=True)
+            os.rename(path, box / "read" / n)
+        except OSError:
+            continue
+        text = CTRL_RE.sub("", ANSI_RE.sub("", body.replace("\r\n", "\n"))).strip()[:MAIL_BODY_MAX]
+        if text:
+            local_event(text, frm, frm, via="desk", typed=False)
 NO_CHAT_KINDS = {"run": "a run desk takes no chat — watch it in Runs",
                  "cli": "a command desk takes no chat — open its terminal"}
 SIGNIN_NO_CHAT = "a sign-in desk takes no chat — use its sign-in card"
@@ -548,9 +599,10 @@ def deliver(target, text, frm="", kind="message"):
     frm = frm or "the tablet"
     if kind == "handoff":
         # the reply address is a desk name mc-send can route: "tablet" for the person
-        body = HANDOFF_TPL.format(frm=frm, text=text, reply="tablet" if frm == "the tablet" else frm)
+        body = HANDOFF_TPL.format(frm=frm, text=text,
+                                  reply_cmd=reply_cmd(target, PERSON_BOX if frm == "the tablet" else frm))
     elif frm != "the tablet":   # desk -> desk: say who it is from and how to answer
-        body = f"[from {frm} via metachat] {text}\n(reply: mc-send {frm} \"...\")"
+        body = f"[from {frm} via metachat] {text}\n(reply: {reply_cmd(target, frm)} \"...\")"
     else:
         body = text
     if frm == "the tablet":
@@ -722,7 +774,7 @@ def waiting_refusal(name):
     """WAITING_ERR (with the ask line: links out, cut to 120 characters) when
     the desk's pane, read now, waits on an ask (mb.needs_info); else None."""
     info = mb.needs_info(MB, desk_slug(name), fresh=True)
-    if not info.get("needs"):
+    if not info.get("needs") or info.get("ask") == "text":   # a text ask is answered by the chat line
         return None
     line = CTRL_RE.sub("", LINK_RE.sub("(link)", info.get("ask_line") or "")).strip()[:120].rstrip()
     return f"{WAITING_ERR}: {line}" if line else WAITING_ERR
@@ -1037,13 +1089,21 @@ def snapshot(fresh=False):
         return data
 
 
-def desks(scope=None, fresh=False):
+def desks(scope=None, fresh=False, viewer="desktop"):
     """Orchestrator view: one row per named session (desk), armed = the desk
     holds the inbox adapter (INBOX.armed()). Phase 1
     adds the registry entry (meta), project, cwd and needs_you. Served from the
-    shared snapshot; rows are copies."""
+    shared snapshot; rows are copies. ``viewer`` is the requester's scope: a
+    sign-in row's ``where`` says where its link opens — "here" in this machine's
+    own browser, "pc" for a phone (11-12 D1: the login's callback lands on this
+    machine, so on the phone that started it the link opens nowhere). The field
+    is per-request, never in the shared snapshot."""
     snap = snapshot(fresh)
     rows = [dict(d) for d in snap["rows"]]
+    where = "pc" if viewer == "phone" else "here"
+    for d in rows:
+        if d.get("signin") is not None:
+            d["signin"] = {**d["signin"], "where": where}
     if scope == "metachat":
         rows = [d for d in rows if d["name"] in snap["reg"]]
     return {"desks": rows, "streams": dict(snap["streams"])}
@@ -1622,12 +1682,12 @@ def kill_desk(body):
     for d in desks(fresh=True)["desks"]:   # the armed desks as they are now, not a second-old view
         if d["armed"] and desk_slug(d["name"]) == name:
             return 403, {"ok": False, "error": "armed"}
-    alive = mb.has_session(MB, name)
     entry = mb.reg_read(MB, name)     # read before kill_session drops it
+    alive = mb.desk_alive(MB, name, entry)
     if not alive and entry is None:
         return 404, {"ok": False, "error": "no such desk"}
     if alive:
-        ok, err = mb.kill_session(MB, name)
+        ok, err = mb.kill_desk_any(MB, name, entry)
         if not ok:
             return 502, {"ok": False, "error": err or "kill failed"}
     mb.forget_desk(MB, name, NAMES_DIR, entry=entry)
@@ -1896,7 +1956,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/sessions":
             self._json({"sessions": sessions()})
         elif path == "/api/desks":
-            self._json(desks(qs.get("scope", [""])[0] or None))
+            self._json(desks(qs.get("scope", [""])[0] or None, viewer=self.server.scope))
         elif path == "/api/aliases":
             self._json({"aliases": load_aliases()})
         elif path == "/api/history":
@@ -1932,6 +1992,9 @@ class Handler(BaseHTTPRequestHandler):
             limit = _int(qs.get("limit", ["50"])[0], 50, 1, 200)
             project = qs.get("project", [""])[0] or None
             self._json(mb.runs(MB, limit, project))
+        elif path.startswith("/api/mb/runlog/"):
+            status, reply = mb.runlog(MB, path[len("/api/mb/runlog/"):])
+            self._json(reply, status)
         elif path.startswith("/api/mb/run/"):
             rid = path[len("/api/mb/run/"):]
             if not catalog.is_safe_id(rid):
@@ -2316,6 +2379,14 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
     scope = "desktop"       # the desktop token opens it; loopback by default
 
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        if self.scope == "desktop":
+            # 11-12 (D2): the desks it spawns reach it here — `metabot-app send`
+            # reads METACHAT_URL from the desk env (create_session). The bound
+            # port, never the config's wish (A6 takes a free one when it must)
+            os.environ["METACHAT_URL"] = f"http://127.0.0.1:{self.server_address[1]}"
+
 
 class TLSServer(Server):
     """C2: the listener phones pair with. TLS with the host's pinned certificate
@@ -2550,11 +2621,16 @@ def _run_summary(row, run_id):
     return run
 
 
+KEY_REFUSED_RE = re.compile(r"\banswered (401|403)\b")
+
+
 def _run_message(row):
     final = row.get("final") if isinstance(row.get("final"), str) else ""
     if row.get("status") not in (None, "ok"):
         why = row.get("error") if isinstance(row.get("error"), str) and row.get("error") else final or str(row.get("status"))
         text = "The run failed: " + why
+        if KEY_REFUSED_RE.search(why):   # a hosted engine refused the key: say where to fix it
+            text += " Check this engine's key in Settings → Accounts."
     else:
         text = final.strip() or "The run ended with no answer."
     return text if len(text) <= MIRROR_TEXT_MAX else text[:MIRROR_TEXT_MAX] + "…"
@@ -2605,7 +2681,8 @@ def run_report_once():
             if now - first < RUN_ROW_GRACE:
                 continue
         if mb.reg_update(MB, n, reported=True):
-            local_event(f"The run ended (exit {ends[n]}) with no receipt; its terminal says why.", n, "",
+            where = "log" if mb.is_process_run(e) else "terminal"
+            local_event(f"The run ended (exit {ends[n]}) with no receipt; its {where} says why.", n, "",
                         via="alert", typed=False)
 
 
@@ -2620,6 +2697,11 @@ def mirror_loop():
             run_report_once()
         except Exception as exc:   # nor over a run report
             slog(f"run report: {type(exc).__name__}: {exc}"[:200])
+            time.sleep(10)
+        try:
+            mail_to_lane_once()
+        except Exception as exc:   # nor over the person's mailbox
+            slog(f"mail: {type(exc).__name__}: {exc}"[:200])
             time.sleep(10)
         time.sleep(MIRROR_EVERY)
 

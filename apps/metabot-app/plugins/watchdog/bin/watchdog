@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""watchdog: a MetaBot bridge (metabot.bridge/1) with no model.
+
+It reads the app server's routes (meta, devices, desks, runs, accounts, doctor)
+and local facts (the server process, disk, load) and reports, one tool step per
+probe, so the receipt shows what was looked at. The app is found from
+METACHAT_STATE, else the state_dir in METACHAT_CONFIG or
+~/.config/metachat/config.json, else ~/.local/state/metachat; the token is read
+from that folder and never printed. A prompt containing "json" gets the report
+as JSON. Findings make the verdict ATTENTION; nothing here writes anything.
+"""
+
+import json
+import os
+import shutil
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DISK_FLOOR_GB = float(os.environ.get("WATCHDOG_DISK_FLOOR_GB", "4"))
+# the 1-minute load above which the machine is a finding, per cpu (a build host runs hot)
+LOAD_PER_CPU = float(os.environ.get("WATCHDOG_LOAD_PER_CPU", "2"))
+DEVICE_QUIET_S = int(os.environ.get("WATCHDOG_DEVICE_QUIET_S", str(6 * 3600)))
+TIMEOUT = 10
+SESSION = "watchdog-1"
+
+
+def say(**event):
+    print(json.dumps(event), flush=True)
+
+
+def config_path():
+    return os.environ.get("METACHAT_CONFIG") or os.path.expanduser("~/.config/metachat/config.json")
+
+
+def state_dir():
+    sd = os.environ.get("METACHAT_STATE")
+    if not sd:
+        try:
+            with open(config_path(), encoding="utf-8") as f:
+                sd = (json.load(f) or {}).get("state_dir")
+        except (OSError, ValueError):
+            sd = None
+    return os.path.expanduser(sd or "~/.local/state/metachat")
+
+
+def server_of(sd):
+    """(port, pid, token) from the state folder; (None, None, None) when no server was recorded."""
+    try:
+        with open(os.path.join(sd, "server.json"), encoding="utf-8") as f:
+            rec = json.load(f) or {}
+        with open(os.path.join(sd, "token"), encoding="utf-8") as f:
+            token = f.read().strip()
+    except (OSError, ValueError):
+        return None, None, None
+    port, pid = rec.get("port"), rec.get("pid")
+    if not isinstance(port, int) or not token:
+        return None, None, None
+    return port, pid if isinstance(pid, int) else None, token
+
+
+def ago(ts, now):
+    try:
+        s = max(0, int(now - float(ts)))
+    except (TypeError, ValueError):
+        return "unknown"
+    if s < 90:
+        return f"{s}s ago"
+    if s < 5400:
+        return f"{s // 60}m ago"
+    return f"{s // 3600}h ago"
+
+
+class Watch:
+    def __init__(self, port, token):
+        self.port, self.token = port, token
+        self.n = 0
+        self.findings = []
+        self.lines = []
+        self.facts = {}
+
+    def get(self, path):
+        sep = "&" if "?" in path else "?"
+        url = f"http://127.0.0.1:{self.port}/api/{path}{sep}t={urllib.parse.quote(self.token)}"
+        req = urllib.request.Request(url, headers={"X-MetaChat": "1"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # noqa: S310 (loopback only)
+            return json.loads(r.read().decode("utf-8"))
+
+    def probe(self, name, path, fn):
+        """One tool step: GET the route, summarize it; the args name the path, never the token."""
+        self.n += 1
+        cid = f"w{self.n}"
+        say(type="tool_call", call_id=cid, tool=f"watchdog/{name}", args={"path": "/api/" + path})
+        try:
+            body = self.get(path)
+            out = fn(body)
+            ok = True
+        except (urllib.error.URLError, OSError, ValueError, TypeError, KeyError) as exc:
+            out = f"{name}: no answer ({type(exc).__name__})"
+            ok = False
+            self.findings.append(out)
+        say(type="tool_result", call_id=cid, output=out, ok=ok)
+        self.lines.append(out)
+        return ok
+
+    def local(self, name, fn):
+        self.n += 1
+        cid = f"w{self.n}"
+        say(type="tool_call", call_id=cid, tool=f"watchdog/{name}", args={})
+        out = fn()
+        say(type="tool_result", call_id=cid, output=out, ok=True)
+        self.lines.append(out)
+
+    # -------- summaries
+    def meta(self, b):
+        caps = b.get("caps") or {}
+        engines = caps.get("engines") or {}
+        self.facts["caps"] = caps
+        return (f"app: build {b.get('build') or '?'}; desks {'yes' if caps.get('desks') else 'no'}, "
+                f"sandbox {'yes' if caps.get('sandbox') else 'no'}, phone listener "
+                f"{'yes' if caps.get('phone_listener') else 'no'}; engines {', '.join(sorted(engines)) or 'none'}")
+
+    def devices(self, b):
+        now = time.time()
+        rows = [d for d in b.get("devices") or [] if isinstance(d, dict)]
+        if not rows:
+            self.findings.append("no paired device")
+            return "devices: none paired"
+        parts = []
+        for d in rows:
+            seen = d.get("seen") or d.get("created")
+            parts.append(f"{d.get('name') or 'device'} seen {ago(seen, now)}")
+            try:
+                quiet = now - float(seen) > DEVICE_QUIET_S
+            except (TypeError, ValueError):
+                quiet = False   # no usable timestamp: said as "seen unknown" above, not a finding
+            if quiet:
+                self.findings.append(f"device {d.get('name') or '?'} not seen for {ago(seen, now)[:-4]}")
+        return f"devices: {len(rows)} paired; " + "; ".join(parts)
+
+    def desks(self, b):
+        rows = [d for d in b.get("desks") or [] if isinstance(d, dict)]
+        live = [d for d in rows if d.get("pane")]
+        needs = [d.get("name") for d in rows if d.get("needs_you")]
+        for n in needs:
+            self.findings.append(f"desk {n} needs you")
+        kinds = {}
+        for d in live:
+            k = d.get("cli") or "?"
+            kinds[k] = kinds.get(k, 0) + 1
+        by = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
+        return f"desks: {len(live)} live of {len(rows)} ({by}); needs you: {', '.join(needs) or 'none'}"
+
+    def runs(self, b):
+        rows = [r for r in b.get("runs") or [] if isinstance(r, dict)]
+        states = {}
+        for r in rows:
+            s = r.get("state") or "?"
+            states[s] = states.get(s, 0) + 1
+        for r in rows:
+            if r.get("state") == "interrupted":
+                self.findings.append(f"run {r.get('run_id')} was interrupted")
+        bad = [r.get("run_id") for r in rows if r.get("state") == "done" and r.get("receipt_state") not in (None, "valid")]
+        for rid in bad:
+            self.findings.append(f"run {rid} has a receipt that is not valid")
+        by = ", ".join(f"{k} {v}" for k, v in sorted(states.items())) or "none yet"
+        return f"runs (last {len(rows)}): {by}"
+
+    def accounts(self, b):
+        parts = []
+        for engine in sorted(k for k in b if k != "defaults"):
+            rows = [a for a in b.get(engine) or [] if isinstance(a, dict)]
+            ready = [a.get("name") for a in rows if a.get("ready")]
+            parts.append(f"{engine} {len(ready)}/{len(rows)} ready")
+        defaults = b.get("defaults") or {}
+        dready = [k for k, v in defaults.items() if isinstance(v, dict) and v.get("ready")]
+        return f"accounts: {', '.join(parts) or 'none'}; defaults ready: {', '.join(sorted(dready)) or 'none'}"
+
+    def doctor(self, b):
+        items = [i for i in b.get("items") or [] if isinstance(i, dict)]
+        blockers = [i.get("what") for i in items if i.get("blocker") and not i.get("ok")]
+        for w in blockers:
+            self.findings.append(f"doctor: {w}")
+        notok = sum(1 for i in items if not i.get("ok"))
+        return f"doctor: {len(items) - notok}/{len(items)} ok" + (f"; blockers: {', '.join(map(str, blockers))}" if blockers else "")
+
+    # -------- local
+    def machine(self, sd, pid):
+        def fn():
+            parts = []
+            alive = None
+            if pid:
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                except ProcessLookupError:
+                    alive = False
+                except PermissionError:
+                    alive = True
+            if alive is False:
+                self.findings.append("the app server's process is gone")
+            parts.append(f"server pid {'alive' if alive else 'gone' if alive is False else 'unknown'}")
+            try:
+                du = shutil.disk_usage(sd)
+                free = du.free / 1e9
+                parts.append(f"disk free {free:.1f} GB")
+                if free < DISK_FLOOR_GB:
+                    self.findings.append(f"disk below {DISK_FLOOR_GB:g} GB ({free:.1f} GB free)")
+            except OSError:
+                parts.append("disk unknown")
+            try:
+                l1 = os.getloadavg()[0]
+                ncpu = os.cpu_count() or 1
+                parts.append(f"load {l1:.1f} on {ncpu} cpus")
+                if l1 > LOAD_PER_CPU * ncpu:
+                    self.findings.append(f"load {l1:.1f} is high for {ncpu} cpus")
+            except (OSError, AttributeError):
+                parts.append("load unknown")
+            return "machine: " + ", ".join(parts)
+        self.local("machine", fn)
+
+
+def main():
+    with open(sys.argv[-1], encoding="utf-8") as f:
+        job = json.load(f)
+    prompt = str(job.get("prompt") or "")
+    say(type="started", session_id=SESSION, model=job.get("model"))
+    sd = state_dir()
+    port, pid, token = server_of(sd)
+    if port is None:
+        say(type="final", text="WATCHDOG ATTENTION (1): no app server is recorded in the state folder", session_id=SESSION)
+        return
+    w = Watch(port, token)
+    if w.probe("meta", "meta", w.meta):
+        w.probe("devices", "devices", w.devices)
+        w.probe("desks", "desks", w.desks)
+        w.probe("runs", "mb/runs?limit=20", w.runs)
+        w.probe("accounts", "accounts", w.accounts)
+        w.probe("doctor", "doctor", w.doctor)
+    w.machine(sd, pid)
+    verdict = "WATCHDOG OK" if not w.findings else f"WATCHDOG ATTENTION ({len(w.findings)})"
+    if "json" in prompt.lower():
+        text = json.dumps({"verdict": verdict, "findings": w.findings, "probes": w.lines, "at": int(time.time())})
+    else:
+        text = verdict + ("\n- " + "\n- ".join(w.findings) if w.findings else "") + "\n\n" + "\n".join(w.lines)
+    say(type="text", text=text)
+    say(type="final", text=text, session_id=SESSION)
+
+
+if __name__ == "__main__":
+    main()

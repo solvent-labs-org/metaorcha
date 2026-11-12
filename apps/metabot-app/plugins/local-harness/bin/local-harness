@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""local-harness: a custom sub-harness run as a MetaBot bridge (metabot.bridge/1).
+
+A small agent loop over a local OpenAI-compatible chat endpoint
+(LOCAL_HARNESS_URL, default http://127.0.0.1:11434/v1, Ollama) with three tools
+of its own: list_dir, read_file and, when the job is not read-only, write_file.
+Every call is reported as a tool_call and a tool_result, every request's token
+counts as usage, so MetaBot's receipt shows what the model did. It is the shape
+a developer copies to run their own harness under MetaBot's receipts.
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+URL = os.environ.get("LOCAL_HARNESS_URL", "http://127.0.0.1:11434/v1").rstrip("/")
+DEFAULT_MODEL = os.environ.get("LOCAL_HARNESS_MODEL", "qwen2.5:3b")
+MAX_TURNS = 8
+READ_LIMIT = 20_000
+SESSION = "local-harness-1"
+
+TOOLS = {
+    "list_dir": {"description": "List the entries of a folder inside the job's folder.",
+                 "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "relative path; '.' is the job's folder"}}}},
+    "read_file": {"description": "Read a text file inside the job's folder.",
+                  "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    "write_file": {"description": "Write a text file inside the job's folder.",
+                   "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+}
+
+
+def say(**event):
+    print(json.dumps(event), flush=True)
+
+
+def inside(cwd, rel):
+    path = os.path.realpath(os.path.join(cwd, rel or "."))
+    root = os.path.realpath(cwd)
+    if path != root and not path.startswith(root + os.sep):
+        raise ValueError("outside the job's folder")
+    return path
+
+
+def do_tool(name, args, cwd, read_only):
+    rel = str(args.get("path") or ".")
+    if name == "list_dir":
+        p = inside(cwd, rel)
+        return "\n".join(sorted(os.listdir(p))) or "(empty)"
+    if name == "read_file":
+        p = inside(cwd, rel)
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return f.read(READ_LIMIT)
+    if name == "write_file":
+        if read_only:
+            raise PermissionError("the job is read-only: write_file is refused")
+        p = inside(cwd, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(str(args.get("content") or ""))
+        return f"wrote {len(str(args.get('content') or ''))} characters to {rel}"
+    raise ValueError(f"no tool named {name}")
+
+
+def chat(model, messages, tools):
+    body = {"model": model, "messages": messages, "tools": tools, "stream": False}
+    req = urllib.request.Request(URL + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=180) as r:  # noqa: S310 (a local endpoint)
+        return json.loads(r.read().decode("utf-8"))
+
+
+def main():
+    with open(sys.argv[-1], encoding="utf-8") as f:
+        job = json.load(f)
+    model = job.get("model") or DEFAULT_MODEL
+    cwd = job.get("cwd") or os.getcwd()
+    read_only = bool(job.get("read_only"))
+    say(type="started", session_id=SESSION, model=model)
+    names = [n for n in TOOLS if not (read_only and n == "write_file")]
+    tools = [{"type": "function", "function": {"name": n, **TOOLS[n]}} for n in names]
+    system = ("You are a careful assistant working in one folder. Use the tools to look before you answer. "
+              + ("You may not write anything in this job. " if read_only else "")
+              + "Answer briefly when you are done.")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": str(job.get("prompt") or "")}]
+    n = 0
+    for _turn in range(MAX_TURNS):
+        try:
+            res = chat(model, messages, tools)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            say(type="error", message=f"the local model at {URL} did not answer ({type(exc).__name__})")
+            return
+        usage = res.get("usage") or {}
+        if usage:
+            say(type="usage", data=usage, total=False)
+        choice = (res.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            say(type="final", text=str(msg.get("content") or ""), session_id=SESSION)
+            return
+        messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
+        for call in calls:
+            n += 1
+            cid = f"lh{n}"
+            fn = call.get("function") or {}
+            name = fn.get("name")
+            try:
+                args = json.loads(fn.get("arguments") or "{}") if isinstance(fn.get("arguments"), str) else (fn.get("arguments") or {})
+            except ValueError:
+                args = {}
+            say(type="tool_call", call_id=cid, tool=name, args=args if isinstance(args, dict) else {})
+            try:
+                out, ok = do_tool(name, args if isinstance(args, dict) else {}, cwd, read_only), True
+            except (OSError, ValueError, PermissionError) as exc:
+                out, ok = f"{type(exc).__name__}: {exc}", False
+            say(type="tool_result", call_id=cid, output=out[:4000], ok=ok)
+            messages.append({"role": "tool", "tool_call_id": call.get("id") or cid, "content": out[:4000]})
+    say(type="final", text="stopped after the most turns this harness allows", session_id=SESSION)
+
+
+if __name__ == "__main__":
+    main()

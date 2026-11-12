@@ -18,3 +18,5 @@ metabot-app service install|remove|status  keep the server running across logins
 What the app claims, and the test behind each claim: [docs/CLAIMS.md](docs/CLAIMS.md).
 The self-test that runs those claims on Linux and on a phone: [docs/SELFTEST.md](docs/SELFTEST.md).
 Pairing a phone: [docs/PAIRING.md](docs/PAIRING.md). Posting a receipt: [docs/RECEIPT-WALL.md](docs/RECEIPT-WALL.md).
+The demos that prove MetaBot on itself (watchdog loop, tiers, the PC screen as a tool): [docs/DEMOS.md](docs/DEMOS.md).
+The Linux desktop window: [docs/DESKTOP.md](docs/DESKTOP.md).

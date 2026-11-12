@@ -63,8 +63,10 @@ Linux-only. [TESTING.md](TESTING.md) says what each proves. A passing unit run e
 a line that starts `clean:`.
 
 macOS runner minutes are limited, so the `macos` job runs only when a maintainer starts
-it by hand or adds the `macos-ci` label to a pull request. Run `make test-macos` yourself
-and tick macOS in the pull request's "Tested on" list.
+it by hand (a dispatch with the `macos` input on) or adds the `macos-ci` label to a pull
+request. Run `make test-macos` yourself and tick macOS in the pull request's "Tested on"
+list. The suite does not pass on macOS yet: its first run (2026-11-11) failed on paths
+under `/private` and on timing; the port is a December item.
 
 The fresh-user harness and the desktop bundle are coming in the first preview.
 

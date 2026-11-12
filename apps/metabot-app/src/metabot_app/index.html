@@ -94,12 +94,13 @@
   @keyframes eyeblink { 0%, 88%, 100% { transform:scaleY(1); } 94% { transform:scaleY(.1); } }
 
   /* ---- frame (22.5): activity bar · side bar · tabs + canvas · right panel; terminal drawer; one status line ---- */
-  #app { display:flex; flex-direction:column; height:100dvh; }
+  #app { display:flex; flex-direction:column; height:100dvh; padding-top:env(safe-area-inset-top); }
   #main { display:flex; flex:1; min-height:0; }
   #abar { width:64px; flex:none; display:flex; flex-direction:column; background:var(--side); border-right:1px solid var(--line); padding:4px 0; overflow:hidden; }
   .ab { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; width:64px; min-height:56px;
     color:var(--muted); font:500 11px/1 var(--sans); border-radius:0; padding:6px 2px; }
-  .ab span { max-width:60px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ab span { max-width:60px; overflow:hidden; white-space:normal; line-height:1.15; text-align:center;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
   .ab.on { color:var(--txt); background:var(--selected); }
   .ab.on::before { content:''; position:absolute; left:0; top:10px; bottom:10px; width:2px; background:var(--accent); border-radius:0 2px 2px 0; }
   .ab.need .ic { color:var(--warn); }
@@ -254,6 +255,7 @@
   #chipMode { min-height:44px; padding:0 14px; border:1px solid var(--line); border-radius:8px; font:500 14px/1 var(--sans); color:var(--txt); background:var(--surface); }
   #chipMode.ask { color:var(--accent); border-color:var(--accent); }
   #chipCost { max-width:140px; }
+  #chipModel { max-width:200px; }
   /* the '/' palette floats above the pill (out of flow) */
   #palette { position:absolute; left:0; right:0; bottom:calc(100% + 8px); z-index:5; background:var(--surface); border:1px solid var(--line); border-radius:12px;
     overflow:hidden; max-height:46vh; overflow-y:auto; box-shadow:var(--shadow3); }
@@ -333,9 +335,13 @@
   .acct .as.bad { color:var(--bad); flex-basis:100%; }
   .acct .an { font-weight:600; flex:none; } .acct .as { flex:1; min-width:0; color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; }
   .acctForm { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .acctForm input { flex:1 1 14em; min-width:14em; }
+  .acctForm select, .acctForm .abtn { flex:none; }
   .acctForm input, .acctForm select { min-height:44px; }
   .err { color:var(--txt); background:var(--surface); border:1px solid var(--bad); border-radius:12px; padding:8px 12px; font-size:14px; white-space:pre-wrap; }
   .today { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+  .pairCode { font:600 22px/1.2 var(--mono); letter-spacing:.08em; margin:4px 0; }
+  .pairWords { font:600 18px/1.5 var(--sans); margin:4px 0 0; }
   .today button { border:1px solid var(--line); border-radius:12px; padding:10px 12px; text-align:left; display:flex; flex-direction:column; gap:2px; min-height:64px; background:var(--surface); }
   .today b { font:600 20px/1.2 var(--ascii); } .today span { font-size:12px; color:var(--muted); }
   .sect { display:flex; flex-direction:column; gap:6px; }
@@ -349,6 +355,9 @@
   /* set-up page (22.5) */
   .steps4 { display:flex; flex-direction:column; gap:10px; }
   .step { display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+  .step.block { border-color:var(--bad); }
+  .step.block b { color:var(--bad); }
+  .step.note b { color:var(--muted); }
   .step .sn { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--line); display:flex; align-items:center; justify-content:center; font:600 13px/1 var(--ascii); flex:none; color:var(--muted); }
   .step.done .sn { background:var(--ok); border-color:var(--ok); color:var(--surface); }
   .step .sl { flex:1; min-width:0; } .step .sl b { display:block; font-weight:600; } .step .sl span { font-size:13px; color:var(--muted); }
@@ -462,7 +471,8 @@
   .start .stx span { font-size:12px; color:var(--muted); }
   .wkeys { display:flex; gap:6px; flex-wrap:wrap; padding:0 6px 8px 34px; }
   .wline { flex:1 1 100%; min-width:0; font:12px/1.4 var(--mono); color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .wk { min-height:44px; min-width:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:500 14px/1 var(--sans); }
+  .wk { min-height:44px; min-width:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:500 14px/1 var(--sans); touch-action:manipulation; }
+  .wkeys input { flex:1 1 12em; min-width:12em; min-height:44px; padding:0 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); font:400 14px/1 var(--sans); }
   .wk:hover { background:var(--hover); }
   .sin .sinStep { font:500 16px/1.45 var(--sans); }
   .sinOk { display:flex; align-items:center; gap:8px; color:var(--ok); font:600 16px/1.3 var(--sans); }
@@ -657,10 +667,12 @@
       <label><span>engine</span><select id="chipEngine" title="engine"></select></label>
       <label><span>role</span><button id="chipSuggest" type="button" title="metabot suggest: the role and engine that suit this task, and the rule that says so">Suggest</button></label>
       <p class="small" id="runWhy"></p>
-      <label><span>login</span><select id="chipAccount" title="login"></select></label>
+      <label><span id="chipAccountLabel">login</span><select id="chipAccount" title="login"></select></label>
       <label><span>folder</span><select id="chipProject" title="project folder"></select></label>
       <label><span>writes</span><button id="chipMode" type="button" title="read-only, or ask — a write waits for approval unless you allowed it in advance">read-only</button></label>
       <label><span>max cost</span><input id="chipCost" type="text" inputmode="decimal" placeholder="$ (optional)" title="max cost (optional)"></label>
+      <label><span>model</span><input id="chipModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="engine default" title="the engine's model name (optional); cursor: what `cursor-agent models` lists"></label>
+      <datalist id="modelList"></datalist>
       <p class="small" id="runEquals"></p>
     </div>
   </div>
@@ -844,7 +856,7 @@ async function api(path, body, opts) {
     if (!j || typeof j !== 'object') j = {ok: false, error: 'bad reply'};
     if (!('ok' in j)) j.ok = r.ok;
     j.status = r.status;
-    if (r.status === 403 && j.error === 'bad token') badToken();
+    if (r.status === 403 && j.error === 'bad token') META.scope === 'phone' ? phoneRemoved() : badToken();   /* Bugbot 11-11: a 403 "default desk", "armed", "csrf"… is a refusal, never a removal */
     pcUp();
     return j;
   } catch (e) { pcDown(); return {ok: false, error: e && e.name === 'AbortError' ? 'PC not answering' : 'network', status: 0}; }
@@ -858,7 +870,10 @@ function getJ(path, opts) {
     const a = abortIn((opts && opts.timeout) || 10000);
     try {
       const r = await fetch(tok(path), {signal: a.signal});
-      if (r.status === 403) { let j = null; try { j = await r.json(); } catch (e) {} if (j && j.error === 'bad token') badToken(); }
+      if (r.status === 403) {
+        let j = null; try { j = await r.json(); } catch (e) {}
+        if (j && j.error === 'bad token') META.scope === 'phone' ? phoneRemoved() : badToken();   /* only the token says the device is gone */
+      }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       pcUp();
@@ -884,9 +899,26 @@ function badToken() {   // a rotated token: every call is 403 from now on; the p
   if (BAD_TOKEN) return; BAD_TOKEN = true;
   banner('This tablet is signed out of the PC (bad token) — relaunch the MetaBot app.');
 }
+/* 19:45 tablet rule: a phone the computer removed gets 403 everywhere. Say it once, then hand the
+   page to the APK through the metabot: scheme (it reloads the page, gets the main-frame 403 and
+   opens the pairing screen). The desktop scope keeps the older bad-token banner. */
+let PHONE_GONE = false;
+function phoneRemoved() {
+  if (PHONE_GONE) return; PHONE_GONE = true;
+  banner('This phone was removed from the computer. Pair it again.');
+  location.href = 'metabot://retry';
+}
 
 /* ---------- state ---------- */
-let META = {app: 'MetaBot', version: '', build: '', metabot: {}, orcha: {}, display: {vnc: false}, default_desk: '', limits: {}, inbox: null};
+let META = {app: 'MetaBot', version: '', build: '', metabot: {}, orcha: {}, display: {vnc: false}, default_desk: '', limits: {}, inbox: null, scope: ''};
+/* 1.3 (B8): the page never asks which OS it is on — it reads the capability block and gates its surfaces
+   on it. A missing block (an older PC) means the surfaces the page already had: a desktop with tmux
+   and a sandbox, no camera, no phone listener, and never on_device. cap() answers the boolean flags;
+   engines is an object, so capEngines() reads it. */
+const CAP_DEFAULTS = {on_device: false, camera: false, phone_listener: false};
+const cap = k => !META.caps ? !(k in CAP_DEFAULTS) : (k in META.caps ? META.caps[k] !== false : !(k in CAP_DEFAULTS));
+const capEngines = () => (META.caps && typeof META.caps.engines === 'object' && META.caps.engines ? META.caps.engines : null);
+const capService = () => (META.caps && typeof META.caps.service === 'string') ? META.caps.service : '';   /* systemd | launchd | android | none | '' (an older PC) */
 /* B1: the chat inbox adapter, when the PC has one (META.inbox: {name, arm_hint, arm_command}); null = chat is typed into the terminal only */
 const INBOX = () => (META.inbox && typeof META.inbox === 'object' && META.inbox.name ? META.inbox : null);
 const armCmd = name => { const ib = INBOX(); return ib && ib.arm_command ? String(ib.arm_command).replace('{desk}', name) : ''; };
@@ -1102,7 +1134,9 @@ function bubble(ev) {
     h('button', {class: 'cbtn run', type: 'button', title: 'type + Enter', onclick: e => { e.stopPropagation(); runCmd(c); }}, icon('enter'))));
   const claimed = ev.via === 'in' && ev.target && claimAt[ev.target] && ev.time <= claimAt[ev.target];
   /* the lane already says which desk: 'you' for yours, 'from → target' for desk → desk, the sender's name otherwise */
-  const who = ev.via === 'in' ? 'you' : ev.mirror ? disp(ev.from || '?') : ev.via === 'desk' ? disp(ev.from || '?') + ' → ' + disp(ev.target || '?') : '';   // a mirror: the desk's own Claude answering
+  const who = ev.via === 'in' ? 'you' : ev.mirror ? disp(ev.from || '?') : ev.via === 'desk'
+    ? (ev.from === ev.target ? disp(ev.from || '?') + ' → you' : disp(ev.from || '?') + ' → ' + disp(ev.target || '?'))
+    : '';   // a mirror: the desk's own Claude answering; from == target is a desk's note to the person (20:45), never "desk → desk"
   const state = (claimed ? ' · ✓ ' + disp(ev.target) : '') + (ev.failed ? ' · not sent' : ev.pending ? ' · sending' : '');
   if (ev.via === 'in') {
     const small = h('small', {}, chip ? h('span', {class: chip[0], text: chip[1]}) : null, chip ? ' ' : '', who + state);
@@ -1218,9 +1252,10 @@ function renderLog() {
   EMPTY_EL = null; ACTS_EL = null; SEL_MSG = null; LAST_SHOWN_T = 0;
   let n = 0;
   MSGS.forEach(ev => { if (passes(ev)) { appendBubble(ev); n++; } });
-  if (!n) {   // the empty canvas (22.2, 25.4 U7): the mark, the line, the five starts
-    EMPTY_EL = h('div', {class: 'empty'}, markEl(), h('p', {text: 'It does the work. You keep the record.'}),
-      h('div', {class: 'starts'}, STARTS.map(([t, sub, ic, fn]) => h('button', {type: 'button', class: 'start', onclick: fn},
+  if (!n) {   // the empty canvas (22.2, 25.4 U7): the mark, the line, the starts
+    const starts = cap('desks') ? STARTS : STARTS.filter(([t]) => t !== 'Desks side by side');   /* 1.3: no tmux, no desk-starting card */
+    EMPTY_EL = h('div', {class: 'empty'}, markEl(), h('p', {text: 'What should we get started with?'}),
+      h('div', {class: 'starts'}, starts.map(([t, sub, ic, fn]) => h('button', {type: 'button', class: 'start', onclick: fn},
         icon(ic), h('span', {class: 'stx'}, h('b', {text: t}), h('span', {text: sub}))))));
     log.appendChild(EMPTY_EL);
   }
@@ -1399,10 +1434,25 @@ async function refreshTree() {
   if (!TREE_404) {
     try {
       const t = await getJ('/api/tree');
-      if (t && typeof t === 'object' && Array.isArray(t.projects)) { TREE = t; renderTree(); return; }
+      if (t && typeof t === 'object' && Array.isArray(t.projects)) { TREE = splitSigninTree(t); renderTree(); return; }
     } catch (e) { if (/HTTP 404/.test(String(e && e.message))) TREE_404 = true; }
   }
-  TREE = buildTree(); renderTree();
+  TREE = splitSigninTree(buildTree()); renderTree();
+}
+function splitSigninTree(t) {   /* the 22:35 tablet finding: a sign-in desk answers on its card (25.4 U1); it never sits under a folder path */
+  if (!t || typeof t !== 'object') return t;
+  const isSignin = d => {
+    if (!d) return false;
+    if (d.signin) return true;
+    const full = d.name ? deskInfo(d.name) : null;
+    return !!(full && full.signin);
+  };
+  const pull = arr => { const keep = [], out = []; (arr || []).forEach(d => (isSignin(d) ? out : keep).push(d)); return [keep, out]; };
+  const moved = [];
+  (t.projects || []).forEach(p => (p.folders || []).forEach(f => { const [k, o] = pull(f.desks); f.desks = k; moved.push(...o); }));
+  (t.other || []).forEach(f => { const [k, o] = pull(f.desks); f.desks = k; moved.push(...o); });
+  if (moved.length) t.signin = moved;
+  return t;
 }
 const under = (cwd, path) => !!cwd && !!path && (cwd === path || cwd.startsWith(path.replace(/\/+$/, '') + '/'));
 function buildTree() {   // the same shape the server computes, built here while GET /api/tree is not there
@@ -1445,7 +1495,8 @@ function saveTree() { TREE_OPEN.__pins = PINS; localStorage.fcTree = JSON.string
 function toggleNode(key) { TREE_OPEN[key] = !TN_OPEN(key); saveTree(); renderTree(); }
 const RAIL_LP = {t: null, key: ''};   // the long-press timer lives outside the rows: a re-render clears it (finding ui-state-6)
 function clearLP() { if (RAIL_LP.t) clearTimeout(RAIL_LP.t); RAIL_LP.t = null; RAIL_LP.key = ''; }
-const runGlyph = r => r.state === 'live' ? ['..', 'forming (unsigned)'] : /^valid/.test(r.receipt_state || '') ? ['ok', 'verifies'] :
+const runGlyph = r => r.state === 'live' ? ['..', 'forming (unsigned)'] : r.state === 'interrupted' ? ['x', 'interrupted (no receipt)'] :
+  /^valid/.test(r.receipt_state || '') ? ['ok', 'verifies'] :
   /^(missing|none|unsigned|no)/.test(r.receipt_state || '') ? ['--', 'not run (signed)'] : ['!!', 'invalid'];
 function treeLeafDesk(d, depth) {
   const name = d.name, st = deskState(d), badge = name !== WS ? unreadFor(name) : 0;
@@ -1461,7 +1512,8 @@ function treeLeafDesk(d, depth) {
 }
 function treeLeafRun(r, depth) {
   const [g, word] = runGlyph(r);
-  const el = h('div', {class: 'tn leaf run d' + depth + (r.needs_you ? ' need' : ''), 'data-kind': 'run', 'data-name': r.run_id, title: r.run_id + ' · ' + word},
+  const el = h('div', {class: 'tn leaf run d' + depth + (r.needs_you ? ' need' : ''), 'data-kind': 'run', 'data-name': r.run_id,
+    title: r.run_id + ' · ' + word + (r.state === 'interrupted' && r.problem ? ' · ' + r.problem : '')},
     h('span', {class: 'chev leaf'}),
     h('span', {class: 'glyph', text: g}),
     h('span', {class: 'tnm mono', text: (r.label || r.run_id).slice(0, 28)}),
@@ -1520,6 +1572,9 @@ function renderTree() {
     const w = (p.folders || []).reduce((a, f) => a + (f.desks || []).filter(d => d.needs_you).length, 0);
     nodes.push(treeNode('p:' + p.name, p.name, folders.length ? folders : [h('p', {class: 'small', style: 'padding:6px 12px', text: 'no folders in config'})], 0, {count: w ? n + ' · ' + w : n, icon: 'folder'}));
   });
+  /* 2b. Signing in: on their card, never under a folder path (the 22:35 tablet finding) */
+  const signing = (t.signin || []).filter(d => deskMatches(d) && matchQ(d.name));
+  if (signing.length) nodes.push(treeNode('signin', 'Signing in', signing.map(d => treeLeafDesk(d, 1)), 0, {count: signing.length, icon: 'accounts'}));
   /* 3. Other folders */
   const others = (t.other || []).map(f => folderNode(f, 1, 'o')).filter(Boolean);
   if (others.length) nodes.push(treeNode('other', 'Other folders', others, 0, {count: (t.other || []).reduce((a, f) => a + (f.desks || []).length + (f.runs || []).length, 0), icon: 'folder'}));
@@ -1758,12 +1813,16 @@ function noteBuild(b) {   // the update hint (21.2): compared on boot and on eve
     location.reload();
   }});
 }
-let LIVE_RUNS = [];
+let LIVE_RUNS = [], SETUP_HAD_RUN = false;
 async function pollRuns() {
   try {
     const j = await getJ('/api/mb/runs?limit=50');
     ALL_RUNS = j.runs || [];
     LIVE_RUNS = ALL_RUNS.filter(r => r.state === 'live');
+    if ((ALL_RUNS.length > 0) !== SETUP_HAD_RUN) {   /* Bugbot 11-12: the set-up page's "A run" step reads this list, so it redraws when it turns */
+      SETUP_HAD_RUN = ALL_RUNS.length > 0;
+      if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup');
+    }
     const sr = $('sbRuns'); sr.textContent = '';
     sr.append('runs ', h('b', {text: String(LIVE_RUNS.length)}), ' live');
     fillRunIds(ALL_RUNS);
@@ -1885,6 +1944,11 @@ function fillSelect(sel, opts, keep) {
 }
 let ENGINE_INFO = {};   // engine name -> {name, kind: builtin | bridge, local, models} from GET /api/extend (25.4 U5)
 const isLocal = e => ENGINE_INFO[e] ? !!ENGINE_INFO[e].local : e === 'openai';
+function modelSuggestions(engine) {   /* 03:50 ask: what the model chip offers — the engine's own list when the PC tells it (25.3 B6), the cursor tiers otherwise */
+  const info = ENGINE_INFO[engine];
+  if (info && Array.isArray(info.models) && info.models.length) return info.models.map(m => String(m));
+  return engine === 'cursor' ? ['grok-4.7-low', 'grok-4.7-medium', 'grok-4.7-high', 'grok-4.7-xhigh'] : [];
+}
 async function loadEngines() {
   if (ENGINES) return ENGINES;
   const x = await loadExtend();   // built-in engines and bridges, the local ones marked (25.3 B6)
@@ -1928,21 +1992,39 @@ function projectOptions() {
 const engineLabel = e => e + (ENGINE_INFO[e] && ENGINE_INFO[e].kind === 'bridge' ? ' · bridge' : '') + (isLocal(e) ? ' · local · works offline' : '');
 async function loadRunChips() {
   const [eng] = await Promise.all([loadEngines(), loadAccounts(), loadProjects()]);
-  fillSelect($('chipEngine'), eng.map(e => [e, engineLabel(e)]), true);
+  const onHost = capEngines();
+  const list = onHost ? eng.filter(e => onHost[e] != null) : eng;   /* the 22:30 tablet finding: offer what this computer has */
+  const bwrap = cap('sandbox');   /* 1.3: the core refuses cursor without a sandbox, so the picker offers it as unavailable */
+  fillSelect($('chipEngine'), list.map(e => [e, engineLabel(e) + (e === 'cursor' && !bwrap ? ' · needs bwrap' : '')]), true);
+  const curOpt = [...$('chipEngine').options].find(o => o.value === 'cursor');
+  if (curOpt) curOpt.disabled = !bwrap;
+  if (list.length && (!list.some(e => e === $('chipEngine').value) || ($('chipEngine').value === 'cursor' && !bwrap))) {
+    const firstOk = list.find(e => e !== 'cursor') || list[0];
+    if (firstOk) $('chipEngine').value = firstOk;   /* the default follows what this computer has, never a hard-coded name */
+  }
   fillSelect($('chipAccount'), runAccountOptions(), true);
   fillSelect($('chipProject'), projectOptions(), true);
   accountChipVisibility();
   renderRunPill();
 }
 const takesLogin = e => e === 'claude' || e === 'codex';
+const takesAccount = e => e === 'cursor';   /* 16:05: a cursor run carries its account (the account's config home), as a Cursor desk does */
 /* 11-09: a login past its time limit still has its sign-in file; its last run could not sign in (mb.last_signin_failures) */
 const signinWord = x => !x ? '' : x.signin_failed ? 'sign in again' : x.ready ? 'signed in' : 'not signed in';
-const runAccountOptions = () => [['', 'default sign-in']].concat(((ACCOUNTS && ACCOUNTS.claude) || [])
-  .map(a => [a.name, 'login ' + a.name + (a.signin_failed ? ' · sign in again' : '')]));   // RV-I: mb.start_run passes a login to claude and codex alone
+const runAccountOptions = () => takesAccount($('chipEngine').value)
+  ? [['', 'default account']].concat(((ACCOUNTS && ACCOUNTS.cursor) || [])
+    .map(a => [a.name, 'account ' + a.name + (a.signin_failed ? ' · sign in again' : '')]))   /* 16:05: a cursor run picks its account */
+  : [['', 'default sign-in']].concat(((ACCOUNTS && ACCOUNTS.claude) || [])
+    .map(a => [a.name, 'login ' + a.name + (a.signin_failed ? ' · sign in again' : '')]));   // RV-I: mb.start_run passes a login to claude and codex alone
 function accountChipVisibility() {
-  const off = !takesLogin($('chipEngine').value);
+  const engine = $('chipEngine').value, acc = takesAccount(engine);
+  const off = !takesLogin(engine) && !acc;
   $('chipAccount').classList.toggle('hidden', off);
   const lab = $('chipAccount').parentNode; if (lab && lab.classList) lab.classList.toggle('hidden', off);
+  const lbl = $('chipAccountLabel'); if (lbl) lbl.textContent = acc && !off ? 'account' : 'login';
+  const dl = $('modelList');
+  if (dl) { dl.textContent = ''; modelSuggestions(engine).forEach(m => dl.appendChild(h('option', {value: m}))); }
+  $('chipModel').setAttribute('list', modelSuggestions(engine).length ? 'modelList' : '');   /* the engine's models as suggestions, cursor tiers included */
 }
 function runArgvPreview() {
   const engine = $('chipEngine').value, cwd = $('chipProject').value, account = $('chipAccount').value, cost = $('chipCost').value.trim();
@@ -1954,13 +2036,14 @@ function renderRunPill() {   // the summary pill (21.6): engine · login · fold
   const engine = $('chipEngine').value || 'engine', account = $('chipAccount').value, cwd = $('chipProject').value;
   const parts = [engine];
   if (takesLogin(engine)) parts.push(account || 'default sign-in');
+  else if (takesAccount(engine)) parts.push(account || 'default account');
   parts.push(cwd ? shortPath(cwd).split('/').pop() || shortPath(cwd) : 'folder?');
   parts.push($('chipMode').textContent === 'ask' ? 'ask' : 'read-only');
   if (isLocal(engine)) parts.push('$0 (local)');
   $('runPill').textContent = parts.join(' · ');
   const eq = $('runEquals'); if (eq) eq.textContent = 'equals ' + runArgvPreview();
 }
-['chipEngine', 'chipAccount', 'chipProject', 'chipCost'].forEach(id => { $(id).onchange = () => { accountChipVisibility(); renderRunPill(); }; $(id).oninput = renderRunPill; });
+['chipEngine', 'chipAccount', 'chipProject', 'chipCost', 'chipModel'].forEach(id => { $(id).onchange = () => { accountChipVisibility(); renderRunPill(); }; $(id).oninput = renderRunPill; });
 $('runPill').onclick = () => { openSheet('runSheet'); loadRunChips(); };
 function parseSuggest(out) {   // metabot suggest prints rows: role · engine · model · rule · note
   const f = {};
@@ -1989,13 +2072,13 @@ $('plusBtn').onclick = e => {
   const m = $('plusMenu');
   if (!m.classList.contains('hidden')) { hideMenus(); return; }
   m.textContent = '';
-  [['plus', 'New desk', () => openSpawnSheet()],
+  (cap('desks') ? [['plus', 'New desk', () => openSpawnSheet()]] : []).concat([
    ['runs', 'Run a task', () => { setMode('run'); openSheet('runSheet'); loadRunChips(); }],
    ['handoff', 'Handoff…', () => { text.value = '/handoff '; palette(); text.focus(); }],
    ['workflows', 'Workflow…', () => openPage('workflows')],
    ['receipt', 'Check a receipt', () => openPage('runs')],
    ['desktop', 'Desktop', () => openDesk()],
-  ].forEach(([ic, label, fn]) => m.appendChild(h('button', {type: 'button', class: 'mi', role: 'menuitem', onclick: ev => { ev.stopPropagation(); hideMenus(); fn(); }}, icon(ic), label)));
+  ]).forEach(([ic, label, fn]) => m.appendChild(h('button', {type: 'button', class: 'mi', role: 'menuitem', onclick: ev => { ev.stopPropagation(); hideMenus(); fn(); }}, icon(ic), label)));
   $('menu').classList.add('hidden');
   m.classList.remove('hidden');
 };
@@ -2040,8 +2123,11 @@ async function sendRun(v) {   // true = the run started (the box may be cleared)
   if (cost && !/^[0-9]{1,5}(\.[0-9]{1,2})?$/.test(cost)) { toast('max cost: digits, up to two decimals'); return false; }
   const body = {task: v, engine, cwd, mode};
   const account = $('chipAccount').value;
-  if (account && takesLogin(engine)) body.account = account;
+  if (account && (takesLogin(engine) || takesAccount(engine))) body.account = account;
   if (cost) body.max_cost = cost;
+  const model = $('chipModel').value.trim();
+  if (model && !/^[A-Za-z0-9][A-Za-z0-9._:\/+\[\]=,-]{0,79}$/.test(model)) { toast('model: letters, digits, . _ : / + - and [ ]'); return false; }
+  if (model) body.model = model;
   const r = await api('/api/run', body);
   if (r.ok) {
     DESK_ARGV[r.name] = r.argv || [];
@@ -2049,10 +2135,15 @@ async function sendRun(v) {   // true = the run started (the box may be cleared)
     add({via: 'alert', time: Date.now()/1000, target: r.name,
          message: 'run started on ' + r.name + (body.account && r.account_used === false ? ' (account ignored for ' + engine + ')' : '') +
                   '\nequals ' + argvLabel(r.argv)});
-    revealDesk(r.name);
+    if (cap('desks')) revealDesk(r.name);
+    else toast('run started on ' + r.name + ' — its record is on the Runs page', 3200);   /* 1.3: no tmux, no desk to reveal */
     if (dockOpen() && DOCK.id === 'runs') loadRuns();
     pollRuns();
     return true;
+  }
+  if (!r.ok && r.status === 404 && /no such account/.test(String(r.error || ''))) {
+    toast('that account is not on this computer — pick one from the list');   /* 16:10: the server's 404, in plain words */
+    return false;
   }
   add({via: 'alert', time: Date.now()/1000, target: curTarget(), message: '⚠ run refused: ' + (r.error || '?')});
   return false;
@@ -2701,7 +2792,7 @@ const ASK_KEYS = {
   line: [['y', ['y', 'enter']], ['n', ['n', 'enter']]],
 };
 const SECRET_RE = /\[sudo\]|password|passphrase|api[ _-]?key|token\s*:|secret/i;
-const ASK_WORDS = ['signin', 'secret', 'yes', 'line', 'select'];   // the PC names the ask on waiting rows and desk rows
+const ASK_WORDS = ['signin', 'secret', 'yes', 'line', 'select', 'text'];   // the PC names the ask on waiting rows and desk rows
 function askKind(w, d) {   // what the ask takes: select | line | yes | secret | signin | '' (the terminal)
   const name = (d && d.name) || w.desk;
   const rec = TERMS[name];
@@ -2723,14 +2814,33 @@ function askKind(w, d) {   // what the ask takes: select | line | yes | secret |
   if (cls && (kind === 'claude' || (d && d.cli === 'claude'))) return 'select';   // Claude Code asks with a select menu: one tap once the PC has classed it
   return '';   // an ask with no class could be destructive: the terminal
 }
+/* The 11-10 tablet finding: a run desk's shell prompt read as an ask the moment its run exited. A run desk
+   whose run has ended, that names no ask and shows no prompt this page can read, is an idle shell — the page
+   never presents it as asking. The PC's own detection is the cleaner fix (asked for server-side); this holds. */
+function idleRunShell(name, w, d) {
+  const dd = d || deskInfo(name);
+  if (!dd || !(dd.meta && dd.meta.kind === 'run')) return false;
+  const r = (ALL_RUNS || []).find(x => x.desk === name);
+  return !!r && r.state !== 'live' && askKind(w || {desk: name}, dd) === '';
+}
 function waitKeys(w, d) {   // the row under a waiting desk: its one-tap keys, or the way to the terminal
   const name = (d && d.name) || w.desk, kind = askKind(w, d);
+  if (idleRunShell(name, w, d)) {   // a run desk's shell prompt after its run ended is an idle shell, never an ask
+    const idle = h('div', {class: 'wkeys'}, h('div', {class: 'wline', text: 'its run ended — the shell is idle, nothing is asking'}));
+    idle.appendChild(h('button', {type: 'button', class: 'wk', text: 'Open the desk', onclick: () => revealDesk(name)}));
+    return idle;
+  }
   const line = String(w.ask_line || (d && d.ask_line) || '').slice(0, 200);   // the ask itself, as text
   const row = h('div', {class: 'wkeys'}, line ? h('div', {class: 'wline', text: line, title: line}) : null);
   const fp = askPrint(w, d), sent = SENT_ASK[name] === fp;   // review 1.2 (RV-B): one ask takes one answer
   if (ASK_KEYS[kind]) ASK_KEYS[kind].forEach(([label, keys]) => row.appendChild(h('button', {type: 'button', class: 'wk', text: label, disabled: sent || null,
     title: sent ? 'sent: waiting for the desk' : 'sends ' + keys.join(' then '),
     onclick: ev => sendKeys(name, keys, ev && ev.currentTarget, line, fp)})));
+  else if (kind === 'text') {   /* 20:40: the desk asks for words, not a key */
+    const [inp, send] = askTextInput(name, fp);
+    if (sent) { inp.disabled = true; send.disabled = true; }   /* review 1.2 (RV-B): one ask takes one answer */
+    row.append(inp, send);
+  }
   else if (kind === 'signin') row.appendChild(h('button', {type: 'button', class: 'wk', text: 'Sign-in card', onclick: () => openSignin(name)}));
   else row.appendChild(h('button', {type: 'button', class: 'wk', text: 'Answer in the terminal', title: kind === 'yes' ? 'a destructive call takes the typed word yes' : kind === 'secret' ? 'a password or a secret is typed by you' : 'the ask is not one a key can answer',
     onclick: () => termAsk(name, kind)}));
@@ -2738,6 +2848,25 @@ function waitKeys(w, d) {   // the row under a waiting desk: its one-tap keys, o
 }
 const SENT_ASK = {};   // desk -> the ask (line + since) a key already answered: its keys stay off until the desk asks anew
 const askPrint = (w, d) => String((w && w.ask_line) || (d && d.ask_line) || '') + '|' + String((w && w.since) || (d && d.since) || '');
+async function sendAskText(name, value, btn, line, fp) {   /* 20:40 (1): the text ask — keys cannot answer it, the person's words go to the desk */
+  const v = String(value || '').trim();
+  if (!v) { toast('type what the desk should do instead', 2200); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const cid = Date.now().toString(36) + ':' + Math.random().toString(36).slice(2, 8);
+    const r = await api('/api/send', {text: v, target: name, cid});
+    if (!r.ok) { toast('⚠ ' + (r.error || ('HTTP ' + r.status)), 2600); return; }
+    if (fp != null) SENT_ASK[name] = fp;
+    if (line) { line.value = ''; line.disabled = true; }   /* Bugbot 11-11 (6): one ask takes one answer, from this tap on */
+    toast('sent to ' + disp(name));
+  } finally { if (btn && !(fp != null && SENT_ASK[name] === fp)) btn.disabled = false; }
+}
+const askTextInput = (name, fp) => {   /* one text line + one Send, on the waiting row and on the sheet alike */
+  const inp = h('input', {type: 'text', placeholder: 'tell the desk what to do instead', maxlength: '2000',
+    autocapitalize: 'sentences', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false'});
+  const send = h('button', {type: 'button', class: 'wk allow', text: 'Send', onclick: () => sendAskText(name, inp.value, send, inp, fp)});
+  return [inp, send];
+};
 async function sendKeys(name, keys, btn, askLine, fp) {
   if (fp != null && SENT_ASK[name] === fp) return false;
   const row = btn && btn.parentNode, all = row && row.querySelectorAll ? row.querySelectorAll('button') : [];
@@ -2776,13 +2905,27 @@ function openDeskSheet(name) {
     const rec = TERMS[name], w = ((TREE && TREE.waiting) || []).find(x => x.desk === name) || {desk: name}, d = deskInfo(name);
     const c = stronger((w.cls || (d && d.cls) || ''), rec ? promptClass(rec) : '');
     const ask = askKind(w, d) || '';
-    const key = c + '|' + ask + '|' + (d && d.needs_you ? 1 : 0);
+    const idle = idleRunShell(name, w, d);
+    const key = c + '|' + ask + '|' + (d && d.needs_you ? 1 : 0) + '|' + (idle ? 1 : 0);
     if (key === shown) return;   // unchanged: what is typed stays
+    const wasAsking = shown ? shown.split('|')[2] === '1' : false;   /* the sheet was showing an ask the desk has stopped asking */
     shown = key;
     cls.textContent = '';
     if (c) cls.append('class: ', h('b', {class: c, text: c}), ' — read from the prompt');
     keys.textContent = '';
-    if (ask === 'secret') {
+    $('sheetEquals').textContent = argv && argv.length && UMODE === 'dev' ? 'equals ' + argvLabel(argv)
+      : idle ? 'its run ended — the shell is idle; nothing is asking'
+      : 'the desk is asking — answer with the keys below';   // 21.6: the argv is a developer-mode line; an idle run shell never says "asking"
+    if (idle) {
+      keys.append(h('span', {class: 'small', text: 'the run ended; this is the shell prompt, not an ask'}), send('\x1b', 'Esc'), send('\x03', '^C'));
+    } else if (wasAsking && !(d && d.needs_you)) {   /* 20:45 (3): the ask was answered while the sheet was open */
+      cls.textContent = '';
+      $('sheetEquals').textContent = 'answered — the desk moved on';
+      keys.append(h('span', {class: 'small', text: 'answered — this desk stopped asking; close the sheet when ready'}));
+    } else if (ask === 'text') {   /* 20:40 (1): the desk asks for words, not a key */
+      const [inp, send2] = askTextInput(name, null);
+      keys.append(h('span', {class: 'small', text: 'the desk asks what to do instead — type it'}), inp, send2);
+    } else if (ask === 'secret') {
       keys.append(h('span', {class: 'small', text: 'a password or a secret: tap the terminal above and type it'}), send('\x03', '^C'));
     } else if (c === 'destructive' || ask === 'yes') {   // a typed yes is the one way to allow
       const sends = ask === 'select' || (ask === 'yes' && c === 'destructive' && w.ask === 'select') ? '\r' : (w.ask === 'line' || (d && d.ask) === 'line') ? 'y\r' : 'yes\r';
@@ -2798,7 +2941,7 @@ function openDeskSheet(name) {
   clearInterval(SHEET_TIMER);
   SHEET_TIMER = setInterval(async () => {   // the desk moves on while the sheet is open: its class and ask are read again
     if ($('deskSheet').classList.contains('hidden')) { clearInterval(SHEET_TIMER); return; }
-    try { await fetchDesks(); } catch (e) {}
+    try { await Promise.all([fetchDesks(), pollRuns()]); } catch (e) {}   // pollRuns: a run's end flips the idle-shell guard
     fillKeys();
   }, 1500);
   openSheet('deskSheet');
@@ -2934,6 +3077,7 @@ function spawnFolderOptions(kind) {   // U2: Claude and Cursor open in a project
   return opts;
 }
 async function openSpawnSheet(opts) {
+  if (!cap('desks')) { toast('Terminals need tmux on this computer.'); return; }   /* 1.3: without tmux there are no desks to open */
   const o = opts || {};
   $('spawnErr').textContent = '';
   $('spawnLabel').value = '';
@@ -3252,7 +3396,7 @@ function sideDesktop(body) {
     h('div', {class: 'dbar'}, h('button', {type: 'button', class: 'abtn primary', text: 'Open', onclick: () => openDesk()}),
       h('button', {type: 'button', class: 'abtn', text: 'Settings', onclick: () => openSettingsAt('desktop')}))));
 }
-const SETTINGS_SECTIONS = [['mode', 'Mode'], ['look', 'Appearance'], ['accounts', 'Accounts'], ['folders', 'Folders'], ['desktop', 'Desktop'], ['about', 'About']];
+const SETTINGS_SECTIONS = [['mode', 'Mode'], ['look', 'Appearance'], ['accounts', 'Accounts'], ['folders', 'Folders'], ['phone', 'Phone'], ['desktop', 'Desktop'], ['about', 'About']];
 function openSettingsAt(key) {
   openPage('settings');
   const el = $('set-' + key);
@@ -3495,13 +3639,15 @@ function renderRuns(body) {
 const fmtTime = s => { if (!s) return ''; const d = new Date(s); return isNaN(d) ? String(s) : d.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}); };
 function runState(r) {
   if (r.state === 'live') return r.needs_you ? ['needs you', 'need'] : ['live', 'live'];
+  if (r.state === 'interrupted') return ['interrupted (no receipt)', 'bad'];   /* 01:35: its own state, never "invalid" */
   const rs = r.receipt_state || '?';
   return [/^valid/.test(rs) ? 'verified' : rs, /^valid/.test(rs) ? 'ok' : 'bad'];
 }
 function runRow(r) {
   const [label, cls] = runState(r);
   const row = r.row || {};
-  const sub = [r.engine || row.engine, r.project, r.desk ? disp(r.desk) : '', fmtTime(r.started || row.started_at)].filter(Boolean).join(' · ');
+  const sub = [r.engine || row.engine, r.project, r.desk ? disp(r.desk) : '', fmtTime(r.started || row.started_at),
+    r.state === 'interrupted' && r.problem ? String(r.problem) : ''].filter(Boolean).join(' · ');   /* 01:35: the problem rides the row */
   return h('div', {class: 'rrow' + (dockOpen() && DOCK.id === 'run:' + r.run_id ? ' on' : ''), role: 'button', tabindex: '0', onclick: () => openRunRecord(r.run_id, r)},
     h('span', {class: 'chip ' + cls, text: label}),
     h('span', {class: 'rid', text: r.label || r.run_id}),
@@ -3635,6 +3781,13 @@ function headline(el, pc, t) {
 }
 const musd = v => typeof v === 'number' ? '$' + (v / 1e6).toFixed(4) : '';
 const shortId = id => String(id || '').length > 18 ? String(id).slice(0, 8) + '…' + String(id).slice(-6) : String(id || '');
+async function showRunLog(v, name) {   /* 00:55: a run the app spawned itself has a log, not a desk; on the phone this is its terminal */
+  try {
+    const j = await getJ('/api/mb/runlog/' + encodeURIComponent(name));
+    v.appendChild(card('The run log' + (j.alive ? ' — still running' : (j.exit != null ? ' — exit ' + j.exit : '')), '',
+      h('pre', {class: 'out', text: j.log || '(no output yet)'})));
+  } catch (e) { toast('run log: ' + (e && e.message || e), 2600); }
+}
 function openRunRecord(id, r) {
   const run = r || ALL_RUNS.find(x => x.run_id === id) || RUNS.find(x => x.run_id === id) || null;
   openPanel('run:' + id, 'Run ' + shortId(id), body => showReceipt(body, id, run));
@@ -3646,7 +3799,18 @@ async function showReceipt(v, id, r) {
     v.appendChild(card('The run is live', 'Rows and the receipt are written when the run ends.' +
       (r.desk ? '\nDesk ' + disp(r.desk) + (r.needs_you ? ' is asking you something — answer it there.' : '') : '\nNo desk is attached to this run.'),
       h('div', {class: 'dbar'},
-        h('button', {type: 'button', class: 'abtn primary', text: 'Open desk', disabled: !r.desk, onclick: () => revealDesk(r.desk)}),
+        h('button', {type: 'button', class: 'abtn primary', text: cap('desks') ? 'Open desk' : 'Open the run log', disabled: !r.desk,
+          onclick: () => { if (r.desk) cap('desks') ? revealDesk(r.desk) : showRunLog(v, r.desk); }}),
+        h('button', {type: 'button', class: 'abtn', title: 'Refresh', 'aria-label': 'Refresh', onclick: () => pollRuns().then(() => openRunRecord(id))}, icon('refresh')))));
+    return;
+  }
+  if (r && r.state === 'interrupted') {   /* 01:35: no receipt to check — say what happened, never fetch bytes that are not there */
+    v.appendChild(h('div', {class: 'dbar'}, h('span', {class: 'chip bad', text: 'interrupted (no receipt)'}), h('b', {class: 'num', text: id})));
+    v.appendChild(card('The run was interrupted', (r.problem || 'its process is gone and it sealed no receipt') +
+      (r.desk ? (cap('desks') ? '\nThe desk may still hold its terminal.' : '\nIts log may say why.') : '\nNo desk was attached to this run.'),
+      h('div', {class: 'dbar'},
+        h('button', {type: 'button', class: 'abtn', text: cap('desks') ? 'Open desk' : 'Open the run log', disabled: !r.desk,
+          onclick: () => { if (r.desk) cap('desks') ? revealDesk(r.desk) : showRunLog(v, r.desk); }}),
         h('button', {type: 'button', class: 'abtn', title: 'Refresh', 'aria-label': 'Refresh', onclick: () => pollRuns().then(() => openRunRecord(id))}, icon('refresh')))));
     return;
   }
@@ -3662,7 +3826,8 @@ async function showReceipt(v, id, r) {
     h('button', {type: 'button', class: 'abtn primary', text: 'Verify again', onclick: () => openRunRecord(id, r)}),
     retryPc,
     h('button', {type: 'button', class: 'abtn', text: 'Copy receipt', onclick: () => copyReceipt(id)}),
-    h('button', {type: 'button', class: 'abtn', text: 'Open desk', disabled: !(r && r.desk), onclick: () => { if (r && r.desk) revealDesk(r.desk); }}));
+    h('button', {type: 'button', class: 'abtn', text: cap('desks') ? 'Open desk' : 'Open the run log', disabled: !(r && r.desk),
+      onclick: () => { if (r && r.desk) cap('desks') ? revealDesk(r.desk) : showRunLog(v, r.desk); }}));
   v.append(verdictEl, line, h('div', {class: 'checks2'}, pc.el, tab.el), facts, more, vaultNote, btns);
   tab.val.textContent = 'loading the verifier…';
 
@@ -3782,6 +3947,9 @@ function renderWorkflows(body, mod) {
     else if (!A2A_LIST.length) list.appendChild(h('p', {class: 'muted', text: 'No workflows yet.'}));
     (A2A_LIST || []).forEach(w => list.appendChild(h('div', {class: 'rrow'},
       icon('workflows'), h('span', {class: 'rid', text: w.ref}), h('span', {class: 'rsub', text: w.rest}),
+      wfApproved(w.rest) ? null : h('button', {type: 'button', class: 'abtn', text: 'Approve',   /* 03:50 ask: the approve desk is the way from the tablet */
+        title: 'the approve desk: answer it there, then Refresh', disabled: !CATALOG['workflow.approve'],
+        onclick: ev => deskCmd('workflow.approve', {ref: w.ref}, '', ev && ev.currentTarget)}),
       h('button', {type: 'button', class: 'abtn', text: 'Run', disabled: !CATALOG['workflow.run'], onclick: () => a2a(w.ref)}))));
   };
   draw();
@@ -3925,6 +4093,7 @@ function keepRefusal(p, shape) {   // '' when Keep stores the workflow the draft
   ['schedule', 'ceiling'].forEach(k => { if (!unset(k, d[k])) extra.push(k === 'schedule' ? 'a schedule' : 'a ceiling'); });
   return extra.length ? 'the draft sets ' + extra.join(' · ') + ', and the Keep desk would store the workflow without ' + (extra.length > 1 ? 'them' : 'it') + '.' : '';
 }
+const wfApproved = rest => /(^|\s)approved(\s|$)/.test(String(rest || '')) && !/not approved/.test(String(rest || ''));
 async function wfRow(name, quiet) {   // the newest workflow-list row for name: {sha, approved}, or null when the list has none
   if (!CATALOG['workflow.list']) return null;
   const r = await api('/api/cli/read', {id: 'workflow.list', params: {}});
@@ -3933,7 +4102,7 @@ async function wfRow(name, quiet) {   // the newest workflow-list row for name: 
   const row = A2A_LIST.filter(w => w.ref === name && !/older version/.test(w.rest))[0];
   if (!row) return null;
   const sha = (/^([0-9a-f]{12})\b/.exec(row.rest) || [])[1] || '';
-  return {sha, approved: /(^|\s)approved(\s|$)/.test(row.rest) && !/not approved/.test(row.rest)};
+  return {sha, approved: wfApproved(row.rest)};
 }
 async function wfCheck(el, btn) {   // read the list; advance only on what it shows
   const name = WFT.p && WFT.p.name; if (!name) return;
@@ -4397,7 +4566,9 @@ async function renderAccounts(body) {
 }
 function newAccountForm(body) {
   const old = $('acctForm'); if (old) old.remove();
-  const eng = h('select', {}, h('option', {value: 'claude', text: 'claude'}), h('option', {value: 'cursor', text: 'cursor'}));
+  const cli = capEngines();   /* 1.3: a sign-in makes sense for a cli engine the computer has; http engines take a key, not a login */
+  const engOpts = cli ? ['claude', 'cursor'].filter(e => cli[e] === 'cli') : ['claude', 'cursor'];
+  const eng = h('select', {}, engOpts.map(x => h('option', {value: x, text: x})));
   const name = h('input', {type: 'text', placeholder: 'name: a-z 0-9 -, not "default"', maxlength: '24', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false'});
   const create = h('button', {type: 'button', class: 'abtn primary', text: 'Create and sign in', onclick: async () => {
     if (create.disabled) return;
@@ -4414,7 +4585,8 @@ function newAccountForm(body) {
   }});
   const form = h('div', {id: 'acctForm', class: 'card'}, h('h3', {text: 'New account'}),
     h('div', {class: 'acctForm'}, eng, name, create),
-    h('p', {class: 'muted', text: 'claude: a folder seeded with your settings, plugins and skills (never credentials) and a metabot login with --max-at-once 3. cursor: an empty folder.'}));
+    h('p', {class: 'muted'}, 'claude: a folder seeded with your settings, plugins and skills (never credentials) and a metabot login with ',
+      h('span', {style: 'white-space:nowrap', text: '--max-at-once 3'}), '. cursor: an empty folder.'));
   body.insertBefore(form, body.children[1] || null);
   name.focus();
 }
@@ -4481,18 +4653,21 @@ async function signinRefresh() {
   await fetchDesks();
   if (!(dockOpen() && DOCK.id === 'signin')) return;
   const d = deskInfo(SIGNIN.name);
-  if (signinStep(d) + '|' + (d ? signinUrl(d.signin) : '') !== SIGNIN.key) drawSignin($('dockBody'));   // a new step redraws; what is typed stays otherwise
+  if (signinKey(d) !== SIGNIN.key) drawSignin($('dockBody'));   // a new step redraws; what is typed stays otherwise
 }
+const signinWhere = d => (d && d.signin && d.signin.where === 'pc' && signinStep(d) !== 'code') ? 'pc' : 'here';   /* 11-12 D1: a link-only login the phone started finishes on the computer; a code step is finished here (open, approve, paste the code) */
+const signinKey = d => signinStep(d) + '|' + (d ? signinUrl(d.signin) : '') + '|' + signinWhere(d);
 function drawSignin(body) {
-  const name = SIGNIN.name, d = deskInfo(name), step = signinStep(d), url = d ? signinUrl(d.signin) : '';
-  SIGNIN.key = step + '|' + url;
+  const name = SIGNIN.name, d = deskInfo(name), step = signinStep(d), url = d ? signinUrl(d.signin) : '', onPc = signinWhere(d) === 'pc';
+  SIGNIN.key = signinKey(d);
   if (step === 'ready') SIGNIN.ok = true;
   const held = $('signinCode'); if (held) SIGNIN.code = held.value;   // review 1.2: a redraw keeps a half-typed code
   body.textContent = '';
   const line = t => h('p', {class: 'sinStep', text: t});
   const btn = (t, fn, main) => h('button', {type: 'button', class: 'abtn' + (main ? ' primary' : ''), text: t, onclick: fn});
   const linkRow = () => url ? h('div', {class: 'dbar'},
-    h('a', {class: 'abtn primary', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Open sign-in page'}),
+    onPc ? h('span', {class: 'small', text: 'Open this on the computer — the login finishes there: ' + url})   /* a tap here would open a login that cannot complete */
+         : h('a', {class: 'abtn primary', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Open sign-in page'}),
     btn('Copy link', () => copyText(url)))
     : h('p', {class: 'small', text: 'the sign-in link is not on the screen yet'});
   const kids = [];
@@ -4768,6 +4943,81 @@ function seg(options, current, onPick) {
   return h('div', {class: 'seg', role: 'group'}, options.map(([v, label]) => h('button', {type: 'button', class: v === current ? 'on' : '', text: label, 'aria-pressed': v === current ? 'true' : 'false', onclick: () => onPick(v)})));
 }
 function srowx(k, v) { return h('div', {class: 'srowx'}, h('span', {class: 'k', text: k}), typeof v === 'string' ? h('span', {class: 'v', text: v}) : v); }
+/* ---------- Phone pairing (19:35 contract, desktop scope): a code, four words, a countdown ----------
+   The QR of the payload lands with the vendored encoder (ask open on the shared note); the typed
+   alternative carries the pairing until then. */
+const PAIR = {code: null, words: [], addresses: [], port: 0, expires: 0, payload: '', devices: 0, timer: 0};
+function pairStop() { if (PAIR.timer) clearInterval(PAIR.timer); PAIR.timer = 0; PAIR.code = null; }
+async function pairStart(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/pair/start', {});
+    if (!r.ok) { toast(r.error === 'phone listener off' ? 'the phone listener is off on this computer' : 'pairing: ' + (r.error || ('HTTP ' + r.status)), 3000); return; }
+    Object.assign(PAIR, {code: String(r.code || ''), words: r.words || [], addresses: r.addresses || [], port: r.port || 0,
+      payload: r.payload || '', expires: Date.now() + (r.expires_in || 600) * 1000, devices: (META.phone || {}).devices || 0});
+    if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'settings') renderPage('settings');
+    pairRun();
+  } finally { if (btn) btn.disabled = false; }
+}
+function pairRun() {   /* the countdown every second; /api/meta every other second: the code is claimed when pairing turns false and a device arrived */
+  if (PAIR.timer) clearInterval(PAIR.timer);
+  let n = 0;
+  PAIR.timer = setInterval(async () => {
+    if (!PAIR.code) { pairStop(); return; }
+    const left = $('pairLeft');
+    if (left) left.textContent = Math.max(0, Math.ceil((PAIR.expires - Date.now()) / 1000)) + ' s';
+    if (++n % 2) return;
+    try { await fetchMeta(); } catch (e) { return; }
+    const ph = META.phone || {};
+    if (!PAIR.code) return;
+    if (!ph.pairing && (ph.devices || 0) > PAIR.devices) { PAIR.devices = ph.devices; pairStop(); toast('Paired'); }
+    else if (Date.now() > PAIR.expires) pairStop();
+    if (!PAIR.code && ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'settings') renderPage('settings');
+  }, 1000);
+}
+async function devicesList(host) {
+  try {
+    const j = await getJ('/api/devices');
+    (j.devices || []).forEach(d => {
+      const rm = h('button', {type: 'button', class: 'abtn', text: 'Remove', onclick: async () => {
+        if (!confirm('Remove ' + (d.name || d.id) + '? It leaves the page now and pairs again from scratch.')) return;
+        const r = await api('/api/devices/revoke', {id: d.id});
+        if (r.ok) { toast('removed'); host.textContent = ''; devicesList(host); }
+        else toast('revoke: ' + (r.error || ('HTTP ' + r.status)), 2600);
+      }});
+      host.appendChild(h('div', {class: 'srowx'},
+        h('span', {class: 'k', text: String(d.name || d.id)}),
+        h('span', {class: 'v'}, 'paired' + (d.seen ? ' · seen ' + fmtTime(d.seen) : ''), ' ', rm)));
+    });
+    if (!(j.devices || []).length && !PAIR.code) host.appendChild(h('p', {class: 'muted', text: 'No phones paired yet.'}));
+  } catch (e) { host.appendChild(h('p', {class: 'muted', text: 'device list: ' + (e && e.message || e)})); }
+}
+function phoneSection(sect) {   /* the Phone section by scope and caps; the QR block lands with the vendored encoder */
+  if (META.scope === 'phone')
+    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'This phone is paired as ' + ((META.device && META.device.name) || 'a device') + '.'}));
+  if (cap('on_device')) return null;   /* 17:50 E: on-device there is no Phone section at all */
+  if (META.caps && META.caps.phone_listener === false)   /* 17:50 E: the caps say no listener; one line in its place */
+    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'Phone pairing needs openssl on this computer.'}));
+  const ph = META.phone || {};
+  if (!ph.fingerprint)
+    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'Phone pairing needs openssl on this computer.'}));
+  if (!ph.on)
+    return sect('phone', 'Phone', h('p', {class: 'muted', text: 'The phone listener is off on this computer.'}));
+  const kids = [h('div', {class: 'dbar'}, h('button', {type: 'button', class: 'abtn primary', text: 'Pair a phone', onclick: ev => pairStart(ev && ev.currentTarget)}))];
+  if (PAIR.code) kids.push(
+    h('p', {class: 'small', style: 'margin:8px 0 0'},
+      String(PAIR.addresses[0] || 'this computer') + ':' + PAIR.port,
+      PAIR.addresses.length > 1 ? h('span', {class: 'muted', text: ' · also ' + PAIR.addresses.slice(1).join(', ')}) : null),
+    h('p', {class: 'pairCode', text: PAIR.code.slice(0, 4) + ' ' + PAIR.code.slice(4)}),
+    h('p', {class: 'pairWords', text: PAIR.words.join(' · ')}),
+    h('p', {class: 'small', text: 'The phone shows these words — say Yes there when they match.'}),
+    h('div', {class: 'dbar'}, h('span', {id: 'pairLeft', class: 'small', text: Math.max(0, Math.ceil((PAIR.expires - Date.now()) / 1000)) + ' s'}),
+      h('button', {type: 'button', class: 'abtn', text: 'New code', onclick: ev => pairStart(ev && ev.currentTarget)})));
+  const dv = h('div', {});
+  kids.push(dv);
+  devicesList(dv);
+  return sect('phone', 'Phone', ...kids);
+}
 function renderSettings(body) {
   const verOf = x => x && x.ok ? (x.version || '?') : 'not found';
   const sect = (key, title, ...kids) => h('div', {class: 'sect', id: 'set-' + key}, h('h3', {text: title}), kids);
@@ -4793,6 +5043,8 @@ function renderSettings(body) {
   if (!(PROJECTS || []).length) folders.appendChild(h('p', {class: 'muted', text: PROJECTS && PROJECTS.failed ? 'projects: PC unreachable' : 'No project folders yet — the config key "projects" on the PC.'}));
   body.appendChild(sect('folders', 'Folders', folders, h('p', {class: 'small', text: 'Read-only in phase 1: the file on the PC is written by deploy/write-config.py.'})));
   if (!PROJECTS) loadProjects().then(() => { if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'settings') renderPage('settings'); });
+  const ps = phoneSection(sect);
+  if (ps) body.appendChild(ps);
   const up = !!(META.display && META.display.vnc);
   body.appendChild(sect('desktop', 'Desktop',
     srowx('display :99', up ? 'up' : 'down'),
@@ -4811,6 +5063,8 @@ function renderSettings(body) {
     srowx('orcha', verOf(META.orcha)),
     srowx('terminal scripts', VENDOR_ERR ? 'failed: ' + VENDOR_ERR : 'loaded'),
     srowx('verifier', VERIFIER_ERR ? 'failed: ' + VERIFIER_ERR : (window.MBVerify ? 'loaded' : 'loading…')),
+    capService() ? srowx('keep running', {systemd: 'the systemd user service', launchd: 'the launchd agent', android: 'the Android service', none: 'no service manager here'}[capService()] || capService()) : null,
+    cap('desks') ? null : srowx('terminals', 'Terminals need tmux on this computer.'),
     h('div', {class: 'dbar'},
       h('button', {type: 'button', class: 'abtn', text: 'Retry terminal scripts', onclick: () => retryVendor().then(() => { toast('terminal scripts loaded'); renderPage('settings'); }, () => {})}),
       h('button', {type: 'button', class: 'abtn', text: 'Reload the page', onclick: () => location.reload()})),
@@ -4828,39 +5082,112 @@ function renderSettings(body) {
     f('inbox', INBOX() ? INBOX().name : '(none)');
     body.appendChild(h('div', {class: 'sect dev-only'}, h('h3', {text: 'Config (read-only)'}), dl,
       INBOX() ? h('div', {class: 'dbar'}, h('span', {}, 'inbox ', ...streamDots(STREAMS || {}))) : null));
+    /* 21:50: the self-test is a command line today; the on-device runner (E2) lights the button up */
+    body.appendChild(h('div', {class: 'sect dev-only'}, h('h3', {text: 'Self-test'}),
+      h('div', {class: 'dbar'},
+        h('button', {type: 'button', class: 'abtn', text: 'Run self-test', disabled: true,
+          title: 'runs from the command line until the on-device runner lands'}),
+        h('span', {class: 'small', text: 'tools/selftest-linux.sh · report: docs/SELFTEST.md'})),
+      h('p', {class: 'small', text: 'The self-test walks the whole app against a scripted engine, offline. The button runs it here once the on-device runner lands.'})));
   }
 }
 
 /* ---------- Set-up (section 16): four steps on a page, ticked as each is done; opened on a fresh device ---------- */
+/* Step 0 (21:50 B5/B7): the doctor report — one row per finding; a failing row shows its fix,
+   a blocker row is red, a note row is grey; a blocker opens the set-up page by itself. */
+let DOCTOR = null, DOCTOR_LOADED = false;
+async function loadDoctor() {
+  try { DOCTOR = await getJ('/api/doctor'); } catch (e) { DOCTOR = null; }
+  if (!DOCTOR || typeof DOCTOR !== 'object' || !Array.isArray(DOCTOR.items)) DOCTOR = null;   /* an older PC: no step 0 */
+  return DOCTOR;
+}
+function doctorCard() {
+  if (!DOCTOR) return null;
+  return h('div', {class: 'steps4 doctor'}, (DOCTOR.items || []).map(it => h('div',
+    {class: 'step doc' + (it.ok ? ' done' : it.blocker ? ' block' : ' note'), title: it.ok ? '' : String(it.fix || '')},
+    h('span', {class: 'sn'}, it.ok ? icon('check') : '!'),
+    h('span', {class: 'sl'}, h('b', {text: String(it.what || it.id || '')}),
+      it.ok ? null : h('span', {text: String(it.fix || '')})))));
+}
+async function doctorAutoOpen() {
+  const d = await loadDoctor();
+  if (!d || d.ok !== false) return;
+  if (!(d.items || []).some(it => it && it.blocker && !it.ok)) return;
+  if (!localStorage.fcSetup && UMODE === 'user' && !(ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup')) openPage('setup');
+}
+/* the folder picker (22:10 B6): choose a project root from the file system; the folder works at once */
+let FOLDERS_API = null;
+async function foldersApi() {
+  if (FOLDERS_API !== null) return FOLDERS_API;
+  try { await getJ('/api/dirs?under='); FOLDERS_API = true; }
+  catch (e) { FOLDERS_API = !/HTTP 404/.test(String(e && e.message)); }
+  return FOLDERS_API;
+}
+function openFolderPicker(under) { openPanel('fspick', 'Choose a folder', body => drawFolderPicker(body, under || '')); }
+async function drawFolderPicker(body, under) {
+  body.textContent = '';
+  const note = h('p', {class: 'muted', text: 'reading…'});
+  const pick = h('button', {type: 'button', class: 'abtn primary', text: 'Choose this folder', disabled: true, onclick: async () => {
+    const r = await api('/api/folders', {add: under});
+    if (!r.ok) { toast(r.error || ('HTTP ' + r.status), 3200); return; }
+    await loadProjects(true);   /* the folder works at once; the set-up step re-renders from the fresh list */
+    toast('folder added as a project');
+    closePanel();
+    if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup');
+  }});
+  const list = h('div', {class: 'dlist'});
+  body.append(note, pick, list);
+  try {
+    const j = await getJ('/api/dirs?under=' + encodeURIComponent(under));
+    note.textContent = under ? shortPath(under) : 'the home folder';
+    pick.disabled = false;
+    list.textContent = '';
+    if (j.parent != null) list.appendChild(h('button', {type: 'button', class: 'abtn', text: '↑ ' + (j.parent ? shortPath(j.parent) : 'the home folder'), onclick: () => drawFolderPicker(body, j.parent)}));
+    (j.dirs || []).forEach(d => list.appendChild(h('button', {type: 'button', class: 'abtn', text: String(d.name), title: String(d.path), onclick: () => drawFolderPicker(body, d.path)})));
+    if (!(j.dirs || []).length && j.parent == null) list.appendChild(h('p', {class: 'muted', text: 'no folders here'}));
+  } catch (e) { note.textContent = 'the folder list did not read: ' + (e && e.message || e); }
+}
 let SETUP_LOADING = false;
 function renderSetup(body) {
   const A = ACCOUNTS || {}, D = A.defaults || {};
   const unready = [].concat(claudeLogins(A).filter(x => !x.ready).map(x => ['claude', x.name]), (A.cursor || []).filter(x => x.ready === false).map(x => ['cursor', x.name]))[0];
   const have = {
-    account: !!(ACCOUNTS && ((D.claude && D.claude.ready) || (D.cursor && D.cursor.ready) || claudeLogins(A).some(x => x.ready) || (A.cursor || []).some(x => x.ready))),
+    account: cap('on_device')
+      ? !!(DOCTOR && (DOCTOR.items || []).some(it => it && it.id === 'engine.local' && (it.ok || it.configured)))   /* Bugbot 11-11 (3) + 11-12: on the phone the engine is a model server the doctor sees or a hosted one it has configured, not a CLI login */
+      : !!(ACCOUNTS && ((D.claude && D.claude.ready) || (D.cursor && D.cursor.ready) || claudeLogins(A).some(x => x.ready) || (A.cursor || []).some(x => x.ready))),
     folder: !!(PROJECTS && PROJECTS.some(p => (p.paths || []).length)),
     desk: (window.DESKS || []).some(d => d.meta && d.meta.kind && !d.meta.signin),   // RV-J: a sign-in desk is not a working desk
     message: MSGS.some(ev => ev.via === 'in'),
+    run: ALL_RUNS.length > 0,   /* Bugbot 11-11 (2): without desks the proof is a run, not a message */
   };
   if ((!ACCOUNTS || !PROJECTS) && !SETUP_LOADING) {
     SETUP_LOADING = true;
     Promise.all([loadAccounts(), loadProjects()]).then(() => { SETUP_LOADING = false; if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup'); }, () => { SETUP_LOADING = false; });
   }
+  if (!DOCTOR_LOADED) { DOCTOR_LOADED = true; loadDoctor().then(() => { if (ACTIVE && ACTIVE.kind === 'page' && ACTIVE.id === 'setup') renderPage('setup'); }); }
   const steps = [
-    ['Sign in', 'a Claude or Cursor account, on this PC', have.account, () => unready ? signInDesk(unready[0], unready[1]) : openPage('accounts')],
-    ['A project folder', 'the config key "projects" — Settings → Folders', have.folder, () => openSettingsAt('folders')],
+    ['Sign in', cap('on_device') ? 'add an API key or a model server address — the doctor (step 0) checks it' : 'a Claude or Cursor account, on this PC', have.account,
+      () => cap('on_device') ? toast('step 0 above says what the engine needs: a model server that answers, or an API key', 3200) : unready ? signInDesk(unready[0], unready[1]) : openPage('accounts')],
+    ['A project folder', 'the config key "projects" — Settings → Folders', have.folder, async () => { (await foldersApi()) ? openFolderPicker('') : openSettingsAt('folders'); }],
     ['A desk', 'Claude, Cursor or Shell', have.desk, () => openSpawnSheet()],
-    ['A message', 'type below; it lands in the desk', have.message, () => { backToChat(); text.focus(); }],
-  ];
+    cap('desks') ? ['A message', 'type below; it lands in the desk', have.message, () => { backToChat(); text.focus(); }]
+                 : ['A run', 'start it here; the receipt is the proof', have.run, () => { setMode('run'); openSheet('runSheet'); loadRunChips(); }],
+  ].filter(([lbl]) => !(lbl === 'A desk' && !cap('desks')));   /* 1.3: no tmux, no desk step — and the count never includes a hidden step */
   const done = steps.filter(s => s[2]).length;
-  body.appendChild(h('p', {class: 'muted', text: 'MetaBot · on Metaorcha. Four steps, then it runs. It does the work. You keep the record.'}));
-  body.appendChild(h('div', {class: 'pdots', 'aria-label': done + ' of 4 done'}, steps.map(s => h('i', {class: s[2] ? 'on' : ''})), h('span', {class: 'small', text: done + ' of 4'})));
+  body.appendChild(h('p', {class: 'muted', text: 'MetaBot · on Metaorcha. ' + steps.length + ' steps, then it runs.'}));
+  const dc = doctorCard();
+  if (dc) body.appendChild(h('p', {class: 'small', text: 'Step 0 — the doctor: ' + (DOCTOR.ok === false ? 'a finding needs attention.' : 'this computer is ready.')}));
+  if (dc) body.appendChild(dc);
+  body.appendChild(h('div', {class: 'pdots', 'aria-label': done + ' of ' + steps.length + ' done'}, steps.map(s => h('i', {class: s[2] ? 'on' : ''})), h('span', {class: 'small', text: done + ' of ' + steps.length})));
   body.appendChild(h('div', {class: 'steps4'}, steps.map(([lbl, how, ok, go], i) => h('div', {class: 'step' + (ok ? ' done' : '')},
     ok ? h('span', {class: 'sn'}, icon('check')) : h('span', {class: 'sn', text: String(i + 1)}),
     h('span', {class: 'sl'}, h('b', {text: lbl}), h('span', {text: how})),
     h('button', {type: 'button', class: 'abtn' + (ok ? '' : ' primary'), text: ok ? 'Done' : 'Do it', disabled: ok, onclick: go})))));
+  if (META.scope === 'desktop' && !cap('on_device') && (META.phone || {}).on)   /* the optional fifth line: never one of the counted steps */
+    body.appendChild(h('div', {class: 'dbar'},
+      h('button', {type: 'button', class: 'abtn', text: 'Pair a phone', title: 'optional — not one of the counted steps', onclick: () => openSettingsAt('phone')})));
   body.appendChild(h('div', {class: 'dbar'},
-    h('button', {type: 'button', class: 'abtn', text: done === 4 ? 'All set' : 'Skip for now', onclick: () => { localStorage.fcSetup = '1'; closeTab('page', 'setup'); }}),
+    h('button', {type: 'button', class: 'abtn', text: done === steps.length ? 'All set' : 'Skip for now', onclick: () => { localStorage.fcSetup = '1'; closeTab('page', 'setup'); }}),
     h('button', {type: 'button', class: 'abtn', text: 'Developer view', onclick: () => { localStorage.fcSetup = '1'; setUMode('dev'); }})));
 }
 
@@ -4916,6 +5243,7 @@ async function boot() {
   await loadModules();
   pollRuns();
   if (!localStorage.fcSetup && UMODE === 'user' && !(window.DESKS || []).length && LOADED.meta) openPage('setup');
+  doctorAutoOpen();
 }
 boot(); stream();
 setInterval(fetchDesks, 20000);

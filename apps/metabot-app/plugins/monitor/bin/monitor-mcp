@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""monitor: an MCP server (stdio, JSON lines) for the screen of the PC it runs on.
+
+Tools: screen_look (a screenshot file and the window list), windows,
+show_url (a page or a local file in a new browser window), show_text (a card on
+the monitor and a desktop notification), focus_window, close_window, type_text,
+press_key, click, mouse_move. The last four need xdotool and say so when it is
+missing. Standard library only; commands are found on PATH, so a test can put
+fakes there. DISPLAY defaults to :0 and XAUTHORITY to ~/.Xauthority when the
+environment does not say (an MCP client passes neither).
+
+Classes the gate reads: every tool carries readOnlyHint or destructiveHint, and
+the one that closes is named close_* so the platform's verb rule classes it
+destructive on its own.
+"""
+
+import html
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+VERSION = "0.1.0"
+PROTOCOL = "2025-06-18"
+TIMEOUT = 20
+OUT_DIR = os.path.join(tempfile.gettempdir(), "metabot-monitor")
+BROWSER = os.environ.get("MONITOR_BROWSER", "google-chrome")
+
+TOOLS = [
+    {"name": "screen_look", "description": "Take a screenshot of the monitor (PNG file under the temp folder) and list the open windows.",
+     "inputSchema": {"type": "object", "properties": {"window": {"type": "string", "description": "a window title to shoot instead of the whole screen"}}},
+     "annotations": {"readOnlyHint": True, "destructiveHint": False}},
+    {"name": "windows", "description": "List the open windows: id, desktop, title.",
+     "inputSchema": {"type": "object", "properties": {}}, "annotations": {"readOnlyHint": True, "destructiveHint": False}},
+    {"name": "show_url", "description": "Open an http(s) URL or a local file in a new browser window on the monitor.",
+     "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "show_text", "description": "Show a card with a title and text on the monitor, and a desktop notification.",
+     "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "text": {"type": "string"}}, "required": ["text"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "focus_window", "description": "Bring the window whose title contains the text to the front.",
+     "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "close_window", "description": "Close the window whose title contains the text (destructive).",
+     "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": True}},
+    {"name": "type_text", "description": "Type text into the focused window (xdotool).",
+     "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "press_key", "description": "Press a key or chord in the focused window, e.g. Return, ctrl+l (xdotool).",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "click", "description": "Click at screen coordinates (xdotool).",
+     "inputSchema": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "integer", "default": 1}}, "required": ["x", "y"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+    {"name": "mouse_move", "description": "Move the pointer to screen coordinates (xdotool).",
+     "inputSchema": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False}},
+]
+
+
+class ToolError(Exception):
+    pass
+
+
+def env():
+    e = dict(os.environ)
+    e.setdefault("DISPLAY", ":0")
+    if "XAUTHORITY" not in e:
+        xa = os.path.join(os.path.expanduser("~"), ".Xauthority")
+        if os.path.exists(xa):
+            e["XAUTHORITY"] = xa
+    return e
+
+
+def run(argv, timeout=TIMEOUT):
+    if shutil.which(argv[0]) is None:
+        hint = " (sudo apt install xdotool)" if argv[0] == "xdotool" else ""
+        raise ToolError(f"{argv[0]} is not installed on this PC{hint}")
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env(), check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolError(f"{argv[0]}: {type(exc).__name__}") from None
+    if r.returncode != 0:
+        raise ToolError(f"{argv[0]} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout
+
+
+def windows():
+    rows = []
+    for line in run(["wmctrl", "-l"]).splitlines():
+        parts = line.split(None, 3)
+        if len(parts) >= 4:
+            rows.append({"id": parts[0], "desktop": parts[1], "title": parts[3]})
+        elif len(parts) == 3:
+            rows.append({"id": parts[0], "desktop": parts[1], "title": ""})
+    return rows
+
+
+def need_str(args, key):
+    v = args.get(key)
+    if not isinstance(v, str) or not v.strip():
+        raise ToolError(f"{key} is required")
+    return v
+
+
+def need_int(args, key):
+    v = args.get(key)
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ToolError(f"{key} must be an integer")
+    return v
+
+
+def t_screen_look(args):
+    os.makedirs(OUT_DIR, mode=0o700, exist_ok=True)
+    path = os.path.join(OUT_DIR, f"screen-{int(time.time())}.png")
+    title = args.get("window")
+    if title:
+        run(["wmctrl", "-a", str(title)])
+        run(["scrot", "-u", "-o", path])
+    else:
+        run(["scrot", "-o", path])
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    ws = windows()
+    return f"screenshot {path} ({size} bytes); {len(ws)} windows:\n" + "\n".join(f"- {w['title']}" for w in ws[:40])
+
+
+def t_windows(_args):
+    ws = windows()
+    return json.dumps(ws)
+
+
+def t_show_url(args):
+    url = need_str(args, "url").strip()
+    low = url.lower()
+    if not (low.startswith("http://") or low.startswith("https://") or low.startswith("file:///") or url.startswith("/")):
+        raise ToolError("only http(s) URLs and local files are shown")
+    if url.startswith("/") and not os.path.exists(url):
+        raise ToolError("no such file")
+    if shutil.which(BROWSER) is None:
+        raise ToolError(f"{BROWSER} is not installed on this PC")
+    subprocess.Popen([BROWSER, "--new-window", url], env=env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # noqa: S603
+                     start_new_session=True)
+    return f"opened {url} in a new {BROWSER} window"
+
+
+CARD = """<!doctype html><meta charset="utf-8"><title>{title}</title>
+<style>html,body{{height:100%;margin:0;background:#141210;color:#f2efe9;font:28px/1.4 system-ui,sans-serif}}
+main{{min-height:100%;display:grid;place-items:center;padding:6vmin;box-sizing:border-box}}
+article{{max-width:60ch;border:1px solid #3c3b39;border-radius:16px;padding:5vmin;background:#1d1a17}}
+h1{{font-size:1.2em;color:#f28c28;margin:0 0 .6em}}pre{{white-space:pre-wrap;font:inherit;margin:0}}
+footer{{margin-top:1.2em;font-size:.6em;color:#9a948c}}</style>
+<main><article><h1>{title}</h1><pre>{text}</pre><footer>MetaBot · monitor · {when}</footer></article></main>"""
+
+
+def t_show_text(args):
+    text = need_str(args, "text")[:4000]
+    title = str(args.get("title") or "MetaBot")[:120]
+    os.makedirs(OUT_DIR, mode=0o700, exist_ok=True)
+    path = os.path.join(OUT_DIR, f"card-{int(time.time())}.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(CARD.format(title=html.escape(title), text=html.escape(text), when=time.strftime("%H:%M")))
+    notes = []
+    if shutil.which("notify-send"):
+        try:
+            subprocess.run(["notify-send", title, text[:200]], timeout=5, env=env(), check=False, capture_output=True)
+            notes.append("notified")
+        except (OSError, subprocess.SubprocessError):
+            notes.append("notification failed")
+    if shutil.which(BROWSER):
+        subprocess.Popen([BROWSER, "--new-window", path], env=env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # noqa: S603
+                         start_new_session=True)
+        notes.append("card shown")
+    else:
+        notes.append(f"card written ({BROWSER} is not installed)")
+    return f"{', '.join(notes)}: {path}"
+
+
+def t_focus_window(args):
+    title = need_str(args, "title")
+    run(["wmctrl", "-a", title])
+    return f"focused a window titled like {title!r}"
+
+
+def t_close_window(args):
+    title = need_str(args, "title")
+    run(["wmctrl", "-c", title])
+    return f"closed a window titled like {title!r}"
+
+
+def t_type_text(args):
+    text = need_str(args, "text")[:2000]
+    run(["xdotool", "type", "--delay", "20", "--", text])
+    return f"typed {len(text)} characters"
+
+
+def t_press_key(args):
+    key = need_str(args, "key")
+    if not all(c.isalnum() or c in "+_" for c in key) or len(key) > 40:
+        raise ToolError("a key is letters, digits, '+' and '_', e.g. ctrl+l")
+    run(["xdotool", "key", "--", key])
+    return f"pressed {key}"
+
+
+def t_click(args):
+    x, y = need_int(args, "x"), need_int(args, "y")
+    button = args.get("button", 1)
+    if button not in (1, 2, 3):
+        raise ToolError("button is 1, 2 or 3")
+    run(["xdotool", "mousemove", str(x), str(y), "click", str(button)])
+    return f"clicked button {button} at {x},{y}"
+
+
+def t_mouse_move(args):
+    x, y = need_int(args, "x"), need_int(args, "y")
+    run(["xdotool", "mousemove", str(x), str(y)])
+    return f"pointer at {x},{y}"
+
+
+HANDLERS = {t["name"]: globals()["t_" + t["name"]] for t in TOOLS}
+
+
+def reply(msg_id, result=None, error=None):
+    out = {"jsonrpc": "2.0", "id": msg_id}
+    if error is not None:
+        out["error"] = error
+    else:
+        out["result"] = result
+    sys.stdout.write(json.dumps(out) + "\n")
+    sys.stdout.flush()
+
+
+def handle(msg):
+    method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if method is None or (msg_id is None and not str(method).startswith("notifications/")):
+        return
+    if str(method).startswith("notifications/"):
+        return
+    if method == "initialize":
+        reply(msg_id, {"protocolVersion": params.get("protocolVersion") or PROTOCOL,
+                       "capabilities": {"tools": {}},
+                       "serverInfo": {"name": "monitor", "version": VERSION}})
+    elif method == "ping":
+        reply(msg_id, {})
+    elif method == "tools/list":
+        reply(msg_id, {"tools": TOOLS})
+    elif method == "tools/call":
+        name = params.get("name")
+        fn = HANDLERS.get(name)
+        if fn is None:
+            reply(msg_id, error={"code": -32602, "message": f"no tool named {name}"})
+            return
+        args = params.get("arguments") or {}
+        try:
+            text = fn(args if isinstance(args, dict) else {})
+            reply(msg_id, {"content": [{"type": "text", "text": text}], "isError": False})
+        except ToolError as exc:
+            reply(msg_id, {"content": [{"type": "text", "text": str(exc)}], "isError": True})
+    else:
+        reply(msg_id, error={"code": -32601, "message": f"no method {method}"})
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(msg, dict):
+            handle(msg)
+
+
+if __name__ == "__main__":
+    main()

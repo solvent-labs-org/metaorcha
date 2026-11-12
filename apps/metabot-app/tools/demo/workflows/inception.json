@@ -1,0 +1,12 @@
+{
+  "format": "metabot.workflow/1",
+  "name": "inception",
+  "about": "MetaBot on MetaBot: the watchdog reads the app's state, then Cursor looks at the PC screen and shows a status card on the monitor. Two receipts, one chain.",
+  "cwd": "__CWD__",
+  "steps": [
+    {"name": "watch", "kind": "ask", "engine": "watchdog", "read_only": true, "prompt": "watch"},
+    {"name": "brief", "kind": "ask", "engine": "cursor", "model": "grok-4.7-medium",
+     "connections": true, "allow": ["__MONITOR____show_text"],
+     "prompt": "You have the monitor connection to this PC's screen. 1) Call screen_look. 2) Call show_text with the title 'MetaBot inception' and a three-line card: what is on the screen now, how many windows are open, and the time. 3) Answer with the same three lines and nothing else. Do not type, click or close anything."}
+  ]
+}

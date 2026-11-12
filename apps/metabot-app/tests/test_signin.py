@@ -127,7 +127,9 @@ class SignInSpawnTests(SignInBase):
         folder = self.env.state / "signin"
         self.assertEqual(self.new_sessions()[-1], [
             "new-session", "-d", "-s", "fc-signin-claude-work", "-c", str(folder),
-            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", f"CLAUDE_CONFIG_DIR={self.work}",
+            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", "METABOT_MAILBOX=signin-claude-work",
+            "-e", f"METACHAT_URL=http://127.0.0.1:{self.env.port}", "-e", f"METACHAT_STATE={self.env.state}",
+            "-e", f"CLAUDE_CONFIG_DIR={self.work}",
             "--", "env", *unset_pairs(), "bash", "-lc", mb.FIXED_SCRIPT, "metachat", "claude"])
         self.assertTrue(folder.is_dir())
         self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
@@ -140,7 +142,7 @@ class SignInSpawnTests(SignInBase):
         self.assertEqual((s, j), (409, {"ok": False, "error": "already signing in"}))
         d = self.row("signin-claude-work")
         self.assertEqual(d["signin"], {"engine": "claude", "account": "work", "step": "starting",
-                                       "url": None, "exit": None})
+                                       "url": None, "exit": None, "where": "here"})
         caps = [c for c in self.env.calls("tmux") if c[:1] == ["capture-pane"]]
         self.assertIn(["capture-pane", "-p", "-J", "-S", "-40", "-t", "=fc-signin-claude-work:"], caps)
         s, j = self.env.get("/api/events?limit=5")
@@ -170,7 +172,9 @@ class SignInSpawnTests(SignInBase):
         acc = self.env.state / "accounts" / "cursor" / "alt"
         self.assertEqual(self.new_sessions()[-1], [
             "new-session", "-d", "-s", "fc-signin-cursor-alt", "-c", str(self.env.state / "signin"),
-            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", f"XDG_CONFIG_HOME={acc}/config",
+            "-e", f"METABOT_HOME={self.env.mbhome}", "-e", "METABOT_MAILBOX=signin-cursor-alt",
+            "-e", f"METACHAT_URL=http://127.0.0.1:{self.env.port}", "-e", f"METACHAT_STATE={self.env.state}",
+            "-e", f"XDG_CONFIG_HOME={acc}/config",
             "-e", f"GH_CONFIG_DIR={self.env.home}/.config/gh", "-e", f"CURSOR_CONFIG_DIR={self.env.home}/.cursor",
             "--", "env", *unset_pairs(mb.CURSOR_UNSET), "bash", "-lc", mb.FIXED_SCRIPT, "metachat",
             "cursor-agent", "login"])
@@ -262,7 +266,7 @@ class SignInStepTests(SignInBase):
         # the code screen 41+ lines up is out of the window: nothing matched, not signed in
         d = self.show(n, screen("claude-code") + "\n".join(["output"] * 45) + "\n")
         self.assertEqual(d["signin"], {"engine": "claude", "account": "work", "step": "starting", "url": None,
-                                       "exit": None})
+                                       "exit": None, "where": "here"})
         # blank rows under the screen (a tall pane) are not lines of it
         d = self.show(n, screen("claude-method") + "\n" * 60)
         self.assertEqual(d["signin"]["step"], "method")
@@ -300,13 +304,26 @@ class SignInStepTests(SignInBase):
         self.assertEqual(d["signin"]["step"], "starting")       # "Not logged in" is no sign-in
         d = self.show(n, screen("cursor-login"))
         self.assertEqual(d["signin"], {"engine": "cursor", "account": "alt", "step": "link",
-                                       "url": cursor_link(), "exit": None})
+                                       "url": cursor_link(), "exit": None, "where": "here"})
         self.assertEqual(self.show(n, "Logged in as someone@example.test\n")["signin"]["step"], "success")
         self.assertEqual(self.show(n, "Authentication successful\n")["signin"]["step"], "success")
         auth = self.env.state / "accounts" / "cursor" / "alt" / "config" / "cursor"
         auth.mkdir(parents=True)
         os.mkfifo(auth / "auth.json")          # stat only: opening a fifo would hang the request
         self.assertEqual(self.show(n, "")["signin"]["step"], "ready")
+
+    def test_where_names_the_computer_for_a_phone(self):
+        # 11-12 (D1, found on the tablet): a Cursor login's browser callback lands on
+        # this machine, so on the phone that started it the link opens nowhere. The
+        # sign-in state says where the link must be opened: "here" in the desktop's
+        # own browser, "pc" for a phone viewer (the card sends the person over)
+        self.env.post("/api/accounts", {"engine": "cursor", "name": "alt"})
+        self.assertEqual(self.signin(kind="cursor", account="alt")[0], 200)
+        d = self.show("signin-cursor-alt", screen("cursor-login"))
+        self.assertEqual(d["signin"]["where"], "here")
+        phone = {r["name"]: r for r in server.desks(viewer="phone")["desks"]}
+        self.assertEqual(phone["signin-cursor-alt"]["signin"]["where"], "pc")
+        self.assertEqual(phone["signin-cursor-alt"]["signin"]["url"], d["signin"]["url"])
 
     def test_ready_when_nothing_matched_and_the_account_is_signed_in(self):
         self.assertEqual(self.signin()[0], 200)
@@ -752,7 +769,7 @@ class SignInEndedTests(SignInBase):
         for tail in ("\n[metachat] exit 1\n", "\n[metachat] exit 1\nuser@host:~/x$ "):
             d = self.show(n, screen("cursor-login") + tail)
             self.assertEqual(d["signin"], {"engine": "cursor", "account": "alt", "step": "ended", "url": None,
-                                           "exit": 1}, tail)
+                                           "exit": 1, "where": "here"}, tail)
             self.assertEqual((d["needs_you"], d["ask"], d["ask_line"], d["cls"]), (False, None, None, None))
         s, j = self.env.get("/api/tree")
         self.assertNotIn(n, [w["desk"] for w in j["waiting"]])
@@ -762,7 +779,7 @@ class SignInEndedTests(SignInBase):
         n = "signin-claude-work"
         d = self.show(n, screen("claude-code") + "\n[metachat] exit 130\n")
         self.assertEqual(d["signin"], {"engine": "claude", "account": "work", "step": "ended", "url": None,
-                                       "exit": 130})
+                                       "exit": 130, "where": "here"})
         self.assertFalse(d["needs_you"])
         # the latest match wins: a CLI started again under the exit line shows its own step
         d = self.show(n, "[metachat] exit 1\nuser@host:~$ claude\n" + screen("claude-method"))

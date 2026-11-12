@@ -49,7 +49,7 @@ class ReportTests(unittest.TestCase):
             rep = doctor.report(server.MB)
         self.assertEqual([i["id"] for i in rep["items"]], IDS)
         for i in rep["items"]:
-            self.assertEqual(set(i), {"id", "ok", "what", "fix", "blocker"})
+            self.assertEqual(set(i), {"id", "ok", "what", "fix", "blocker", "configured"})
             self.assertIsInstance(i["what"], str)
             self.assertIsInstance(i["fix"], str)
             self.assertNotIn("Traceback", i["what"] + i["fix"])
@@ -134,6 +134,7 @@ class ReportTests(unittest.TestCase):
         rep, by = self.items()
         self.assertTrue(by["engine.local"]["ok"])
         self.assertIn("2 model", by["engine.local"]["what"])
+        self.assertFalse(by["engine.local"]["configured"])   # a probed server needs no second flag
         self.assertEqual(hits, ["/v1/models"])
         # a hosted address is never probed by doctor
         (self.env.mbhome / "config.json").write_text(json.dumps({"openai_base_url": "https://api.example.com/v1"}))
@@ -141,6 +142,7 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(by["engine.local"]["ok"])
         self.assertIn("not probed", by["engine.local"]["what"])
         self.assertFalse(by["engine.local"]["blocker"])
+        self.assertIs(by["engine.local"]["configured"], True)   # Bugbot 11-12: the page counts a hosted engine as set up
 
     def test_no_local_model_server(self):
         (self.env.mbhome / "config.json").write_text(json.dumps({"openai_base_url": "http://127.0.0.1:1/v1"}))
@@ -157,6 +159,16 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(rep["ok"])
         self.assertTrue(by["engine.local"]["blocker"])
         self.assertIn("sign in", by["engine.local"]["fix"])
+
+    def test_a_hosted_engine_alone_is_set_up_not_a_blocker(self):
+        # Bugbot 11-12: a phone has no CLI engine; a hosted model server it cannot probe is still an engine
+        (self.env.mbhome / "config.json").write_text(json.dumps({"openai_base_url": "https://api.example.com/v1"}))
+        with mock.patch.object(paths, "find_bin", side_effect=lambda n: None if n in ("claude", "codex", "cursor-agent") else shutil.which(n)):
+            rep, by = self.items()
+        self.assertFalse(by["engine.local"]["ok"])
+        self.assertIs(by["engine.local"]["configured"], True)
+        self.assertFalse(by["engine.local"]["blocker"])
+        self.assertIn("not probed", by["engine.local"]["what"])
 
     def test_folder_blocks_when_no_root_exists(self):
         server.CFG["project_roots"] = [str(self.env.root / "gone")]

@@ -34,8 +34,11 @@ PROBE_S = 1.5
 LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
 
 
-def _item(id_, ok, what, fix="", blocker=False):
-    return {"id": id_, "ok": bool(ok), "blocker": bool(blocker) and not ok, "what": what, "fix": fix if not ok else ""}
+def _item(id_, ok, what, fix="", blocker=False, configured=False):
+    """configured: set up but not provable from here (a hosted model server the doctor
+    never probes); the page's set-up step counts it, the finding still reads not ok."""
+    return {"id": id_, "ok": bool(ok), "blocker": bool(blocker) and not ok, "what": what,
+            "fix": fix if not ok else "", "configured": bool(configured)}
 
 
 def key_path() -> Path:
@@ -101,7 +104,8 @@ def _local(metabot_home):
     host = (urlsplit(url).hostname or "").lower()
     if host not in LOOPBACK:
         return _item("engine.local", False, "a model server off this machine is configured (not probed)",
-                     "doctor only probes a local model server; the first run will show whether it answers")
+                     "doctor only probes a local model server; the first run will show whether it answers",
+                     configured=True)
     try:
         req = urllib.request.Request(url + "/models", headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=PROBE_S) as r:
@@ -143,7 +147,7 @@ def report(ctx, on_device: bool | None = None) -> dict:
              _core(ctx), _key(), _tmux(on_device)]
     engines = [_cli(i) for i in ("engine.claude", "engine.codex", "engine.cursor")]
     local = _local(getattr(ctx, "metabot_home", ""))
-    if not local["ok"] and not any(e["ok"] for e in engines):
+    if not local["ok"] and not local["configured"] and not any(e["ok"] for e in engines):   # a hosted server, unprobed, is still an engine
         local = _item("engine.local", False, local["what"],
                       "sign in to Claude Code, Codex or Cursor, add an API key, or start a local model server",
                       blocker=True)

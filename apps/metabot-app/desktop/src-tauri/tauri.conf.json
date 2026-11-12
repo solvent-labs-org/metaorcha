@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MetaBot",
+  "version": "0.1.0",
+  "identifier": "ai.metaorcha.metabot.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "MetaBot: the agent harness with a receipt for every run",
+    "longDescription": "Opens the MetaBot app in a window: it finds the app server already running on this computer or starts one from the metabot-app on PATH, then loads its page.",
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}

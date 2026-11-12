@@ -70,9 +70,12 @@ pair_once() {  # pair_once LABEL
   sleep 3; shot "$1-page"
 }
 
+devices_cli > "$OUT/devices-0.txt" 2>/dev/null || true   # the phones paired before this walk (never revoked here)
 pair_once first
 devices_cli | tee "$OUT/devices-1.txt" | grep -q . && step "device listed" true "$(grep -c . "$OUT/devices-1.txt") line(s)" || step "device listed" false "no paired phones"
-ID=$(sed -n 's/^\([A-Za-z0-9_-]\{4,\}\) .*/\1/p' "$OUT/devices-1.txt" | head -1)
+# revoke the device this walk just paired: the id in the list now that was not in the list before
+ids() { sed -n 's/^\([A-Za-z0-9_-]\{4,\}\) .*/\1/p' "$1"; }
+ID=$(grep -vxF -f <(ids "$OUT/devices-0.txt"; echo __none__) <(ids "$OUT/devices-1.txt") | head -1)
 if [ -n "$ID" ]; then
   devices_cli --remove "$ID" >/dev/null && step revoke true "$ID" || step revoke false "remove failed"
   A shell am start -S -n "$PKG/.MainActivity" >/dev/null 2>&1   # relaunch: the main-frame 403 sends it to pairing
