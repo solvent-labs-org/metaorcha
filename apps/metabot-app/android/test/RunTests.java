@@ -21,6 +21,8 @@ public class RunTests {
             words();
             failover();
             pageUrl();
+            wheelLock();
+            payloadAssets();
         }
         mockPair();
         if (failed > 0) {
@@ -160,6 +162,95 @@ public class RunTests {
         check("page url ipv6", "https://[fd7a::1]:8443/?t=x".equals(Pairing.pageUrl("fd7a::1", 8443, "x")));
         check("pair url ipv6", "https://[fd7a::1]:8443/api/pair".equals(Pairing.pairUrl("fd7a::1", 8443)));
         check("pair url", "https://home.example:8443/api/pair".equals(Pairing.pairUrl("home.example", 8443)));
+    }
+
+    private static void wheelLock() {
+        String text = "# the E1 payload lock\n"
+            + "\n"
+            + "cpython python-3.14.10-aarch64-linux-android.tar.gz " + repeat("a", 64)
+            + " 23027305 https://example.test/py.tar.gz\n"
+            + "wheel anyio-4.14.2-py3-none-any.whl " + repeat("b", 64) + " 125813 pypi\n"
+            + "launcher libmetabot_py.so " + repeat("c", 64) + " 6768 spike-build\n"
+            + "local orcha-metabot - - env:MB_CORE_ROOT/apps/metabot\n";
+        WheelLock lock = WheelLock.parse(text);
+        check("lock entry count", lock.entries().size() == 4);
+        WheelLock.Entry w = lock.find("anyio-4.14.2-py3-none-any.whl");
+        check("lock find wheel", w != null && "wheel".equals(w.kind)
+            && w.bytes == 125813 && "pypi".equals(w.source));
+        check("lock wheel sha", w != null && repeat("b", 64).equals(w.sha256));
+        WheelLock.Entry c = lock.find("python-3.14.10-aarch64-linux-android.tar.gz");
+        check("lock find cpython", c != null && "cpython".equals(c.kind));
+        WheelLock.Entry l = lock.find("orcha-metabot");
+        check("lock local has no hash", l != null && "local".equals(l.kind) && l.sha256 == null);
+        check("lock miss", lock.find("nope-1.0.whl") == null);
+        byte[] data = "wheel-bytes".getBytes(StandardCharsets.UTF_8);
+        String sha = Fingerprint.sha256Hex(data);
+        WheelLock ok = WheelLock.parse("wheel x-1.0-py3-none-any.whl " + sha + " " + data.length + " pypi\n");
+        check("lock matches bytes", ok.find("x-1.0-py3-none-any.whl").matches(data));
+        check("lock rejects wrong bytes",
+            !ok.find("x-1.0-py3-none-any.whl").matches("other".getBytes(StandardCharsets.UTF_8)));
+        check("lock rejects wrong size", !ok.find("x-1.0-py3-none-any.whl").matches(
+            "wheel-bytes!".getBytes(StandardCharsets.UTF_8)));
+        check("lock local never matches", !l.matches(data));
+        check("lock dup file", lockThrows("wheel a.whl " + repeat("b", 64) + " 1 pypi\n"
+            + "sdist a.whl " + repeat("c", 64) + " 2 pypi\n"));
+        check("lock bad kind", lockThrows("thing a.whl " + repeat("b", 64) + " 1 pypi\n"));
+        check("lock bad sha", lockThrows("wheel a.whl " + repeat("B", 64) + " 1 pypi\n"));
+        check("lock short sha", lockThrows("wheel a.whl abcd 1 pypi\n"));
+        check("lock bad bytes", lockThrows("wheel a.whl " + repeat("b", 64) + " x pypi\n"));
+        check("lock zero bytes", lockThrows("wheel a.whl " + repeat("b", 64) + " 0 pypi\n"));
+        check("lock missing source", lockThrows("wheel a.whl " + repeat("b", 64) + " 1\n"));
+        check("lock local with hash", lockThrows("local orcha-metabot " + repeat("b", 64) + " 1 tree\n"));
+        check("lock fetched sans hash", lockThrows("wheel a.whl - - pypi\n"));
+    }
+
+    private static void payloadAssets() {
+        byte[] a = "aaa".getBytes(StandardCharsets.UTF_8);
+        byte[] b = "bb".getBytes(StandardCharsets.UTF_8);
+        String text = "# what the APK carries under assets/py\n"
+            + "stdlib.zip " + Fingerprint.sha256Hex(a) + " 3\n"
+            + "wheels/x-1.0-py3-none-any.whl " + Fingerprint.sha256Hex(b) + " 2\n";
+        PayloadAssets m = PayloadAssets.parse(text);
+        check("manifest verify both", m.verify("stdlib.zip", a) && m.verify("wheels/x-1.0-py3-none-any.whl", b));
+        check("manifest wrong bytes", !m.verify("stdlib.zip", b));
+        check("manifest wrong size",
+            !m.verify("stdlib.zip", "aaaa".getBytes(StandardCharsets.UTF_8)));
+        check("manifest unknown path", !m.verify("wheels/nope.whl", a));
+        check("manifest entry count", m.entries().size() == 2);
+        String sha = Fingerprint.sha256Hex(a);
+        check("manifest bad sha", assetsThrows("stdlib.zip zz 3\n"));
+        check("manifest bad bytes", assetsThrows("stdlib.zip " + sha + " x\n"));
+        check("manifest dup path", assetsThrows("stdlib.zip " + sha + " 3\nstdlib.zip " + sha + " 3\n"));
+        check("manifest parent traversal", assetsThrows("../escape " + sha + " 3\n"));
+        check("manifest nested traversal", assetsThrows("wheels/../escape " + sha + " 3\n"));
+        check("manifest absolute path", assetsThrows("/abs " + sha + " 3\n"));
+        check("manifest backslash", assetsThrows("a\\b " + sha + " 3\n"));
+        check("manifest empty segment", assetsThrows("a//b " + sha + " 3\n"));
+        check("manifest dot segment", assetsThrows("a/./b " + sha + " 3\n"));
+        // an empty package marker (__init__.py) is a legitimate payload file
+        byte[] empty = new byte[0];
+        PayloadAssets zm = PayloadAssets.parse("site/x/__init__.py " + Fingerprint.sha256Hex(empty) + " 0\n");
+        check("manifest zero-byte entry verifies", zm.verify("site/x/__init__.py", empty));
+        check("manifest zero-byte rejects content", !zm.verify("site/x/__init__.py", a));
+        check("manifest negative bytes", assetsThrows("stdlib.zip " + sha + " -1\n"));
+    }
+
+    private static boolean lockThrows(String text) {
+        try {
+            WheelLock.parse(text);
+            return false;
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
+    }
+
+    private static boolean assetsThrows(String text) {
+        try {
+            PayloadAssets.parse(text);
+            return false;
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
     }
 
     private static void mockPair() throws Exception {

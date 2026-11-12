@@ -1,0 +1,3 @@
+# The vendored E0-a launcher is a pinned build artifact (packaging/android-wheels.lock);
+# it ships in git so the APK build needs no NDK.
+!libmetabot_py.so

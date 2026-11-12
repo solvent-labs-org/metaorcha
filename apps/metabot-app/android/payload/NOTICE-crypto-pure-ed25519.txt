@@ -1,0 +1,21 @@
+MetaBot on-device pure-Python Ed25519 (E1 v0)
+=============================================
+
+The APK's Python payload carries a package named `cryptography` that is NOT the
+cryptography project. It is MetaBot's own pure-Python RFC 8032 Ed25519
+implementation, shipping under that name only because the MetaBot SDK imports
+eight names from it:
+
+    cryptography.exceptions.InvalidSignature
+    cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey
+        .generate  .from_private_bytes  .sign  .public_key  .private_bytes_raw
+    cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PublicKey
+        .from_public_bytes  .verify  .public_bytes_raw
+
+Why: no Android arm64 wheel of the real `cryptography` exists (BeeWare index:
+iOS only; PyPI: none, checked 2026-11-10 and 2026-11-12) and building one needs
+Rust + the NDK, which is not approved. This module is slow and not
+constant-time; its signatures are real Ed25519 (RFC 8032 vectors; cross-checked
+against cryptography 50.0.0 and by a PC-side receipt verification, 2026-11-10).
+It is replaced by a cross-built `cryptography` once the NDK + Rust target are
+approved. Version marker: 0.0.0+metaorcha-pure-ed25519.
