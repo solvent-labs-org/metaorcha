@@ -1,0 +1,34 @@
+# E1 Android on-device payload: every artifact the APK ships, pinned. One per line:
+#   <kind> <file> <sha256> <bytes> <source>
+#
+# kinds:
+#   cpython   the official CPython Android runtime tarball (python.org)
+#   wheel     pure-Python wheel, fetched from PyPI by name==version
+#   sdist     source tarball whose pure package is shipped (PyPI)
+#   launcher  the E0-a executable .so (calls Py_BytesMain; RUNPATH $ORIGIN; 16 KB
+#             aligned), vendored at android/payload/launcher/ with its source main.c;
+#             built once with the spike's partial NDK r27d pull. The NDK is not
+#             approved for E1, so the pinned binary is reused; rebuilding wants that
+#             pull approved first.
+#   local     our own wheels, built from source at build time. No hash here — the
+#             payload manifest (assets/py/payload.list) hashes what the APK ships.
+#
+# No Android wheels exist for cryptography / cffi (BeeWare index: iOS only; PyPI: no
+# android tag) or pydantic-core / pyyaml (not in the BeeWare index). Checked
+# 2026-11-10 (spike E0), re-checked 2026-11-12. pyyaml ships its pure package from
+# the sdist; the Ed25519 signer is the app's own labelled pure-Python module
+# (android/payload/crypto-pure-ed25519/, RFC 8032, v0 only); pydantic-core stays
+# missing, so `mcp` is an optional extra on-device — the core is never patched.
+cpython python-3.14.10-aarch64-linux-android.tar.gz 423c80b957330cf0ebb92b9b20f2294c292144a441bdb0ceb8c69d14928e569b 23027305 https://www.python.org/ftp/python/3.14.10/python-3.14.10-aarch64-linux-android.tar.gz
+wheel anyio-4.14.2-py3-none-any.whl 9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 125813 pypi
+wheel h11-0.16.0-py3-none-any.whl 63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86 37515 pypi
+wheel httpcore2-2.12.0-py3-none-any.whl 7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb 83074 pypi
+wheel httpx2-2.12.0-py3-none-any.whl cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36 95427 pypi
+wheel idna-3.18-py3-none-any.whl 7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2 65455 pypi
+wheel truststore-0.10.4-py3-none-any.whl adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981 18660 pypi
+wheel typing_extensions-4.16.0-py3-none-any.whl 481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 45571 pypi
+sdist pyyaml-6.0.3.tar.gz d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f 130960 pypi
+launcher libmetabot_py.so 26789b8d0b771c9def1b21106536f5785803a9f2eb168e2b63e148eed132271f 6768 tree:android/payload/launcher
+local orcha-metabot - - env:MB_CORE_ROOT/apps/metabot
+local orcha-sdk - - env:MB_CORE_ROOT/sdk
+local metaorcha-app - - tree:apps/metabot-app
