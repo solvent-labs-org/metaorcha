@@ -821,6 +821,15 @@ const scenario = `
   LOG.vib.length = 0; DESKS[2].needs_you = true; await fetchDesks(); await tick(5);
   ok(LOG.vib.includes(40), 'haptic when a desk starts needing you');
   DESKS[2].needs_you = false; await fetchDesks(); await tick(5);
+  // a prompt armed OFF the page (tmux, a CLI) is invisible until the next fetchDesks: the page
+  // must learn in seconds, not on a 20 s cadence, and stream activity must re-read desks (the
+  // missed sheet-key taps were taps before the row arrived)
+  const nDeskGets = LOG.gets.filter(x => x.startsWith('/api/desks')).length;
+  ES_LIST.at(-1).onmessage({data: JSON.stringify({via: 'out', time: Date.now() / 1000, target: 'desk-a', message: 'proceed [y/n]'})});
+  await tick(1500);
+  ok(LOG.gets.filter(x => x.startsWith('/api/desks')).length > nDeskGets, 'stream activity re-reads desks within a second: a prompt armed off-page shows its row');
+  ok(typeof DESKS_TICK_ON === 'number' && DESKS_TICK_ON <= 5000, 'the desks cadence while visible is seconds, not 20 s: ' + DESKS_TICK_ON);
+  ok(typeof DESKS_TICK_OFF === 'number' && DESKS_TICK_OFF >= 4 * DESKS_TICK_ON, 'a hidden page backs the desks cadence off');
   // working shimmer from the live run's desk
   ok(leaf('run-3').classList.contains('working') && leaf('run-3').querySelectorAll('.tst')[0].textContent === 'working', 'a desk with a live run is working (dot shimmer, one word)');
   setWS('run-3'); await tick(5);
