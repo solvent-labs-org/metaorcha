@@ -61,6 +61,7 @@ def _is_scaffold_noise(rel: Path) -> bool:
     """True for bytecode pip/compileall drops into the template after install."""
     return "__pycache__" in rel.parts or rel.suffix.lower() in _SKIP_SCAFFOLD_SUFFIXES
 
+
 # docs/spec/test-vectors/run-attestation-golden.json is this shape, not an envelope.
 _GOLDEN_PAIR_KEYS = frozenset({"valid", "tampered"})
 
