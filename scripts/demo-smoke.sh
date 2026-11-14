@@ -28,6 +28,10 @@ FAILED=0
 say() { echo; echo "━━ Stage $1 — $2 ━━"; }
 ok()  { echo "  ✅ $1"; }
 bad() { echo "  ❌ $1"; FAILED=$((FAILED + 1)); }
+# The response is JSON data. It is not a program, so it is not piped into python.
+json_field() {
+  python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
+}
 
 TMPDIR_SMOKE="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_SMOKE"' EXIT
@@ -40,8 +44,8 @@ else
   bad "frontend unreachable: $BASE/"
 fi
 
-TOKEN=$(curl -sf --max-time 20 "$BASE/api/auth/guest" |
-  python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || TOKEN=""
+guest_json=$(curl -sf --max-time 20 "$BASE/api/auth/guest" 2>/dev/null) || guest_json=""
+TOKEN=$(json_field "$guest_json" access_token 2>/dev/null) || TOKEN=""
 if [[ -n "$TOKEN" ]]; then
   ok "guest JWT issued (nginx → /api/auth/* rewrite → gateway)"
 else
@@ -51,9 +55,9 @@ fi
 
 # ─── Stage 2 — Session ───────────────────────────────────────────────────────
 say 2 "Session — guest session create"
-SID=$(curl -sf --max-time 20 -X POST "$BASE/api/v1/sessions" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' |
-  python3 -c "import json,sys; print(json.load(sys.stdin)['session_id'])" 2>/dev/null) || SID=""
+session_json=$(curl -sf --max-time 20 -X POST "$BASE/api/v1/sessions" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' 2>/dev/null) || session_json=""
+SID=$(json_field "$session_json" session_id 2>/dev/null) || SID=""
 if [[ -n "$SID" ]]; then
   ok "session created: $SID"
 else

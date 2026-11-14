@@ -31,9 +31,9 @@ TOKEN=$(echo "$GUEST" | python3 -c 'import json,sys; print(json.load(sys.stdin)[
 [ -n "$TOKEN" ] && pass "guest JWT issued" || { fail "no access_token"; exit 1; }
 
 echo "── 2. create session ──"
-SID=$(curl -sf -X POST "$BASE_URL/api/v1/sessions" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))')
+session_json=$(curl -sf -X POST "$BASE_URL/api/v1/sessions" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' 2>/dev/null) || session_json=""
+SID=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("session_id",""))' "$session_json" 2>/dev/null) || SID=""
 [ -n "$SID" ] && pass "session $SID" || { fail "session creation failed"; exit 1; }
 
 echo "── 3. goal run (this invokes the LLM — up to ~3 min) ──"

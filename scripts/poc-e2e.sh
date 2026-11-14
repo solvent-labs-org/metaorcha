@@ -65,10 +65,10 @@ start_agent() { # $1 = "" | --flaky
 }
 
 run_goal() { # $1 goal text, $2 output file  → uses $TOKEN, creates a session
-  local sid
-  sid=$(curl -sf -X POST "$GATEWAY/api/v1/sessions" \
-    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' |
-    python3 -c "import json,sys; print(json.load(sys.stdin)['session_id'])") || return 1
+  local sid session_json
+  session_json=$(curl -sf -X POST "$GATEWAY/api/v1/sessions" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}') || return 1
+  sid=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["session_id"])' "$session_json") || return 1
   curl -sf -N -X POST "$GATEWAY/api/v1/sessions/$sid/message" \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
     -d "{\"message\":\"$1\"}" --max-time "$SSE_TIMEOUT" > "$2" 2>/dev/null || true
@@ -169,10 +169,10 @@ record "3 Discovery" "$S3"
 
 # ─── Auth (shared by stages 4–7) ────────────────────────────────────────────
 EMAIL="poc-$(date +%s)@example.com"
-TOKEN=$(curl -sf -X POST "$GATEWAY/auth/register" \
+register_json=$(curl -sf -X POST "$GATEWAY/auth/register" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"poc-e2e-pass-123\",\"display_name\":\"PoC Harness\"}" 2>/dev/null |
-  python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || TOKEN=""
+  -d "{\"email\":\"$EMAIL\",\"password\":\"poc-e2e-pass-123\",\"display_name\":\"PoC Harness\"}" 2>/dev/null) || register_json=""
+TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["access_token"])' "$register_json" 2>/dev/null) || TOKEN=""
 [[ -z "$TOKEN" ]] && { bad "auth register failed — aborting consumer stages"; record "4 Goal run" FAIL; record "5 Verifier" FAIL; record "6 Retry-gate" FAIL; record "7 Settlement" FAIL; record "8 Metrics" FAIL; }
 
 if [[ -n "$TOKEN" ]]; then

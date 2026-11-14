@@ -139,7 +139,8 @@ start_service gateway  services/gateway  src.main:app  8000
 info "Starting frontend..."
 (
   cd "$REPO_ROOT/frontend"
-  [[ ! -d node_modules ]] && npm install --silent
+  # ci installs the lockfile and checks each package integrity. install does not.
+  [[ ! -d node_modules ]] && npm ci --silent
   npm run dev > "$LOGS/frontend.log" 2>&1
 ) &
 
