@@ -110,7 +110,7 @@ if [[ "$SKIP_INFRA" == "false" ]]; then
   if ! command -v docker >/dev/null 2>&1; then
     fail "docker is not on PATH. The local stack needs Docker Compose.
     Without Docker, the working first-hour path is:
-      pip install orcha-sdk==0.1.3
+      pip install orcha-sdk
       orcha init \"My Agent\" && cd my-agent && orcha run --no-register
       orcha verify envelope.json   # the RFC 0003 object, not the golden pair"
   fi
