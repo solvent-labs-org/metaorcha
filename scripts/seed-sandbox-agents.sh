@@ -31,6 +31,7 @@ for agent_dir in "$ROOT"/agents/*/; do
     -e '/endpoint:/ s|localhost:3009|ecommerce:8080|g' \
     -e '/endpoint:/ s|localhost:3011|gws-orchestrator:8080|g' \
     -e '/endpoint:/ s|localhost:4567|lead-gen:8080|g' \
+    -e '/endpoint:/ s|localhost:8903|test-runner:8903|g' \
     "$yaml" > "$patched"
 
   result=$(curl -s -w "\n%{http_code}" \
