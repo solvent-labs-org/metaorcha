@@ -243,7 +243,22 @@ def load_config(path=None):
     for k, v in raw.items():
         if k in cfg and type(v) is type(cfg[k]):
             cfg[k] = v
+    cfg["projects"] = clean_projects(cfg["projects"])
     return cfg
+
+
+def clean_projects(projects):
+    """``projects`` as every reader expects it: objects with a string ``name`` (``other``
+    when absent) and ``paths`` a list of non-empty strings. A bare string, a number or
+    ``paths`` given as one string is dropped, never raised on: a hand-edited config once
+    took /api/tree and every run placement down with an AttributeError."""
+    out = []
+    for p in projects:
+        if not isinstance(p, dict) or not isinstance(p.get("paths"), list):
+            continue
+        name = p.get("name") if isinstance(p.get("name"), str) and p.get("name") else "other"
+        out.append(dict(p, name=name, paths=[x for x in p["paths"] if isinstance(x, str) and x]))
+    return out
 
 
 # ---- globals the routes read; configure() sets them (tests call it again)

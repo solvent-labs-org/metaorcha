@@ -22,6 +22,10 @@ on:
         description: "Also run the macOS job (the suite does not pass there yet; December)"
         type: boolean
         default: false
+      android:
+        description: "Also run the Android job (build.sh test + a full signed APK)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -130,6 +134,53 @@ jobs:
         env:
           METABOT_PYTHON: ${{ runner.temp }}/metabot/bin/python
         run: make -C apps/metabot-app test-macos
+
+  # The E1 on-device payload, proven end to end: the JVM tests (lock and manifest
+  # parsers), the lock-driven assembly (the CPython tarball and PyPI wheels download
+  # on the runner's cold cache and are verified against packaging/android-wheels.lock),
+  # and a full APK build — stored, page-aligned native libraries, the whole-APK strings
+  # check, the 60 MB cap. Signed with a throwaway per-run keystore (release signing
+  # stays local); the APK is kept as an artifact for a device install. Gated like the
+  # macOS job — a dispatch's `android` input or the `android-ci` label — never a push.
+  android:
+    name: Android (build.sh test + APK)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.android == true) ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'android-ci'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MB_CORE_ROOT: ${{ github.workspace }}
+      MB_UV_OFFLINE: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: JVM tests (pairing, WheelLock, PayloadAssets)
+        run: apps/metabot-app/android/build.sh test
+
+      - name: Build the APK (throwaway CI keystore)
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export MB_OUT="$RUNNER_TEMP/apk"
+          export MB_KEYSTORE="$RUNNER_TEMP/ci-debug.p12" MB_KS_PASS MB_KEY_PASS
+          MB_KS_PASS=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          MB_KEY_PASS="$MB_KS_PASS"
+          keytool -genkeypair -keystore "$MB_KEYSTORE" -storetype PKCS12 -alias ci \
+            -keyalg RSA -keysize 2048 -validity 7 \
+            -storepass:env MB_KS_PASS -keypass:env MB_KEY_PASS \
+            -dname "CN=MetaBot CI debug, O=ci"
+          apps/metabot-app/android/build.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: metabot-app-android-arm64-v8a
+          path: ${{ runner.temp }}/apk/ai.metaorcha.metabot.apk
+          retention-days: 7
 
   # Every commit in the pull request is signed off by its author (`git commit -s`).
   # A script in this repo, not a third-party app.
