@@ -21,8 +21,12 @@ Part of Metaorcha. Status: early releases, built in the open.
 ## Install
 
 ```sh
-uv tool install orcha-metabot
+uv tool install metaorcha     # or run it once: uvx metaorcha
 ```
+
+It installs the `metaorcha` command and its alias `metabot`; the two are
+the same program, and the examples below use `metabot`. Releases up to
+0.3.0 were published as `orcha-metabot`.
 
 It needs Python 3.11 or newer and a POSIX system, and it is tested on Linux.
 Install and sign in to each engine you want to use, the same way you do

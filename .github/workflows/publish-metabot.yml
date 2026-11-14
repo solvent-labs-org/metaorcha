@@ -1,12 +1,14 @@
 name: Publish metabot
 
-# Release MetaBot (apps/metabot) to PyPI as `orcha-metabot`. Two ways to run:
+# Release Metaorcha (apps/metabot) to PyPI as `metaorcha`, which installs the
+# `metaorcha` command and its alias `metabot`. The tag keeps the metabot-v
+# prefix. Two ways to run:
 #   • Tag push (real publish):   git tag metabot-vX.Y.Z && git push <remote> metabot-vX.Y.Z
 #   • Manual dry-run (no upload): Actions → this workflow → "Run workflow"
 #
 # Uses PyPI Trusted Publishing (OIDC), as publish-sdk.yml does: no API token is
 # stored in this repo. One-time setup on pypi.org, by the repo owner: a pending
-# publisher for the project "orcha-metabot", with owner=solvent-labs-org,
+# publisher for the project "metaorcha", with owner=solvent-labs-org,
 # repo=metaorcha, workflow=publish-metabot.yml and environment=pypi.
 #
 # MetaBot requires the orcha-sdk version its pyproject names, so that SDK is
@@ -46,7 +48,7 @@ jobs:
           fi
 
       - name: Build
-        run: uv build --package orcha-metabot --out-dir dist
+        run: uv build --package metaorcha --out-dir dist
 
       - name: Check metadata
         run: uvx twine@7.0.0 check dist/*
@@ -57,8 +59,9 @@ jobs:
         run: |
           WHEEL="$(ls dist/*.whl)"
           mkdir -p /tmp/metabot-smoke && cd /tmp/metabot-smoke
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" metaorcha --version
+          uvx --from "$GITHUB_WORKSPACE/$WHEEL" metaorcha --help > /dev/null
           uvx --from "$GITHUB_WORKSPACE/$WHEEL" metabot --version
-          uvx --from "$GITHUB_WORKSPACE/$WHEEL" metabot --help > /dev/null
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -104,7 +107,7 @@ jobs:
       - name: Stage the attestation bundle as a release asset
         run: |
           cp "${{ steps.attest.outputs.bundle-path }}" \
-             "dist/orcha-metabot-${GITHUB_REF_NAME#metabot-v}.sigstore.json"
+             "dist/metaorcha-${GITHUB_REF_NAME#metabot-v}.sigstore.json"
 
       - name: Attach artifacts to the GitHub release
         env:
@@ -115,8 +118,8 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "MetaBot $VERSION" \
-              --notes "\`orcha-metabot\` $VERSION on PyPI: https://pypi.org/project/orcha-metabot/$VERSION/"
+              --title "Metaorcha $VERSION" \
+              --notes "\`metaorcha\` $VERSION on PyPI: https://pypi.org/project/metaorcha/$VERSION/"
           fi
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
@@ -135,15 +138,17 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#metabot-v}"
           for _ in $(seq 1 30); do
-            if curl -sf "https://pypi.org/pypi/orcha-metabot/$VERSION/json" >/dev/null; then
-              echo "orcha-metabot $VERSION is live"; exit 0
+            if curl -sf "https://pypi.org/pypi/metaorcha/$VERSION/json" >/dev/null; then
+              echo "metaorcha $VERSION is live"; exit 0
             fi
             sleep 10
           done
-          echo "::error::orcha-metabot $VERSION never appeared on PyPI"; exit 1
+          echo "::error::metaorcha $VERSION never appeared on PyPI"; exit 1
 
       - name: Run the published version
         run: |
           VERSION="${GITHUB_REF_NAME#metabot-v}"
           mkdir -p /tmp/pypi-smoke && cd /tmp/pypi-smoke
-          test "$(uvx --from "orcha-metabot==$VERSION" metabot --version)" = "metabot $VERSION"
+          # the short line people type, then the alias
+          test "$(uvx "metaorcha@$VERSION" --version)" = "metaorcha $VERSION"
+          test "$(uvx --from "metaorcha==$VERSION" metabot --version)" = "metabot $VERSION"

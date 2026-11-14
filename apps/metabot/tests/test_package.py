@@ -192,7 +192,7 @@ def test_the_wheel_holds_the_package_and_nothing_else(tmp_path):
     if built.returncode != 0 and re.search(r"offline|cache|network", built.stderr, re.I):
         pytest.skip(f"the build backend is not cached here: {built.stderr[-300:]}")
     assert built.returncode == 0, built.stderr[-2000:]
-    [wheel] = tmp_path.glob("orcha_metabot-*.whl")
+    [wheel] = tmp_path.glob("metaorcha-*.whl")
     with zipfile.ZipFile(wheel) as zf:
         names = set(zf.namelist())
     assert "metabot/cli.py" in names
