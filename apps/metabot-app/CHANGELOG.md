@@ -6,6 +6,11 @@ the pairing payload, the capability block, the module manifest) is called out as
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-16
+
+The first release: the app server, phone pairing, the remote Android app, the desktop
+shell, the Linux self-test and the no-tmux run path.
+
 ### Added
 - App API: every `GET /api/doctor` item carries `configured` (a hosted model server the
   doctor never probes reads `ok: false, configured: true`); the on-device set-up step
