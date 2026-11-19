@@ -138,6 +138,18 @@ def test_parse_args_takes_what_models_send(raw, args):
         ('{"name": "Ada", "age": 3}', False),  # a name but no arguments: an answer
         ("plain words", False),
         ('{"arguments": {}}', False),
+        # a call written as markup, the whole answer: seen from qwen2.5:3b on 2026-11-06
+        (
+            '<Tuple>\n<Tuple>\n<Tuple><field name="name">read_file</field>'
+            '<field name="arguments"><Tuple><field name="path"><str>README.md</str>'
+            '</field></Tuple></field></Tuple>\n<Tuple><field name="name">list_dir</field>'
+            '<field name="arguments">{ "path": "$(tool_dir)/.." }</field></Tuple>\n</Tuple>',
+            True,
+        ),
+        ('<call name="read_file"><arguments>{"path": "a"}</arguments></call>', True),
+        ("<p>The file has two lines.</p>", False),  # markup, but an answer
+        ('Use <field name="name">read_file</field> next time.', False),  # prose around a field
+        ('<Tuple><field name="name">read_file</field></Tuple>', False),  # a name, no arguments
     ],
 )
 def test_call_shaped_spots_an_answer_that_is_an_unread_call(text, shaped):

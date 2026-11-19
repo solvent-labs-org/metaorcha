@@ -342,3 +342,24 @@ async def test_a_model_never_probed_runs_natively(chat, tmp_path):
     fake = chat([answer("4")])
     await _run(_engine(fake), tmp_path)
     assert "tools" in fake.requests[0] and "response_format" not in fake.requests[0]
+
+
+MARKUP_CALL = (
+    '<Tuple>\n<Tuple>\n<Tuple><field name="name">read_file</field>'
+    '<field name="arguments"><Tuple><field name="path"><str>README.md</str></field></Tuple>'
+    '</field></Tuple>\n<Tuple><field name="name">list_dir</field>'
+    '<field name="arguments">{ "path": "$(tool_dir)/.." }</field></Tuple>\n</Tuple>'
+)
+
+
+async def test_an_answer_that_is_a_call_written_as_markup_fails_the_run(chat, tmp_path):
+    """On 2026-11-06 a 3b model answered a real run with this markup; the run closed ok
+    with 0 steps and the ladder would have called it answered. It is an unread call."""
+    (tmp_path / "README.md").write_text("hello")
+    fake = chat([text_reply(MARKUP_CALL)])
+    result = await _run(_engine(fake), tmp_path)
+    assert not result.ok
+    assert "openai: the model answered with a tool call MetaBot could not read" in result.error
+    assert _steps(result) == []
+    assert result.final_text == MARKUP_CALL
+    assert verify_file(result.receipt).valid

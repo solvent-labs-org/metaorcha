@@ -25,7 +25,7 @@ members = [
     "emerge-tools",
     "gateway",
     "internal-commons",
-    "orcha-metabot",
+    "metaorcha",
     "orcha-monorepo",
     "orcha-sdk",
     "planning-discovery-service",
@@ -2423,6 +2423,47 @@ wheels = [
 ]
 
 [[package]]
+name = "metaorcha"
+version = "0.4.0"
+source = { editable = "apps/metabot" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "mcp" },
+    { name = "orcha-sdk" },
+    { name = "python-multipart" },
+    { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx2", specifier = ">=2.5.0" },
+    { name = "mcp", specifier = ">=2.0,<3" },
+    { name = "orcha-sdk", editable = "sdk" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "starlette", specifier = ">=0.27" },
+    { name = "uvicorn", specifier = ">=0.31.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=2.3" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "ruff", specifier = ">=0.16" },
+]
+
+[[package]]
 name = "ml-dtypes"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2782,47 +2823,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/14/cf3a6b6448849656e1e5f4e2101f3988dc6789724050096aba1bc5ccf592/opentelemetry_api-1.45.2.tar.gz", hash = "sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4", size = 73277, upload-time = "2026-10-29T17:29:37.888Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl", hash = "sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34", size = 60335, upload-time = "2026-10-29T17:29:06.955Z" },
-]
-
-[[package]]
-name = "orcha-metabot"
-version = "0.3.0"
-source = { editable = "apps/metabot" }
-dependencies = [
-    { name = "httpx2" },
-    { name = "mcp" },
-    { name = "orcha-sdk" },
-    { name = "python-multipart" },
-    { name = "pyyaml" },
-    { name = "starlette" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx2", specifier = ">=2.5.0" },
-    { name = "mcp", specifier = ">=2.0,<3" },
-    { name = "orcha-sdk", editable = "sdk" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "starlette", specifier = ">=0.27" },
-    { name = "uvicorn", specifier = ">=0.31.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=2.3" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "ruff", specifier = ">=0.16" },
 ]
 
 [[package]]

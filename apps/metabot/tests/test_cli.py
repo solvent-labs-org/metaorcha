@@ -695,10 +695,14 @@ def test_a_run_shown_from_its_journal_cannot_repaint_the_terminal(echo, tmp_path
 # ── no command / chat ───────────────────────────────────────────────────────
 
 
-def test_no_command_without_a_terminal_prints_help(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    ("typed", "said"), [("/bin/metaorcha", "metaorcha"), ("/bin/metabot", "metabot")]
+)
+def test_no_command_without_a_terminal_prints_help(monkeypatch, capsys, typed, said):
+    monkeypatch.setattr(sys, "argv", [typed])
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     assert main([]) == 0
-    assert "usage: metabot" in capsys.readouterr().out
+    assert f"usage: {said} " in capsys.readouterr().out
 
 
 def test_doctor_still_runs(bin_dir, capsys):

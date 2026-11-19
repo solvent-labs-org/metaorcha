@@ -26,14 +26,14 @@ class LockTests(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(self.out, ignore_errors=True))
 
     def test_the_lock_lists_every_wheel_with_its_hash_sorted_by_name(self):
-        fake_wheel(self.out, "orcha_metabot-0.3.0-py3-none-any.whl", b"core")
+        fake_wheel(self.out, "metaorcha-0.4.0-py3-none-any.whl", b"core")
         fake_wheel(self.out, "anyio-4.14.2-py3-none-any.whl", b"anyio")
         fake_wheel(self.out, "cryptography-50.0.0-cp311-abi3-manylinux_2_28_x86_64.whl", b"crypto")
         text = wheelhouse.lock_text(self.out)
         self.assertEqual(text, (
             f"anyio==4.14.2 \\\n    --hash=sha256:{hashlib.sha256(b'anyio').hexdigest()}\n"
             f"cryptography==50.0.0 \\\n    --hash=sha256:{hashlib.sha256(b'crypto').hexdigest()}\n"
-            f"orcha-metabot==0.3.0 \\\n    --hash=sha256:{hashlib.sha256(b'core').hexdigest()}\n"))
+            f"metaorcha==0.4.0 \\\n    --hash=sha256:{hashlib.sha256(b'core').hexdigest()}\n"))
 
     def test_anything_that_is_not_a_wheel_is_refused(self):
         fake_wheel(self.out, "anyio-4.14.2-py3-none-any.whl", b"anyio")
@@ -57,6 +57,13 @@ class LockTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_the_export_names_the_core_package_as_its_pyproject_does(self):
+        import tomllib
+        root = Path(__file__).resolve().parents[3]
+        name = tomllib.loads((root / "apps/metabot/pyproject.toml").read_text())["project"]["name"]
+        argv = wheelhouse.export_argv(root, Path("requirements.txt"))
+        self.assertEqual(argv[argv.index("--package") + 1], name)
+
     def test_the_download_is_wheels_only_for_the_named_platform(self):
         argv = wheelhouse.download_argv("linux-x86_64", "3.12", Path("/w"), Path("/r.txt"))
         self.assertIn("--only-binary=:all:", argv)

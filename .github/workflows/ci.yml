@@ -579,24 +579,24 @@ jobs:
 
       # --locked, not --frozen: a lock that no longer matches the tree fails here
       - name: Install dependencies
-        run: uv sync --locked --package orcha-metabot
+        run: uv sync --locked --package metaorcha
 
       # Proves the package builds, and caches the build backend the wheel
       # test then uses offline, so that test runs here and never skips.
       - name: Build the wheel
-        run: uv build --package orcha-metabot --wheel --out-dir "$RUNNER_TEMP/metabot-dist"
+        run: uv build --package metaorcha --wheel --out-dir "$RUNNER_TEMP/metabot-dist"
 
       - name: Lint with ruff
-        run: uv run --frozen --package orcha-metabot ruff check src tests
+        run: uv run --frozen --package metaorcha ruff check src tests
 
       - name: Format check with ruff
-        run: uv run --frozen --package orcha-metabot ruff format --check src tests
+        run: uv run --frozen --package metaorcha ruff format --check src tests
 
       - name: Type check with mypy
-        run: uv run --frozen --package orcha-metabot mypy
+        run: uv run --frozen --package metaorcha mypy
 
       - name: Run MetaBot tests
-        run: uv run --frozen --package orcha-metabot pytest -rs -W error::ResourceWarning
+        run: uv run --frozen --package metaorcha pytest -rs -W error::ResourceWarning
 
   # ============================================================================
   # MetaBot at its Python floor, 3.11. The workspace lock needs 3.12 or newer,
