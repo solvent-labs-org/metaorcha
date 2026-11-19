@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import re
 import stat
+import sys
+
+import pytest
 
 from conftest import private_mode
 from metabot import config, paths
@@ -82,9 +85,30 @@ def test_config_roundtrip():
     assert private_mode(paths.metabot_home() / "config.json") == 0o600
 
 
-def test_version_cli(capsys):
+@pytest.mark.parametrize(
+    ("typed", "said"),
+    [
+        ("/usr/bin/metaorcha", "metaorcha"),
+        ("/home/u/.local/bin/metabot", "metabot"),
+        ("/tmp/pytest", "metaorcha"),  # any other name: the product's
+    ],
+)
+def test_version_names_the_command_you_typed(capsys, monkeypatch, typed, said):
+    monkeypatch.setattr(sys, "argv", [typed])
     assert main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "metabot 0.3.0"
+    assert capsys.readouterr().out.strip() == f"{said} 0.4.0"
+
+
+def test_the_package_is_metaorcha_and_installs_both_commands():
+    import tomllib
+    from pathlib import Path
+
+    from metabot import __version__
+
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]
+    assert project["name"] == "metaorcha"
+    assert project["version"] == __version__ == "0.4.0"
+    assert project["scripts"] == {"metaorcha": "metabot.cli:main", "metabot": "metabot.cli:main"}
 
 
 def test_run_dir_refuses_path_tricks():

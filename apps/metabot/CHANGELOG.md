@@ -6,6 +6,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-16
+
+### Fixed
+
+- The `openai` engine now treats a whole answer that is a tool call written as markup, such as `<Tuple><field name="name">read_file</field><field name="arguments">...`, as an unread call: the run fails with "the model answered with a tool call MetaBot could not read" and the probe hint, so the ladder climbs. Before, such a run closed ok with no steps and the markup as its answer; seen from a 3b model through a local server on 2026-11-06.
+
 ### Added
 
 - A run's live page in the web UI says its state in a word, Running, Waiting
@@ -213,6 +219,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); MetaBot uses
   engine signs in with; a key's value and an endpoint's key are never shown.
 
 ### Changed
+
+- Published as `metaorcha`: `uv tool install metaorcha`, or `uvx metaorcha`
+  to run it once. The package installs the `metaorcha` command and keeps
+  `metabot` as its alias; `--version` and the usage line name the command you
+  typed. Your home folder, key, config, receipts and `METABOT_*` variables are
+  unchanged. `orcha-metabot` stays at 0.3.0 on PyPI.
 
 - `metabot ui` takes the site's look: its tokens in light and dark, a header
   with the mark, cards, pill buttons and light code panels. The theme switch

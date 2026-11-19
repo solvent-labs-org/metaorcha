@@ -224,8 +224,33 @@ def calls_in_fences(text: str, offered: Sequence[str]) -> list[str]:
     return named
 
 
+# A call written as markup rather than JSON, the whole answer: a tag that names a tool and
+# a tag that holds its arguments. Seen from a 3b model through a local server on 2026-11-06,
+# as ``<Tuple><field name="name">read_file</field><field name="arguments">...``.
+_MARKUP_NAME = re.compile(
+    r'<field\s+name="(?:name|tool|function)"\s*>\s*[\w./:-]+\s*</field>'
+    r'|<(?:call|tool|function|invoke)\s+name="[\w./:-]+"',
+    re.IGNORECASE,
+)
+_MARKUP_ARGS = re.compile(
+    r'<field\s+name="(?:arguments|args|parameters|input)"\s*>|<(?:arguments|args|parameters|input)\s*>',
+    re.IGNORECASE,
+)
+
+
+def _markup_call(text: str) -> bool:
+    """Whether the whole of ``text`` is a tool call written as markup."""
+    body = text.strip()
+    if not (body.startswith("<") and body.endswith(">")):
+        return False  # prose around a tag is an answer that mentions a call
+    return bool(_MARKUP_NAME.search(body) and _MARKUP_ARGS.search(body))
+
+
 def call_shaped(text: str) -> bool:
-    """Whether a whole answer has the shape of a tool call: a name and its arguments."""
+    """Whether a whole answer has the shape of a tool call: a name and its arguments,
+    as JSON or as markup."""
+    if _markup_call(text):
+        return True
     values = _objects(text)
     if not values:
         return False

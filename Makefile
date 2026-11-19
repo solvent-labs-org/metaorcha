@@ -289,10 +289,10 @@ sdk-check: ## Lint, format-check and test the SDK (sdk/), as CI does
 	uv run pytest sdk/tests/ -q
 
 metabot-check: ## Lint, format-check, type-check and test MetaBot (apps/metabot), as CI does
-	cd apps/metabot && uv run --package orcha-metabot ruff check src tests
-	cd apps/metabot && uv run --package orcha-metabot ruff format --check src tests
-	cd apps/metabot && uv run --package orcha-metabot mypy
-	cd apps/metabot && uv run --package orcha-metabot pytest -q -W error::ResourceWarning
+	cd apps/metabot && uv run --package metaorcha ruff check src tests
+	cd apps/metabot && uv run --package metaorcha ruff format --check src tests
+	cd apps/metabot && uv run --package metaorcha mypy
+	cd apps/metabot && uv run --package metaorcha pytest -q -W error::ResourceWarning
 
 setup: install prisma-generate grpc-generate migrate ## Initial project setup
 	@printf '$(GREEN)✓ Setup complete$(RESET)\n\n'
