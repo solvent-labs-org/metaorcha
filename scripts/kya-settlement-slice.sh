@@ -117,7 +117,11 @@ say "Stage 0 — preconditions"
 # 200 {"status":"ok"} on /health (a local private-gpt did exactly that on
 # :8080), and a liveness probe would then run the slice against it. Each of
 # our services publishes its own title in /openapi.json; assert that.
-identity_of() { curl -sf --max-time 5 "$1/openapi.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("info",{}).get("title",""))' 2>/dev/null || true; }
+identity_of() {
+  local body
+  body=$(curl -sf --max-time 5 "$1/openapi.json" 2>/dev/null) || true
+  printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("info",{}).get("title",""))' 2>/dev/null || true
+}
 for spec in "$GATEWAY|Orcha Gateway" "$REGISTRY|Orcha Registry Service" "$PND|Orcha Planning & Discovery Service" "$SUPERAGENT|Orcha SuperAgent"; do
   base="${spec%%|*}"; want="${spec#*|}"
   got="$(identity_of "$base")"
@@ -315,9 +319,9 @@ else
 fi
 
 # Discovery needs the manifest embedded; publish alone does not do this.
-if curl -sf -X POST "$PND/api/v1/manifests/process" \
-     -H 'Content-Type: application/json' -d "{\"agent_id\":\"$PROBE_DID\"}" 2>/dev/null \
-   | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('success') else 1)" 2>/dev/null; then
+process_json=$(curl -sf -X POST "$PND/api/v1/manifests/process" \
+     -H 'Content-Type: application/json' -d "{\"agent_id\":\"$PROBE_DID\"}" 2>/dev/null) || process_json=""
+if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("success") else 1)' "$process_json" 2>/dev/null; then
   ok "PnD embeddings processed"
 else
   fail "PnD manifests/process failed — the probe will not be discoverable"
@@ -329,16 +333,16 @@ fi
 say "Stage 2 — LEG 1 (settle): a charged call is attested, verified, settled"
 
 EMAIL="kya-slice-$(date +%s)@example.com"
-TOKEN="$(curl -sf -X POST "$GATEWAY/auth/register" \
+register_json=$(curl -sf -X POST "$GATEWAY/auth/register" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"kya-slice-pass-123\",\"display_name\":\"KYA Slice\"}" 2>/dev/null |
-  python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)" || TOKEN=""
+  -d "{\"email\":\"$EMAIL\",\"password\":\"kya-slice-pass-123\",\"display_name\":\"KYA Slice\"}" 2>/dev/null) || register_json=""
+TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["access_token"])' "$register_json" 2>/dev/null) || TOKEN=""
 [[ -z "$TOKEN" ]] && { fail "auth register failed"; exit 1; }
 ok "registered $EMAIL"
 
-SESSION_ID="$(curl -sf -X POST "$GATEWAY/api/v1/sessions" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' 2>/dev/null |
-  python3 -c "import json,sys; print(json.load(sys.stdin)['session_id'])" 2>/dev/null)" || SESSION_ID=""
+session_json=$(curl -sf -X POST "$GATEWAY/api/v1/sessions" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' 2>/dev/null) || session_json=""
+SESSION_ID=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["session_id"])' "$session_json" 2>/dev/null) || SESSION_ID=""
 [[ -z "$SESSION_ID" ]] && { fail "could not create a session"; exit 1; }
 ok "session $SESSION_ID"
 
